@@ -161,6 +161,12 @@ void CharacterSelectScene::draw(ResourceManager &resources) {
     DrawTextEx(font, sel.detailAbilities, {detailX + 24.0F, py + 250.0F}, 16.0F, 1.0F,
                ui::theme::MUTED_TEXT);
 
+    char regenBuf[96];
+    std::snprintf(regenBuf, sizeof(regenBuf), "Passive Regen: +%.1f HP/s, +%.1f Mana/s",
+                  sel.hpRegen, sel.manaRegen);
+    DrawTextEx(font, regenBuf, {detailX + 24.0F, py + 330.0F}, 16.0F, 1.0F,
+               ui::theme::SUBTITLE_TEXT);
+
     const Vector2 mouse = GetMousePosition();
     backButton_.draw(font, 20.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER, RAYWHITE,
                      ui::theme::BTN_BORDER);

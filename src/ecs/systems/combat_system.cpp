@@ -66,7 +66,20 @@ void combat_player_melee(entt::registry &registry, const InputManager &input, en
     auto &melee = registry.get<MeleeAttacker>(player);
     const auto &pt = registry.get<Transform>(player);
 
-    melee.isAttacking = input.isMouseButtonHeld(MOUSE_BUTTON_RIGHT);
+    const bool rmbHeld = input.isMouseButtonHeld(MOUSE_BUTTON_RIGHT);
+    if (melee.rmbHeldPrev && !rmbHeld) {
+        melee.reEngageCooldown = 1.0F; // prevent right-click spam
+    }
+    melee.rmbHeldPrev = rmbHeld;
+
+    if (melee.reEngageCooldown > 0.0F) {
+        melee.reEngageCooldown -= fixedDt;
+        if (melee.reEngageCooldown < 0.0F) {
+            melee.reEngageCooldown = 0.0F;
+        }
+    }
+
+    melee.isAttacking = rmbHeld && melee.reEngageCooldown <= 0.0F;
     if (melee.isAttacking) {
         melee.swingPhase += fixedDt * 12.0F;
     } else {

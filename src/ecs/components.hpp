@@ -68,6 +68,10 @@ struct MeleeAttacker {
     float cooldown{0.4F};
     float cooldownTimer{0.0F};
     bool isAttacking{false};
+    // Prevent right-click spamming: release starts a short cooldown,
+    // but keeping RMB held keeps the attack going.
+    float reEngageCooldown{0.0F};
+    bool rmbHeldPrev{false};
     float swingPhase{0.0F};
 };
 

@@ -83,7 +83,8 @@ void MenuScene::draw(ResourceManager &resources) {
 
     const float nameSize = 22.0F;
     const Vector2 nameDim = MeasureTextEx(font, cls.name, nameSize, 1.0F);
-    const float nameX = panelX + 80.0F;
+    // Keep the class name clear of the portrait circle.
+    const float nameX = panelX + portraitR * 2.0F + 36.0F;
     const float nameY = panelY + panelH * 0.5F - nameDim.y * 0.5F;
     DrawTextEx(font, cls.name, {nameX, nameY}, nameSize, 1.0F, RAYWHITE);
 

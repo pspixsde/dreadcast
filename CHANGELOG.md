@@ -2,6 +2,30 @@
 
 All notable changes to **Dreadcast** will be documented in this file.
 
+## v0.4.1 — 2026-03-25
+
+### Added
+
+- **FPS counter:** Upper-right overlay visible on main menu, pause overlay, character selection, and gameplay; toggle in **Settings -> Video**.
+- **Passive regen (classes):** Characters gain passive HP/mana regen; **Undead Hunter** is `+1.0 HP/s` and `+2.0 Mana/s`. Selector shows the regen values.
+- **HUD consumables:** Two equipped consumable slots shown under the HP/MP bars with remaining stack counts and keybinds (**C** / **V**).
+
+### Changed
+
+- **Vial rename + behavior:** `Vile of Pure Blood` renamed to **`Vial of Pure Blood`** and treated as a true consumable (not armor).
+- **Consumable keybinds:** Consumable usage moved from `1 / 2` to **`C / V`**.
+- **Menu/UI:** Main menu class name no longer overlaps its portrait; HUD portrait and HP/MP bars are bigger.
+- **Loot UX:** Old Casket loot drops are spawned in the direction away from the player’s opening position, not on top of the casket.
+- **Font quality:** UI text rendering improved (larger base font load + mipmaps/trilinear filtering) to reduce jaggies at small sizes.
+- **Combat input:** Right-click melee now has a 1-second re-engage cooldown after releasing RMB to prevent click-spam.
+
+### Fixed
+
+- **Inventory context menus:** Carried vials get `Use / Equip / Drop`; vials in equipped consumable slots get `Use / Unequip / Drop`.
+- **Inventory drop picking:** Drag-and-drop can drop items outside the inventory panel; overlapping drops are prevented by nudging to nearby positions.
+- **Shooting through walls:** Player and imp projectiles now cannot pass through walls (projectiles are destroyed on wall contact).
+- **Agitation + LOS:** Imp agitation/attacks only activate when the player is within range and there is direct line of sight (no walls in between).
+
 ## v0.4.0 — 2026-03-25
 
 ### Added

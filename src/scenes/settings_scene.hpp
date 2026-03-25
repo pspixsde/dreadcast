@@ -13,7 +13,14 @@ class SettingsScene final : public Scene {
     void draw(ResourceManager &resources) override;
 
   private:
+    enum class Tab { Controls, Video };
+
     ui::Button backButton_{};
+    Tab activeTab_{Tab::Controls};
+
+    ui::Button controlsTabButton_{};
+    ui::Button videoTabButton_{};
+    ui::Button fpsCounterToggleButton_{};
 };
 
 } // namespace dreadcast

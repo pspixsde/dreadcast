@@ -7,6 +7,11 @@
 
 namespace dreadcast {
 
+/// Runtime, user-tweakable settings shared across scenes.
+struct GameSettings {
+    bool showFpsCounter{true};
+};
+
 /// Centralized texture, sound, and UI font loading.
 class ResourceManager {
   public:
@@ -20,6 +25,9 @@ class ResourceManager {
 
     const Font &uiFont() const { return uiFont_; }
 
+    GameSettings &settings() { return settings_; }
+    const GameSettings &settings() const { return settings_; }
+
     void unloadAll();
 
   private:
@@ -28,6 +36,8 @@ class ResourceManager {
     Font uiFont_{};
     bool uiFontLoaded_{false};
     bool uiFontOwned_{false};
+
+    GameSettings settings_{};
 };
 
 } // namespace dreadcast
