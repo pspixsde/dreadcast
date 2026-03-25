@@ -9,12 +9,16 @@ namespace dreadcast::ui {
 
 /// Result of inventory interaction (e.g. drop item to ground).
 struct InventoryAction {
-    enum Type { None, Drop };
+    enum Type { None, Drop, Use };
     Type type{Type::None};
     int itemIndex{-1};
     bool dropFromEquipped{false};
     int bagSlot{-1};
     EquipSlot equipSlot{EquipSlot::Armor};
+
+    // Consumable usage (vials etc.)
+    int useBagSlot{-1};          // which bag slot to consume from (carried)
+    int useConsumableSlot{-1};  // which consumable slot to consume from (equipped)
 };
 
 /// Tab-toggle inventory: equipment, consumables, carried grid; drag-and-drop and context menu.
@@ -57,9 +61,11 @@ class InventoryUI {
     Rectangle contextRect_{};
     Rectangle contextOpt0_{};
     Rectangle contextOpt1_{};
+    Rectangle contextOpt2_{};
     int contextItemIndex_{-1};
     int contextBagSlot_{-1};
     int contextEquipSlot_{-1};
+    int contextConsumableSlot_{-1};
     bool contextIsCarried_{true};
     bool contextOpt0IsEquip_{true};
 };

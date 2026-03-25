@@ -29,6 +29,8 @@ class GameplayScene final : public Scene {
     void applyPlayerMaxHpFromEquipment();
     void tickHealOverTime(float fixedDt);
     void tryUseConsumableSlot(int slotIndex);
+    void tryUseConsumableBagSlot(int bagSlot);
+    void applyVialHealOverTime();
     [[nodiscard]] Vector2 worldMouseFromScreen(const Vector2 &screenMouse) const;
 
     void drawHud(ResourceManager &resources);

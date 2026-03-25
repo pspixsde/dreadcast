@@ -84,7 +84,7 @@ int hitTestConsumable(int screenW, int screenH, Vector2 mouse) {
 
 std::string itemLabel(const dreadcast::ItemData &it) {
     std::string s = it.name;
-    if (it.isStackable && it.stackCount > 1) {
+    if (it.isStackable && it.stackCount >= 1) {
         s += " x";
         s += std::to_string(it.stackCount);
     }
@@ -114,6 +114,10 @@ void InventoryUI::tryEquipFromBag(InventoryState &inv, int bagIndex) {
     }
     const int itemIdx = inv.bagSlots[static_cast<size_t>(bagIndex)];
     if (itemIdx < 0 || itemIdx >= static_cast<int>(inv.items.size())) {
+        return;
+    }
+    // Consumables are not equippable into gear slots (Armor/Amulet/Ring).
+    if (inv.items[static_cast<size_t>(itemIdx)].isConsumable) {
         return;
     }
     const EquipSlot targetSlot = inv.items[static_cast<size_t>(itemIdx)].slot;
@@ -188,24 +192,66 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
     }
 
     if (contextOpen_) {
+        const bool itemValid = contextItemIndex_ >= 0 &&
+                               contextItemIndex_ < static_cast<int>(inv.items.size());
+        const bool itemIsConsumable =
+            itemValid && inv.items[static_cast<size_t>(contextItemIndex_)].isConsumable;
+        const bool fromBag = contextBagSlot_ >= 0;
+        const bool fromConsumableSlot = contextConsumableSlot_ >= 0;
+        const bool fromGear = contextEquipSlot_ >= 0;
+
         if (leftPress) {
+            // Option 0
             if (CheckCollisionPointRec(mouse, contextOpt0_)) {
-                if (contextIsCarried_ && contextOpt0IsEquip_) {
+                if (itemIsConsumable) {
+                    action.type = InventoryAction::Use;
+                    action.itemIndex = contextItemIndex_;
+                    action.useBagSlot = fromBag ? contextBagSlot_ : -1;
+                    action.useConsumableSlot = fromConsumableSlot ? contextConsumableSlot_ : -1;
+                    contextOpen_ = false;
+                    return action;
+                }
+
+                // Non-consumable: Equip (bag) / Unequip (gear)
+                if (fromBag) {
                     tryEquipFromBag(inv, contextBagSlot_);
-                } else if (!contextIsCarried_ && !contextOpt0IsEquip_) {
+                } else if (fromGear) {
                     tryUnequip(inv, static_cast<EquipSlot>(contextEquipSlot_));
                 }
                 contextOpen_ = false;
                 return action;
             }
+
+            // Option 1
             if (CheckCollisionPointRec(mouse, contextOpt1_)) {
+                if (itemIsConsumable) {
+                    if (fromBag) {
+                        // Equip to first empty consumable slot.
+                        const int toCons = inv.firstEmptyConsumableSlot();
+                        if (toCons >= 0) {
+                            inv.consumableSlots[static_cast<size_t>(toCons)] = contextItemIndex_;
+                            inv.bagSlots[static_cast<size_t>(contextBagSlot_)] = -1;
+                        }
+                    } else if (fromConsumableSlot) {
+                        // Unequip to first empty bag slot.
+                        const int toBag = inv.firstEmptyBagSlot();
+                        if (toBag >= 0) {
+                            inv.bagSlots[static_cast<size_t>(toBag)] = contextItemIndex_;
+                            inv.consumableSlots[static_cast<size_t>(contextConsumableSlot_)] = -1;
+                        }
+                    }
+                    contextOpen_ = false;
+                    return action;
+                }
+
+                // Non-consumable: Drop.
                 action.type = InventoryAction::Drop;
                 action.itemIndex = contextItemIndex_;
-                if (contextIsCarried_) {
+                if (fromBag) {
                     action.dropFromEquipped = false;
                     action.bagSlot = contextBagSlot_;
                     inv.bagSlots[static_cast<size_t>(contextBagSlot_)] = -1;
-                } else {
+                } else if (fromGear) {
                     action.dropFromEquipped = true;
                     action.equipSlot = static_cast<EquipSlot>(contextEquipSlot_);
                     inv.equipped[static_cast<size_t>(contextEquipSlot_)] = -1;
@@ -213,10 +259,33 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
                 contextOpen_ = false;
                 return action;
             }
+
+            // Option 2 (consumables only)
+            if (itemIsConsumable && CheckCollisionPointRec(mouse, contextOpt2_)) {
+                action.type = InventoryAction::Drop;
+                action.itemIndex = contextItemIndex_;
+                if (fromBag) {
+                    action.dropFromEquipped = false;
+                    action.bagSlot = contextBagSlot_;
+                    inv.bagSlots[static_cast<size_t>(contextBagSlot_)] = -1;
+                } else if (fromConsumableSlot) {
+                    action.dropFromEquipped = false;
+                    action.bagSlot = -1;
+                    inv.consumableSlots[static_cast<size_t>(contextConsumableSlot_)] = -1;
+                } else if (fromGear) {
+                    action.dropFromEquipped = true;
+                    action.equipSlot = static_cast<EquipSlot>(contextEquipSlot_);
+                    inv.equipped[static_cast<size_t>(contextEquipSlot_)] = -1;
+                }
+                contextOpen_ = false;
+                return action;
+            }
+
             if (!CheckCollisionPointRec(mouse, contextRect_)) {
                 contextOpen_ = false;
             }
         }
+
         if (leftRelease) {
             dragging_ = false;
         }
@@ -230,22 +299,32 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
             if (idx >= 0) {
                 const float rowH = 32.0F;
                 const float menuW = 168.0F;
-                const float menuH = rowH * 2.0F + 10.0F;
+                const bool isConsumable = idx >= 0 &&
+                                           idx < static_cast<int>(inv.items.size()) &&
+                                           inv.items[static_cast<size_t>(idx)].isConsumable;
+                const float menuH = rowH * (isConsumable ? 3.0F : 2.0F) + 10.0F;
                 contextRect_ = {mouse.x, mouse.y, menuW, menuH};
                 clampRectToScreen(contextRect_, sw, sh);
                 contextOpt0_ = {contextRect_.x + 4.0F, contextRect_.y + 4.0F,
                                 contextRect_.width - 8.0F, rowH};
                 contextOpt1_ = {contextRect_.x + 4.0F, contextRect_.y + 5.0F + rowH,
                                 contextRect_.width - 8.0F, rowH};
+                contextOpt2_ = {0, 0, 0, 0};
                 contextItemIndex_ = idx;
                 contextBagSlot_ = bagHit;
                 contextEquipSlot_ = -1;
+                contextConsumableSlot_ = -1;
                 contextIsCarried_ = true;
-                contextOpt0IsEquip_ = true;
+                contextOpt0IsEquip_ = !isConsumable;
+                if (isConsumable) {
+                    contextOpt2_ = {contextRect_.x + 4.0F, contextRect_.y + 5.0F + rowH * 2.0F,
+                                    contextRect_.width - 8.0F, rowH};
+                }
                 contextOpen_ = true;
             }
             return action;
         }
+
         const int eqHit = hitTestEquip(sw, sh, mouse);
         if (eqHit >= 0) {
             const int idx = inv.equipped[static_cast<size_t>(eqHit)];
@@ -259,9 +338,36 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
                                 contextRect_.width - 8.0F, rowH};
                 contextOpt1_ = {contextRect_.x + 4.0F, contextRect_.y + 5.0F + rowH,
                                 contextRect_.width - 8.0F, rowH};
+                contextOpt2_ = {0, 0, 0, 0};
                 contextItemIndex_ = idx;
                 contextBagSlot_ = -1;
                 contextEquipSlot_ = eqHit;
+                contextConsumableSlot_ = -1;
+                contextIsCarried_ = false;
+                contextOpt0IsEquip_ = false;
+                contextOpen_ = true;
+            }
+        }
+
+        const int consHit = hitTestConsumable(sw, sh, mouse);
+        if (consHit >= 0) {
+            const int idx = inv.consumableSlots[static_cast<size_t>(consHit)];
+            if (idx >= 0) {
+                const float rowH = 32.0F;
+                const float menuW = 168.0F;
+                const float menuH = rowH * 3.0F + 10.0F;
+                contextRect_ = {mouse.x, mouse.y, menuW, menuH};
+                clampRectToScreen(contextRect_, sw, sh);
+                contextOpt0_ = {contextRect_.x + 4.0F, contextRect_.y + 4.0F,
+                                contextRect_.width - 8.0F, rowH};
+                contextOpt1_ = {contextRect_.x + 4.0F, contextRect_.y + 5.0F + rowH,
+                                contextRect_.width - 8.0F, rowH};
+                contextOpt2_ = {contextRect_.x + 4.0F, contextRect_.y + 5.0F + rowH * 2.0F,
+                                contextRect_.width - 8.0F, rowH};
+                contextItemIndex_ = idx;
+                contextBagSlot_ = -1;
+                contextEquipSlot_ = -1;
+                contextConsumableSlot_ = consHit;
                 contextIsCarried_ = false;
                 contextOpt0IsEquip_ = false;
                 contextOpen_ = true;
@@ -299,6 +405,14 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
         dragging_ = false;
         const int bagHit = hitTestBag(sw, sh, mouse);
         const int eqHit = hitTestEquip(sw, sh, mouse);
+        const int consHit = hitTestConsumable(sw, sh, mouse);
+
+        const float panelW = 680.0F;
+        const float panelH = 420.0F;
+        const float px = (static_cast<float>(sw) - panelW) * 0.5F;
+        const float py = (static_cast<float>(sh) - panelH) * 0.5F;
+        const Rectangle panelRect{px, py, panelW, panelH};
+        const bool outsidePanel = !CheckCollisionPointRec(mouse, panelRect);
 
         if (dragSourceBag_ >= 0) {
             if (eqHit >= 0) {
@@ -308,15 +422,34 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
                 }
             } else if (bagHit >= 0 && bagHit != dragSourceBag_) {
                 swapBagSlots(inv, dragSourceBag_, bagHit);
+            } else if (outsidePanel) {
+                action.type = InventoryAction::Drop;
+                action.itemIndex = dragItemIndex_;
+                action.dropFromEquipped = false;
+                action.bagSlot = dragSourceBag_;
+                inv.bagSlots[static_cast<size_t>(dragSourceBag_)] = -1;
             }
         } else if (dragSourceEquip_ >= 0) {
             if (bagHit >= 0) {
                 moveEquippedToBagSlot(inv, static_cast<EquipSlot>(dragSourceEquip_), bagHit);
+            } else if (outsidePanel) {
+                action.type = InventoryAction::Drop;
+                action.itemIndex = dragItemIndex_;
+                action.dropFromEquipped = true;
+                action.equipSlot = static_cast<EquipSlot>(dragSourceEquip_);
+                inv.equipped[static_cast<size_t>(dragSourceEquip_)] = -1;
             }
         }
+
         dragSourceBag_ = -1;
         dragSourceEquip_ = -1;
         dragItemIndex_ = -1;
+
+        // Keep dragging-out drop behavior mutually exclusive with slot placement.
+        if (action.type == InventoryAction::Drop && outsidePanel &&
+            bagHit < 0 && eqHit < 0 && consHit < 0) {
+            return action;
+        }
     }
 
     return action;
@@ -400,21 +533,38 @@ void InventoryUI::draw(const Font &font, int screenW, int screenH,
     if (contextOpen_) {
         DrawRectangleRec(contextRect_, ui::theme::PANEL_FILL);
         DrawRectangleLinesEx(contextRect_, 2.0F, ui::theme::PANEL_BORDER);
-        const char *o0 = contextIsCarried_ ? "Equip" : "Unequip";
-        const char *o1 = "Drop";
+        const bool itemValid = contextItemIndex_ >= 0 &&
+                               contextItemIndex_ < static_cast<int>(inv.items.size());
+        const bool itemIsConsumable =
+            itemValid && inv.items[static_cast<size_t>(contextItemIndex_)].isConsumable;
+        const bool fromBag = contextBagSlot_ >= 0;
+
+        const char *o0 = itemIsConsumable ? "Use" : (contextIsCarried_ ? "Equip" : "Unequip");
+        const char *o1 = itemIsConsumable ? (fromBag ? "Equip" : "Unequip") : "Drop";
+        const char *o2 = "Drop";
+
+        const Vector2 m = GetMousePosition();
         const float optFont = 18.0F;
-        const Color h0 = CheckCollisionPointRec(GetMousePosition(), contextOpt0_)
-                             ? ui::theme::BTN_HOVER
-                             : ui::theme::SLOT_FILL;
-        const Color h1 = CheckCollisionPointRec(GetMousePosition(), contextOpt1_)
-                             ? ui::theme::BTN_HOVER
-                             : ui::theme::SLOT_FILL;
+
+        const Color h0 = CheckCollisionPointRec(m, contextOpt0_) ? ui::theme::BTN_HOVER
+                                                                 : ui::theme::SLOT_FILL;
+        const Color h1 = CheckCollisionPointRec(m, contextOpt1_) ? ui::theme::BTN_HOVER
+                                                                 : ui::theme::SLOT_FILL;
+        const Color h2 = CheckCollisionPointRec(m, contextOpt2_) ? ui::theme::BTN_HOVER
+                                                                 : ui::theme::SLOT_FILL;
+
         DrawRectangleRec(contextOpt0_, h0);
         DrawRectangleRec(contextOpt1_, h1);
         DrawTextEx(font, o0, {contextOpt0_.x + 8.0F, contextOpt0_.y + 6.0F}, optFont, 1.0F,
                    RAYWHITE);
         DrawTextEx(font, o1, {contextOpt1_.x + 8.0F, contextOpt1_.y + 6.0F}, optFont, 1.0F,
                    RAYWHITE);
+
+        if (itemIsConsumable) {
+            DrawRectangleRec(contextOpt2_, h2);
+            DrawTextEx(font, o2, {contextOpt2_.x + 8.0F, contextOpt2_.y + 6.0F}, optFont, 1.0F,
+                       RAYWHITE);
+        }
     }
 
     if (dragging_ && dragItemIndex_ >= 0 &&

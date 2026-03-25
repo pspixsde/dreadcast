@@ -68,7 +68,8 @@ void ResourceManager::loadUiFont(const std::string &path, int baseSize) {
     if (loaded.glyphCount > 0) {
         uiFont_ = loaded;
         uiFontOwned_ = true;
-        SetTextureFilter(uiFont_.texture, TEXTURE_FILTER_BILINEAR);
+        GenTextureMipmaps(&uiFont_.texture);
+        SetTextureFilter(uiFont_.texture, TEXTURE_FILTER_TRILINEAR);
     } else {
         TraceLog(LOG_WARNING,
                  "Dreadcast: could not load UI font from \"%s\" (also tried next to executable). "

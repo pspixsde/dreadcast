@@ -21,7 +21,7 @@ inline constexpr float CAMERA_FOLLOW_LERP = 8.0F;
 
 /// UI font (Cinzel variable font from Google Fonts).
 inline constexpr const char *UI_FONT_PATH = "assets/fonts/Cinzel.ttf";
-inline constexpr int UI_FONT_BASE_SIZE = 48;
+inline constexpr int UI_FONT_BASE_SIZE = 96;
 
 inline constexpr float MANA_COST_SHOT = 10.0F;
 inline constexpr float PROJECTILE_DAMAGE = 10.0F;

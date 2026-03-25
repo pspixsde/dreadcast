@@ -1,6 +1,7 @@
 #include "game.hpp"
 
 #include <memory>
+#include <cstdio>
 
 #include <raylib.h>
 
@@ -28,6 +29,18 @@ void Game::run() {
         BeginDrawing();
         ClearBackground(BLACK);
         scenes_.draw(resources_);
+
+        if (resources_.settings().showFpsCounter) {
+            const Font &font = resources_.uiFont();
+            const int w = config::WINDOW_WIDTH;
+            const int h = config::WINDOW_HEIGHT;
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%d FPS", static_cast<int>(GetFPS()));
+            const float fontSize = 18.0F;
+            const Vector2 dim = MeasureTextEx(font, buf, fontSize, 1.0F);
+            const float margin = 10.0F;
+            DrawTextEx(font, buf, {w - dim.x - margin, margin}, fontSize, 1.0F, RAYWHITE);
+        }
         EndDrawing();
     }
 

@@ -1,5 +1,6 @@
 #include "ecs/systems/enemy_ai_system.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 #include <entt/entt.hpp>
@@ -10,6 +11,59 @@
 #include "ecs/components.hpp"
 
 namespace dreadcast::ecs {
+
+namespace {
+
+Rectangle wallRect(const Transform &t, const Wall &w) {
+    return {t.position.x - w.halfW, t.position.y - w.halfH, w.halfW * 2.0F, w.halfH * 2.0F};
+}
+
+bool segmentIntersectsRect(Vector2 from, Vector2 to, Rectangle rect) {
+    // Liang-Barsky segment-vs-AABB test in 2D.
+    const float EPS = 1.0e-6F;
+    Vector2 d{to.x - from.x, to.y - from.y};
+
+    float t0 = 0.0F;
+    float t1 = 1.0F;
+
+    auto updateAxis = [&](float start, float delta, float minB, float maxB) -> bool {
+        if (std::fabs(delta) < EPS) {
+            // Parallel to the slab: must be within bounds to intersect.
+            return start >= minB && start <= maxB;
+        }
+        const float invD = 1.0F / delta;
+        float tNear = (minB - start) * invD;
+        float tFar = (maxB - start) * invD;
+        if (tNear > tFar) {
+            std::swap(tNear, tFar);
+        }
+        t0 = std::max(t0, tNear);
+        t1 = std::min(t1, tFar);
+        return t0 <= t1;
+    };
+
+    if (!updateAxis(from.x, d.x, rect.x, rect.x + rect.width)) {
+        return false;
+    }
+    if (!updateAxis(from.y, d.y, rect.y, rect.y + rect.height)) {
+        return false;
+    }
+    return true;
+}
+
+bool hasLineOfSight(entt::registry &registry, Vector2 from, Vector2 to) {
+    const auto walls = registry.view<Wall, Transform>();
+    for (const auto w : walls) {
+        const auto &t = registry.get<Transform>(w);
+        const auto &wall = registry.get<Wall>(w);
+        if (segmentIntersectsRect(from, to, wallRect(t, wall))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
 
 void enemy_ai_system(entt::registry &registry, float fixedDt) {
     entt::entity playerEntity = entt::null;
@@ -36,17 +90,9 @@ void enemy_ai_system(entt::registry &registry, float fixedDt) {
         const float dist = std::sqrt(distSq);
         const float agRange = ag.agitationRange > 0.0F ? ag.agitationRange : config::IMP_AGITATION_RANGE;
 
-        if (dist <= agRange) {
-            ag.agitated = true;
-            ag.calmDownTimer = 0.0F;
-        } else {
-            ag.calmDownTimer += fixedDt;
-            const float delay = ag.calmDownDelay > 0.0F ? ag.calmDownDelay : config::ENEMY_CALM_DOWN_DELAY;
-            if (ag.calmDownTimer >= delay) {
-                ag.agitated = false;
-                ag.calmDownTimer = delay;
-            }
-        }
+        const bool hasLOS = hasLineOfSight(registry, transform.position, playerT.position);
+        ag.agitated = (dist <= agRange) && hasLOS;
+        ag.calmDownTimer = ag.agitated ? 0.0F : ag.calmDownTimer + fixedDt;
 
         if (!ag.agitated) {
             continue;

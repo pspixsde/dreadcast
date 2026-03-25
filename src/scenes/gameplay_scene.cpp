@@ -176,7 +176,7 @@ void GameplayScene::tryUseConsumableSlot(int slotIndex) {
     if (!it.isConsumable) {
         return;
     }
-    if (it.name != "Vile of Pure Blood") {
+    if (it.name != "Vial of Pure Blood") {
         return;
     }
     if (registry_.valid(player_) && registry_.all_of<ecs::HealOverTime>(player_)) {
@@ -187,10 +187,41 @@ void GameplayScene::tryUseConsumableSlot(int slotIndex) {
         inventory_.consumableSlots[static_cast<size_t>(slotIndex)] = -1;
         inventory_.removeItemAtIndex(idx);
     }
-    if (registry_.valid(player_)) {
-        registry_.emplace_or_replace<ecs::HealOverTime>(
-            player_, ecs::HealOverTime{config::HOT_TOTAL_HEAL, config::HOT_DURATION, 0.0F, 0.0F});
+    applyVialHealOverTime();
+}
+
+void GameplayScene::tryUseConsumableBagSlot(int bagSlot) {
+    if (bagSlot < 0 || bagSlot >= dreadcast::BAG_SLOT_COUNT) {
+        return;
     }
+    const int idx = inventory_.bagSlots[static_cast<size_t>(bagSlot)];
+    if (idx < 0 || idx >= static_cast<int>(inventory_.items.size())) {
+        return;
+    }
+    ItemData &it = inventory_.items[static_cast<size_t>(idx)];
+    if (!it.isConsumable) {
+        return;
+    }
+    if (it.name != "Vial of Pure Blood") {
+        return;
+    }
+    if (registry_.valid(player_) && registry_.all_of<ecs::HealOverTime>(player_)) {
+        return;
+    }
+    it.stackCount -= 1;
+    if (it.stackCount <= 0) {
+        inventory_.bagSlots[static_cast<size_t>(bagSlot)] = -1;
+        inventory_.removeItemAtIndex(idx);
+    }
+    applyVialHealOverTime();
+}
+
+void GameplayScene::applyVialHealOverTime() {
+    if (!registry_.valid(player_)) {
+        return;
+    }
+    registry_.emplace_or_replace<ecs::HealOverTime>(
+        player_, ecs::HealOverTime{config::HOT_TOTAL_HEAL, config::HOT_DURATION, 0.0F, 0.0F});
 }
 
 void GameplayScene::spawnItemPickupAtPlayer(int itemIndex) {
@@ -202,8 +233,33 @@ void GameplayScene::spawnItemPickupAtPlayer(int itemIndex) {
 }
 
 void GameplayScene::spawnItemPickupAtWorld(const Vector2 &worldPos, int itemIndex) {
+    Vector2 dropPos = worldPos;
+    constexpr float minSep = 20.0F; // keep multiple drops pickable
+    const float minSepSq = minSep * minSep;
+
+    // Nudge the drop position outward if it would overlap an existing ground pickup.
+    for (int attempt = 0; attempt < 24; ++attempt) {
+        bool ok = true;
+        const auto pickups = registry_.view<ecs::ItemPickup, ecs::Transform>();
+        for (const auto p : pickups) {
+            const auto &pt = pickups.get<ecs::Transform>(p);
+            const float dx = pt.position.x - dropPos.x;
+            const float dy = pt.position.y - dropPos.y;
+            if (dx * dx + dy * dy < minSepSq) {
+                ok = false;
+                break;
+            }
+        }
+        if (ok) {
+            break;
+        }
+        const float ang = attempt * 2.3999632F; // golden angle (radians)
+        const float r = minSep * (0.55F + 0.25F * static_cast<float>(attempt));
+        dropPos = {worldPos.x + std::cosf(ang) * r, worldPos.y + std::sinf(ang) * r};
+    }
+
     const auto e = registry_.create();
-    registry_.emplace<ecs::Transform>(e, ecs::Transform{worldPos, 0.0F});
+    registry_.emplace<ecs::Transform>(e, ecs::Transform{dropPos, 0.0F});
     registry_.emplace<ecs::Velocity>(e, ecs::Velocity{});
     registry_.emplace<ecs::Sprite>(e, ecs::Sprite{{180, 120, 255, 255}, 28.0F, 28.0F});
     registry_.emplace<ecs::ItemPickup>(e, ecs::ItemPickup{itemIndex});
@@ -248,6 +304,12 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input,
             const ui::InventoryAction invAction = inventoryUi_.update(input, inventory_);
             if (invAction.type == ui::InventoryAction::Drop) {
                 spawnItemPickupAtPlayer(invAction.itemIndex);
+            } else if (invAction.type == ui::InventoryAction::Use) {
+                if (invAction.useConsumableSlot >= 0) {
+                    tryUseConsumableSlot(invAction.useConsumableSlot);
+                } else if (invAction.useBagSlot >= 0) {
+                    tryUseConsumableBagSlot(invAction.useBagSlot);
+                }
             }
         }
     }
@@ -305,11 +367,22 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input,
         ecs::enemy_ai_system(registry_, config::FIXED_DT);
         ecs::movement_system(registry_, config::FIXED_DT);
         ecs::wall_resolve_collisions(registry_);
+        ecs::wall_destroy_projectiles(registry_);
         ecs::projectile_system(registry_, config::FIXED_DT);
         ecs::collision::projectile_hits(registry_);
         ecs::collision::player_pickup_mana_shards(registry_, player_);
         ecs::death_system(registry_, player_, &enemiesSlain_);
         tickHealOverTime(config::FIXED_DT);
+
+        // Passive regen based on the selected class.
+        if (registry_.valid(player_) && registry_.all_of<ecs::Health, ecs::Mana>(player_)) {
+            const int ci = std::clamp(selectedClass_, 0, CLASS_COUNT - 1);
+            const auto &cls = AVAILABLE_CLASSES[static_cast<size_t>(ci)];
+            auto &hp2 = registry_.get<ecs::Health>(player_);
+            auto &mp = registry_.get<ecs::Mana>(player_);
+            hp2.current = std::min(hp2.max, hp2.current + cls.hpRegen * config::FIXED_DT);
+            mp.current = std::min(mp.max, mp.current + cls.manaRegen * config::FIXED_DT);
+        }
     }
 
     if (registry_.valid(player_) && registry_.all_of<ecs::Health>(player_)) {
@@ -321,10 +394,10 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input,
     }
 
     if (!invOpen && !paused_) {
-        if (input.isKeyPressed(KEY_ONE)) {
+        if (input.isKeyPressed(KEY_C)) {
             tryUseConsumableSlot(0);
         }
-        if (input.isKeyPressed(KEY_TWO)) {
+        if (input.isKeyPressed(KEY_V)) {
             tryUseConsumableSlot(1);
         }
     }
@@ -357,7 +430,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input,
                     const int armorIdx = inventory_.addItem(std::move(armor));
 
                     ItemData vile{};
-                    vile.name = "Vile of Pure Blood";
+                    vile.name = "Vial of Pure Blood";
                     vile.isConsumable = true;
                     vile.isStackable = true;
                     vile.maxStack = 5;
@@ -366,8 +439,28 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input,
                     const int vileIdx = inventory_.addItem(std::move(vile));
 
                     const auto &ct = registry_.get<ecs::Transform>(hoveredInteract_);
-                    spawnItemPickupAtWorld({ct.position.x - 22.0F, ct.position.y}, armorIdx);
-                    spawnItemPickupAtWorld({ct.position.x + 22.0F, ct.position.y}, vileIdx);
+                    const auto &casketSpr = registry_.get<ecs::Sprite>(hoveredInteract_);
+
+                    Vector2 dir = {ppos.x - ct.position.x, ppos.y - ct.position.y};
+                    const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y);
+                    if (len > 0.001F) {
+                        dir.x /= len;
+                        dir.y /= len;
+                    } else {
+                        dir = {1.0F, 0.0F};
+                    }
+                    const Vector2 perp = {-dir.y, dir.x};
+
+                    const float half = std::max(casketSpr.width, casketSpr.height) * 0.5F;
+                    const float baseDist = half + 12.0F;
+                    const float spread = 12.0F;
+
+                    const Vector2 dropA = {ct.position.x + dir.x * baseDist + perp.x * spread,
+                                             ct.position.y + dir.y * baseDist + perp.y * spread};
+                    const Vector2 dropB = {ct.position.x + dir.x * baseDist - perp.x * spread,
+                                             ct.position.y + dir.y * baseDist - perp.y * spread};
+                    spawnItemPickupAtWorld(dropA, armorIdx);
+                    spawnItemPickupAtWorld(dropB, vileIdx);
                 }
             }
 
@@ -480,13 +573,15 @@ void GameplayScene::drawHud(ResourceManager &resources) {
     const auto &mp = registry_.get<ecs::Mana>(player_);
 
     const float margin = 16.0F;
-    const float portraitR = 32.0F;
-    const float barW = 220.0F;
-    const float barHpH = 22.0F;
-    const float barMpH = 14.0F;
+    const float portraitR = 42.0F;
+    const float barW = 280.0F;
+    const float barHpH = 28.0F;
+    const float barMpH = 18.0F;
     const float barGap = 4.0F;
     const float barX = margin + portraitR * 2.0F + 8.0F;
-    const float hudBottom = static_cast<float>(h) - margin;
+    const float hudBottomAll = static_cast<float>(h) - margin;
+    const float consumableRowH = 44.0F;
+    const float hudBottom = hudBottomAll - consumableRowH;
     const float hpBarTop = hudBottom - barMpH - barGap - barHpH;
     const float icon = 28.0F;
     const bool hotActive = registry_.all_of<ecs::HealOverTime>(player_);
@@ -496,7 +591,7 @@ void GameplayScene::drawHud(ResourceManager &resources) {
     const float hudLeft = margin;
     const float hudTop = hpBarTop - hudPad - iconLift;
     const float hudW = barX + barW + hudPad - hudLeft;
-    const float hudH = hudBottom + hudPad - hudTop;
+    const float hudH = hudBottomAll + hudPad - hudTop;
     DrawRectangle(static_cast<int>(hudLeft - 4.0F), static_cast<int>(hudTop - 4.0F),
                   static_cast<int>(hudW + 8.0F), static_cast<int>(hudH + 8.0F), ui::theme::HUD_BACKING);
 
@@ -506,7 +601,8 @@ void GameplayScene::drawHud(ResourceManager &resources) {
     DrawCircleLines(static_cast<int>(cx), static_cast<int>(cy), portraitR, ui::theme::PORTRAIT_RING);
 
     const int ci = std::clamp(selectedClass_, 0, CLASS_COUNT - 1);
-    const char initial = AVAILABLE_CLASSES[static_cast<size_t>(ci)].name[0];
+    const auto &cls = AVAILABLE_CLASSES[static_cast<size_t>(ci)];
+    const char initial = cls.name[0];
     const float portraitFont = 36.0F;
     char oneChar[2] = {initial, '\0'};
     const Vector2 idim = MeasureTextEx(font, oneChar, portraitFont, 1.0F);
@@ -530,6 +626,18 @@ void GameplayScene::drawHud(ResourceManager &resources) {
                {barX + (barW - hpDim.x) * 0.5F, hpBarTop + (barHpH - hpDim.y) * 0.5F}, hpTextSize,
                1.0F, RAYWHITE);
 
+    // Passive regen indicator (e.g., "+1.0").
+    if (cls.hpRegen > 0.001F) {
+        char regenBuf[32];
+        std::snprintf(regenBuf, sizeof(regenBuf), "+%.1f", static_cast<double>(cls.hpRegen));
+        const float regenSz = 13.0F;
+        const Vector2 regenDim = MeasureTextEx(font, regenBuf, regenSz, 1.0F);
+        DrawTextEx(font, regenBuf,
+                   {barX + barW - regenDim.x - 4.0F,
+                    hpBarTop + (barHpH - regenDim.y) * 0.5F},
+                   regenSz, 1.0F, ui::theme::LABEL_TEXT);
+    }
+
     const float mpBarTop = hpBarTop + barHpH + barGap;
     DrawRectangle(static_cast<int>(barX), static_cast<int>(mpBarTop), static_cast<int>(barW),
                   static_cast<int>(barMpH), {20, 30, 60, 255});
@@ -547,6 +655,52 @@ void GameplayScene::drawHud(ResourceManager &resources) {
     DrawTextEx(font, mpBuf,
                {barX + (barW - mpDim.x) * 0.5F, mpBarTop + (barMpH - mpDim.y) * 0.5F}, mpTextSize,
                1.0F, RAYWHITE);
+
+    if (cls.manaRegen > 0.001F) {
+        char regenBuf[32];
+        std::snprintf(regenBuf, sizeof(regenBuf), "+%.1f",
+                      static_cast<double>(cls.manaRegen));
+        const float regenSz = 13.0F;
+        const Vector2 regenDim = MeasureTextEx(font, regenBuf, regenSz, 1.0F);
+        DrawTextEx(font, regenBuf,
+                   {barX + barW - regenDim.x - 4.0F,
+                    mpBarTop + (barMpH - regenDim.y) * 0.5F},
+                   regenSz, 1.0F, ui::theme::LABEL_TEXT);
+    }
+
+    // Equipped consumable slots (C / V).
+    const float slotY = hudBottom + 8.0F;
+    const float slotH = 26.0F;
+    const float slotGap = 10.0F;
+    const float slotW = (barW - slotGap) * 0.5F;
+    const char *keys[static_cast<int>(dreadcast::CONSUMABLE_SLOT_COUNT)] = {"C", "V"};
+    for (int si = 0; si < dreadcast::CONSUMABLE_SLOT_COUNT; ++si) {
+        const float sx = barX + si * (slotW + slotGap);
+        const Rectangle slotR{sx, slotY, slotW, slotH};
+        DrawRectangleRec(slotR, ui::theme::SLOT_FILL);
+        DrawRectangleLinesEx(slotR, 1.5F, ui::theme::SLOT_BORDER);
+
+        const int idx = inventory_.consumableSlots[static_cast<size_t>(si)];
+        DrawTextEx(font, keys[si], {sx + 6.0F, slotY + 4.0F}, 18.0F, 1.0F, RAYWHITE);
+
+        if (idx >= 0 && idx < static_cast<int>(inventory_.items.size())) {
+            const auto &it = inventory_.items[static_cast<size_t>(idx)];
+            const int count = it.stackCount;
+            std::string shortName = it.name;
+            const size_t sp = shortName.find(' ');
+            if (sp != std::string::npos) {
+                shortName.resize(sp);
+            }
+            DrawTextEx(font, shortName.c_str(), {sx + 34.0F, slotY + 5.0F}, 14.0F, 1.0F,
+                       ui::theme::LABEL_TEXT);
+
+            char cntBuf[16];
+            std::snprintf(cntBuf, sizeof(cntBuf), "%d", count);
+            const Vector2 cDim = MeasureTextEx(font, cntBuf, 14.0F, 1.0F);
+            DrawTextEx(font, cntBuf, {sx + slotW - cDim.x - 6.0F, slotY + 6.0F}, 14.0F, 1.0F,
+                       RAYWHITE);
+        }
+    }
 
     if (hotActive) {
         const auto &hot = registry_.get<ecs::HealOverTime>(player_);
