@@ -1,0 +1,67 @@
+#pragma once
+
+#include <raylib.h>
+
+#include "core/input.hpp"
+#include "game/items.hpp"
+
+namespace dreadcast::ui {
+
+/// Result of inventory interaction (e.g. drop item to ground).
+struct InventoryAction {
+    enum Type { None, Drop };
+    Type type{Type::None};
+    int itemIndex{-1};
+    bool dropFromEquipped{false};
+    int bagSlot{-1};
+    EquipSlot equipSlot{EquipSlot::Armor};
+};
+
+/// Tab-toggle inventory: equipment, consumables, carried grid; drag-and-drop and context menu.
+class InventoryUI {
+  public:
+    void toggle() {
+        open_ = !open_;
+        if (open_) {
+            contextOpen_ = false;
+        }
+    }
+    [[nodiscard]] bool isOpen() const { return open_; }
+    void setOpen(bool v) {
+        open_ = v;
+        if (open_) {
+            contextOpen_ = false;
+        }
+    }
+
+    InventoryAction update(InputManager &input, InventoryState &inv);
+
+    void draw(const Font &font, int screenW, int screenH, const InventoryState &inv);
+
+  private:
+    bool open_{false};
+
+    static constexpr const char *kSlotLabels[] = {"Armor", "Amulet", "Ring"};
+
+    void tryEquipFromBag(InventoryState &inv, int bagIndex);
+    void tryUnequip(InventoryState &inv, EquipSlot slot);
+    void moveEquippedToBagSlot(InventoryState &inv, EquipSlot slot, int bagIdx);
+    void swapBagSlots(InventoryState &inv, int a, int b);
+
+    bool dragging_{false};
+    int dragItemIndex_{-1};
+    int dragSourceBag_{-1};
+    int dragSourceEquip_{-1};
+
+    bool contextOpen_{false};
+    Rectangle contextRect_{};
+    Rectangle contextOpt0_{};
+    Rectangle contextOpt1_{};
+    int contextItemIndex_{-1};
+    int contextBagSlot_{-1};
+    int contextEquipSlot_{-1};
+    bool contextIsCarried_{true};
+    bool contextOpt0IsEquip_{true};
+};
+
+} // namespace dreadcast::ui
