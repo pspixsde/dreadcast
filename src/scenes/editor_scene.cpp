@@ -34,7 +34,7 @@ float distSq(Vector2 a, Vector2 b) {
 } // namespace
 
 Rectangle EditorScene::toolbarPanelRect() const {
-    return {4.0F, 4.0F, 210.0F, 520.0F};
+    return {4.0F, 4.0F, 210.0F, 580.0F};
 }
 
 bool EditorScene::isMouseOverToolbar(Vector2 screenMouse) const {
@@ -103,27 +103,29 @@ void EditorScene::onEnter() {
     loadMap();
 
     toolButtons_.clear();
-    const char *labels[] = {"Select", "Wall", "Enemy", "Casket", "Player"};
-    for (int i = 0; i < 5; ++i) {
+    const char *labels[] = {"Select", "Wall", "Enemy", "Casket", "Player", "Item"};
+    for (int i = 0; i < 6; ++i) {
         ui::Button b{};
         b.rect = {16.0F, 70.0F + i * 44.0F, 118.0F, 34.0F};
         b.label = labels[i];
         toolButtons_.push_back(b);
     }
-    mapPrevButton_.rect = {16.0F, 300.0F, 56.0F, 30.0F};
+    mapPrevButton_.rect = {16.0F, 344.0F, 56.0F, 30.0F};
     mapPrevButton_.label = "<";
-    mapNextButton_.rect = {80.0F, 300.0F, 56.0F, 30.0F};
+    mapNextButton_.rect = {80.0F, 344.0F, 56.0F, 30.0F};
     mapNextButton_.label = ">";
-    mapNewButton_.rect = {16.0F, 338.0F, 120.0F, 30.0F};
+    mapNewButton_.rect = {16.0F, 382.0F, 120.0F, 30.0F};
     mapNewButton_.label = "New map";
-    saveButton_.rect = {16.0F, 378.0F, 118.0F, 34.0F};
+    saveButton_.rect = {16.0F, 422.0F, 118.0F, 34.0F};
     saveButton_.label = "Save";
-    loadButton_.rect = {16.0F, 422.0F, 118.0F, 34.0F};
+    loadButton_.rect = {16.0F, 466.0F, 118.0F, 34.0F};
     loadButton_.label = "Load";
-    backButton_.rect = {16.0F, 466.0F, 118.0F, 34.0F};
+    backButton_.rect = {16.0F, 510.0F, 118.0F, 34.0F};
     backButton_.label = "Back";
     enemyTypeButton_.rect = {142.0F, 158.0F, 118.0F, 34.0F};
     enemyTypeButton_.label = "Enemy: Imp";
+    itemTypeButton_.rect = {142.0F, 290.0F, 118.0F, 34.0F};
+    itemTypeButton_.label = "Item: Armor";
 }
 
 Vector2 EditorScene::worldMouseFromScreen(const Vector2 &screenMouse) const {
@@ -146,6 +148,15 @@ EditorScene::Selection EditorScene::pickSelection(const Vector2 &worldMouse) con
         const Vector2 e{map_.enemies[static_cast<size_t>(i)].x, map_.enemies[static_cast<size_t>(i)].y};
         if (distSq(worldMouse, e) <= pickR2) {
             s.type = SelectedType::Enemy;
+            s.index = i;
+            return s;
+        }
+    }
+    for (int i = 0; i < static_cast<int>(map_.itemSpawns.size()); ++i) {
+        const ItemSpawnData &it = map_.itemSpawns[static_cast<size_t>(i)];
+        const Vector2 p{it.x, it.y};
+        if (distSq(worldMouse, p) <= pickR2) {
+            s.type = SelectedType::Item;
             s.index = i;
             return s;
         }
@@ -186,6 +197,13 @@ void EditorScene::handlePlacement(const Vector2 &worldMouse) {
         selected_.type = SelectedType::PlayerSpawn;
         selected_.index = -1;
         break;
+    case Tool::PlaceItem:
+        map_.itemSpawns.push_back(
+            {worldMouse.x, worldMouse.y,
+             selectedItemKind_ == 0 ? "iron_armor" : "vial_pure_blood"});
+        selected_.type = SelectedType::Item;
+        selected_.index = static_cast<int>(map_.itemSpawns.size()) - 1;
+        break;
     case Tool::Select:
         break;
     }
@@ -215,6 +233,13 @@ void EditorScene::applySelectionMove(const Vector2 &worldMouse) {
     case SelectedType::PlayerSpawn:
         map_.playerSpawn = target;
         break;
+    case SelectedType::Item:
+        if (selected_.index >= 0 && selected_.index < static_cast<int>(map_.itemSpawns.size())) {
+            auto &it = map_.itemSpawns[static_cast<size_t>(selected_.index)];
+            it.x = target.x;
+            it.y = target.y;
+        }
+        break;
     case SelectedType::None:
         break;
     }
@@ -227,6 +252,9 @@ void EditorScene::deleteSelection() {
     } else if (selected_.type == SelectedType::Enemy && selected_.index >= 0 &&
                selected_.index < static_cast<int>(map_.enemies.size())) {
         map_.enemies.erase(map_.enemies.begin() + selected_.index);
+    } else if (selected_.type == SelectedType::Item && selected_.index >= 0 &&
+               selected_.index < static_cast<int>(map_.itemSpawns.size())) {
+        map_.itemSpawns.erase(map_.itemSpawns.begin() + selected_.index);
     } else if (selected_.type == SelectedType::Casket) {
         map_.hasCasket = false;
     }
@@ -248,6 +276,14 @@ void EditorScene::duplicateSelection() {
         copy.y += 24.0F;
         map_.enemies.push_back(copy);
         selected_.index = static_cast<int>(map_.enemies.size()) - 1;
+    } else if (selected_.type == SelectedType::Item && selected_.index >= 0 &&
+               selected_.index < static_cast<int>(map_.itemSpawns.size())) {
+        ItemSpawnData copy = map_.itemSpawns[static_cast<size_t>(selected_.index)];
+        copy.x += 24.0F;
+        copy.y += 24.0F;
+        map_.itemSpawns.push_back(copy);
+        selected_.type = SelectedType::Item;
+        selected_.index = static_cast<int>(map_.itemSpawns.size()) - 1;
     }
 }
 
@@ -261,6 +297,10 @@ void EditorScene::copySelectionToClipboard() {
                selected_.index < static_cast<int>(map_.enemies.size())) {
         clipboardEnemy_ = map_.enemies[static_cast<size_t>(selected_.index)];
         clipboardKind_ = ClipboardKind::Enemy;
+    } else if (selected_.type == SelectedType::Item && selected_.index >= 0 &&
+               selected_.index < static_cast<int>(map_.itemSpawns.size())) {
+        clipboardItem_ = map_.itemSpawns[static_cast<size_t>(selected_.index)];
+        clipboardKind_ = ClipboardKind::Item;
     } else if (selected_.type == SelectedType::Casket && map_.hasCasket) {
         clipboardCasketPos_ = map_.casketPos;
         clipboardHasCasket_ = true;
@@ -294,6 +334,15 @@ void EditorScene::pasteFromClipboard(const Vector2 &worldMouse) {
         selected_.type = SelectedType::Casket;
         selected_.index = -1;
         break;
+    case ClipboardKind::Item: {
+        ItemSpawnData it = clipboardItem_;
+        it.x = worldMouse.x;
+        it.y = worldMouse.y;
+        map_.itemSpawns.push_back(it);
+        selected_.type = SelectedType::Item;
+        selected_.index = static_cast<int>(map_.itemSpawns.size()) - 1;
+        break;
+    }
     case ClipboardKind::None:
         break;
     }
@@ -402,6 +451,11 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
         }
 
         selected_ = pickSelection(worldMouse);
+        if (selected_.type == SelectedType::Item && selected_.index >= 0 &&
+            selected_.index < static_cast<int>(map_.itemSpawns.size())) {
+            const std::string &k = map_.itemSpawns[static_cast<size_t>(selected_.index)].kind;
+            selectedItemKind_ = (k == "vial_pure_blood") ? 1 : 0;
+        }
         if (selected_.type != SelectedType::None) {
             Vector2 center = worldMouse;
             if (selected_.type == SelectedType::Wall) {
@@ -414,6 +468,9 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
                 center = map_.casketPos;
             } else if (selected_.type == SelectedType::PlayerSpawn) {
                 center = map_.playerSpawn;
+            } else if (selected_.type == SelectedType::Item) {
+                const auto &it = map_.itemSpawns[static_cast<size_t>(selected_.index)];
+                center = {it.x, it.y};
             }
             dragOffset_ = {center.x - worldMouse.x, center.y - worldMouse.y};
             draggingSelection_ = true;
@@ -509,6 +566,15 @@ void EditorScene::update(SceneManager &scenes, InputManager &input, ResourceMana
         selectedEnemyType_ = (selectedEnemyType_ + 1) % 2;
     }
     enemyTypeButton_.label = selectedEnemyType_ == 0 ? "Enemy: Imp" : "Enemy: Hound";
+
+    const bool showItemType = activeTool_ == Tool::PlaceItem ||
+                              (activeTool_ == Tool::Select && selected_.type == SelectedType::Item);
+    itemTypeButton_.rect = {toolButtons_[5].rect.x + toolButtons_[5].rect.width + 8.0F,
+                            toolButtons_[5].rect.y, 118.0F, 34.0F};
+    if (showItemType && itemTypeButton_.wasClicked(mouse, click)) {
+        selectedItemKind_ = (selectedItemKind_ + 1) % 2;
+    }
+    itemTypeButton_.label = selectedItemKind_ == 0 ? "Item: Armor" : "Item: Vial";
 
     Vector2 camMove{0.0F, 0.0F};
     if (input.isKeyHeld(KEY_A)) {
@@ -675,6 +741,17 @@ void EditorScene::drawEditorWorld(const Font &font) {
                    RAYWHITE);
     }
 
+    for (int i = 0; i < static_cast<int>(map_.itemSpawns.size()); ++i) {
+        const ItemSpawnData &it = map_.itemSpawns[static_cast<size_t>(i)];
+        const Vector2 iso = worldToIso({it.x, it.y});
+        const bool sel = selected_.type == SelectedType::Item && selected_.index == i;
+        const bool vial = (it.kind == "vial_pure_blood");
+        const float r = sel ? 12.0F : 9.0F;
+        DrawCircleV(iso, r, sel ? Color{255, 220, 130, 255} : Color{190, 130, 240, 255});
+        DrawTextEx(font, vial ? "Vial" : "Armor", {iso.x + 8.0F, iso.y - 18.0F}, 14.0F, 1.0F,
+                   RAYWHITE);
+    }
+
     const Vector2 pIso = worldToIso(map_.playerSpawn);
     const bool pSel = selected_.type == SelectedType::PlayerSpawn;
     DrawCircleV(pIso, pSel ? 13.0F : 10.0F, pSel ? Color{160, 220, 255, 255} : Color{80, 160, 255, 255});
@@ -714,7 +791,7 @@ void EditorScene::drawToolbar(const Font &font, Vector2 mouse) {
         mapBuf[0] = '-';
         mapBuf[1] = '\0';
     }
-    DrawTextEx(font, mapBuf, {144.0F, 302.0F}, 16.0F, 1.0F, ui::theme::LABEL_TEXT);
+    DrawTextEx(font, mapBuf, {144.0F, 346.0F}, 16.0F, 1.0F, ui::theme::LABEL_TEXT);
 
     saveButton_.draw(font, 17.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER, RAYWHITE,
                      ui::theme::BTN_BORDER);
@@ -724,6 +801,13 @@ void EditorScene::drawToolbar(const Font &font, Vector2 mouse) {
     if (showEnemyType) {
         enemyTypeButton_.draw(font, 16.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER,
                               RAYWHITE, ui::theme::BTN_BORDER);
+    }
+    const bool showItemTypeTb =
+        activeTool_ == Tool::PlaceItem ||
+        (activeTool_ == Tool::Select && selected_.type == SelectedType::Item);
+    if (showItemTypeTb) {
+        itemTypeButton_.draw(font, 16.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER,
+                             RAYWHITE, ui::theme::BTN_BORDER);
     }
     loadButton_.draw(font, 17.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER, RAYWHITE,
                      ui::theme::BTN_BORDER);
@@ -750,15 +834,16 @@ void EditorScene::draw(ResourceManager &resources) {
     char posBuf[96];
     std::snprintf(posBuf, sizeof(posBuf), "Cursor: %.1f, %.1f", static_cast<double>(worldMouse.x),
                   static_cast<double>(worldMouse.y));
-    DrawTextEx(font, posBuf, {16.0F, 520.0F}, 16.0F, 1.0F, ui::theme::LABEL_TEXT);
+    DrawTextEx(font, posBuf, {16.0F, 560.0F}, 16.0F, 1.0F, ui::theme::LABEL_TEXT);
 
-    char countBuf[96];
-    std::snprintf(countBuf, sizeof(countBuf), "Walls: %d  Enemies: %d", static_cast<int>(map_.walls.size()),
-                  static_cast<int>(map_.enemies.size()));
-    DrawTextEx(font, countBuf, {16.0F, 540.0F}, 16.0F, 1.0F, ui::theme::LABEL_TEXT);
+    char countBuf[128];
+    std::snprintf(countBuf, sizeof(countBuf), "Walls: %d  Enemies: %d  Items: %d",
+                  static_cast<int>(map_.walls.size()), static_cast<int>(map_.enemies.size()),
+                  static_cast<int>(map_.itemSpawns.size()));
+    DrawTextEx(font, countBuf, {16.0F, 582.0F}, 16.0F, 1.0F, ui::theme::LABEL_TEXT);
 
     if (statusTimer_ > 0.0F) {
-        DrawTextEx(font, statusText_, {16.0F, 566.0F}, 16.0F, 1.0F, RAYWHITE);
+        DrawTextEx(font, statusText_, {16.0F, 608.0F}, 16.0F, 1.0F, RAYWHITE);
     }
 
     DrawTextEx(font, "Select: drag | Del remove | Ctrl+D dup | Ctrl+C/V copy-paste", {220.0F, 12.0F},

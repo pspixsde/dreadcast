@@ -2,6 +2,30 @@
 
 All notable changes to **Dreadcast** will be documented in this file.
 
+## v0.8.0 — 2026-04-01
+
+### Added
+
+- **High-res item icons:** Iron armor and vial of pure blood use new **PNG** art (`assets/textures/items/*.png`, 7:5, source resolution 1152×823).
+- **`game/item_factory.hpp`:** Shared `makeItemFromMapKind()` for casket loot, map spawns, and editor-defined drops.
+- **`game/item_rarity.hpp`:** Rarity tiers (**Common** … **Legendary**, **Special**), **gear** style names (Tarnished … Abyssal), **vial** style names (Clouded … Anomalous `[Vial]`), colors, and **`rarityLine()`** for UI. **`ItemData::rarity`** on items.
+- **Map item spawns:** `.map` files support **`ITEM x y kind`** lines (`kind` is `iron_armor` or `vial_pure_blood`). Gameplay spawns matching **ground pickups** at load (items are added to the pool and dropped in world space).
+- **Editor — place items:** New **Item** tool with **Item: Armor / Item: Vial** type toggle (same pattern as enemies). Item pickups render in the world view; select, drag, **Del**, **Ctrl+D**, **Ctrl+C / Ctrl+V** work like other entities. Status line lists **Items** count.
+- **Inventory — Shift+click:** **Shift+left-click** on **bag** slots **equips** gear or consumables (consumables only if a consumable slot is free). **Shift+left-click** on **equipped gear** or **consumable bar** **unequips** to the bag **only when at least one bag slot is empty** (otherwise no-op). Consumables from bag do not steal a full consumable bar (no replace when both slots full).
+- **Consumable stack count:** Stack size is drawn in the **lower-right** of **consumable** inventory slots (stackable items).
+
+### Changed
+
+- **Inventory panel:** Larger window (**760×480**); slot tiers (**equip 120×86**, **consumable 108×77**, **bag 98×70**), **7:5**, **equip > consumable > bag**. **Carried** column offset **px + 340**.
+- **Equipped layout:** **Armor** centered on row 1; **Amulet** and **Ring** on row 2.
+- **Inventory icons:** Fixed **7:5** draw size; **centered** in slots; **no inline names** (tooltips + rarity line).
+- **Inventory tooltips:** **Title**, colored **rarity line** (e.g. `Tarnished (Common)` / `Clouded [Vial] (Common)`), multiline **description**, rarity-colored tooltip border; **Alt** still shows slot / stats.
+- **Rarity info panel (i):** Replaces placeholder with **gear** and **vial** tier blurbs and matching colors.
+- **Item copy:** Iron Armor and Vial of Pure Blood use **Common** rarity and updated **descriptions** (Tarnished / Clouded flavor + stats).
+- **Inventory drag:** **Item icon** follows the cursor (shadow + frame), not text.
+- **HUD consumable bar:** **7:5** icon fit in the compact slots.
+- **Gameplay:** `spawnWorld()` resets **inventory** and applies map **ITEM** spawns; casket loot uses **`makeItemFromMapKind()`**.
+
 ## v0.7.0 — 2026-04-01
 
 ### Added

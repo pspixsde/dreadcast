@@ -21,12 +21,12 @@ class EditorScene final : public Scene {
     void draw(ResourceManager &resources) override;
 
   private:
-    enum class Tool { Select, PlaceWall, PlaceEnemy, PlaceCasket, SetPlayerSpawn };
-    enum class SelectedType { None, Wall, Enemy, Casket, PlayerSpawn };
+    enum class Tool { Select, PlaceWall, PlaceEnemy, PlaceCasket, SetPlayerSpawn, PlaceItem };
+    enum class SelectedType { None, Wall, Enemy, Casket, PlayerSpawn, Item };
 
     enum class ResizeHandle { None, Left, Right, Top, Bottom };
 
-    enum class ClipboardKind { None, Wall, Enemy, Casket };
+    enum class ClipboardKind { None, Wall, Enemy, Casket, Item };
 
     struct Selection {
         SelectedType type{SelectedType::None};
@@ -74,10 +74,13 @@ class EditorScene final : public Scene {
     ui::Button loadButton_{};
     ui::Button backButton_{};
     ui::Button enemyTypeButton_{};
+    ui::Button itemTypeButton_{};
     ui::Button mapPrevButton_{};
     ui::Button mapNextButton_{};
     ui::Button mapNewButton_{};
     int selectedEnemyType_{0};
+    /// 0 = iron armor, 1 = vial of pure blood (see `ItemSpawnData::kind`).
+    int selectedItemKind_{0};
 
     std::vector<std::string> mapFiles_{};
     int currentMapIndex_{0};
@@ -85,6 +88,7 @@ class EditorScene final : public Scene {
     ClipboardKind clipboardKind_{ClipboardKind::None};
     WallData clipboardWall_{};
     EnemySpawnData clipboardEnemy_{};
+    ItemSpawnData clipboardItem_{};
     Vector2 clipboardCasketPos_{};
     bool clipboardHasCasket_{false};
 

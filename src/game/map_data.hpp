@@ -23,10 +23,19 @@ struct EnemySpawnData {
     std::string type{"imp"};
 };
 
+/// Ground item pickup placement (`ITEM x y kind` in `.map` files). `kind` values: `iron_armor`,
+/// `vial_pure_blood` (see `makeItemFromMapKind`).
+struct ItemSpawnData {
+    float x{0.0F};
+    float y{0.0F};
+    std::string kind{"iron_armor"};
+};
+
 struct MapData {
     Vector2 playerSpawn{-100.0F, 0.0F};
     std::vector<WallData> walls{};
     std::vector<EnemySpawnData> enemies{};
+    std::vector<ItemSpawnData> itemSpawns{};
     Vector2 casketPos{1050.0F, 0.0F};
     bool hasCasket{true};
 
@@ -49,6 +58,9 @@ struct MapData {
         }
         for (const EnemySpawnData &e : enemies) {
             out << "ENEMY " << e.x << ' ' << e.y << ' ' << e.type << '\n';
+        }
+        for (const ItemSpawnData &it : itemSpawns) {
+            out << "ITEM " << it.x << ' ' << it.y << ' ' << it.kind << '\n';
         }
         if (hasCasket) {
             out << "CASKET " << casketPos.x << ' ' << casketPos.y << '\n';
@@ -83,6 +95,13 @@ struct MapData {
                     e.type = "imp";
                 }
                 parsed.enemies.push_back(e);
+            } else if (tag == "ITEM") {
+                ItemSpawnData it{};
+                iss >> it.x >> it.y >> it.kind;
+                if (it.kind.empty()) {
+                    it.kind = "iron_armor";
+                }
+                parsed.itemSpawns.push_back(it);
             } else if (tag == "CASKET") {
                 iss >> parsed.casketPos.x >> parsed.casketPos.y;
                 parsed.hasCasket = true;

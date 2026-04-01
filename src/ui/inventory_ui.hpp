@@ -11,6 +11,11 @@ class ResourceManager;
 
 namespace dreadcast::ui {
 
+/// Fixed 7:5 draw size for item icons in the inventory (same in every slot type; centered in each
+/// slot; sized to fit bag slots with margin).
+inline constexpr float ITEM_ICON_DRAW_H = 56.0F;
+inline constexpr float ITEM_ICON_DRAW_W = ITEM_ICON_DRAW_H * 7.0F / 5.0F;
+
 /// Result of inventory interaction (e.g. drop item to ground).
 struct InventoryAction {
     enum Type { None, Drop, Use };
@@ -62,11 +67,17 @@ class InventoryUI {
               const InventoryState &inv);
 
   private:
+    /// Draw a 7:5 item icon at fixed `ITEM_ICON_DRAW_*` size (inventory slots).
+    static void drawItemIcon(const dreadcast::ItemData &it, dreadcast::ResourceManager &resources,
+                             Rectangle slotRect, Color tint = WHITE);
+
     bool open_{false};
 
     static constexpr const char *kSlotLabels[] = {"Armor", "Amulet", "Ring"};
 
     void tryEquipFromBag(InventoryState &inv, int bagIndex);
+    void tryEquipConsumableFromBag(InventoryState &inv, int bagIndex);
+    void tryUnequipConsumableToBag(InventoryState &inv, int consumableSlotIndex);
     void tryUnequip(InventoryState &inv, EquipSlot slot);
     void moveEquippedToBagSlot(InventoryState &inv, EquipSlot slot, int bagIdx);
     void swapBagSlots(InventoryState &inv, int a, int b);
