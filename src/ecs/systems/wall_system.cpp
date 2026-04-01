@@ -22,6 +22,35 @@ Rectangle entityRect(const Vector2 &pos, const Sprite &s) {
     return {pos.x - s.width * 0.5F, pos.y - s.height * 0.5F, s.width, s.height};
 }
 
+void separateEntities(Vector2 &aPos, const Sprite &aSpr, Vector2 &bPos, const Sprite &bSpr) {
+    const Rectangle ar = entityRect(aPos, aSpr);
+    const Rectangle br = entityRect(bPos, bSpr);
+    if (!CheckCollisionRecs(ar, br)) {
+        return;
+    }
+
+    const float overlapLeft = (ar.x + ar.width) - br.x;
+    const float overlapRight = (br.x + br.width) - ar.x;
+    const float overlapTop = (ar.y + ar.height) - br.y;
+    const float overlapBottom = (br.y + br.height) - ar.y;
+
+    const float minOverlap = std::min({overlapLeft, overlapRight, overlapTop, overlapBottom});
+    const float push = minOverlap * 0.5F;
+    if (minOverlap == overlapLeft) {
+        aPos.x -= push;
+        bPos.x += push;
+    } else if (minOverlap == overlapRight) {
+        aPos.x += push;
+        bPos.x -= push;
+    } else if (minOverlap == overlapTop) {
+        aPos.y -= push;
+        bPos.y += push;
+    } else {
+        aPos.y += push;
+        bPos.y -= push;
+    }
+}
+
 bool circleRectOverlap(Vector2 center, float r, Rectangle rect) {
     const float cx = std::clamp(center.x, rect.x, rect.x + rect.width);
     const float cy = std::clamp(center.y, rect.y, rect.y + rect.height);
@@ -88,6 +117,33 @@ void wall_resolve_collisions(entt::registry &registry) {
             const auto &sprIt = registry.get<Sprite>(it);
             const Rectangle ir = entityRect(trans.position, sprIt);
             separateFromWall(t.position, spr, ir);
+        }
+    }
+}
+
+void unit_resolve_collisions(entt::registry &registry) {
+    std::vector<entt::entity> units;
+    const auto view = registry.view<Transform, Sprite>();
+    for (const auto e : view) {
+        const bool isUnit = registry.all_of<Player>(e) || registry.all_of<Enemy>(e);
+        if (!isUnit || registry.all_of<Projectile>(e) || registry.all_of<Interactable>(e)) {
+            continue;
+        }
+        units.push_back(e);
+    }
+
+    for (size_t i = 0; i < units.size(); ++i) {
+        for (size_t j = i + 1; j < units.size(); ++j) {
+            const entt::entity a = units[i];
+            const entt::entity b = units[j];
+            if (!registry.valid(a) || !registry.valid(b)) {
+                continue;
+            }
+            auto &ta = registry.get<Transform>(a);
+            auto &tb = registry.get<Transform>(b);
+            const auto &sa = registry.get<Sprite>(a);
+            const auto &sb = registry.get<Sprite>(b);
+            separateEntities(ta.position, sa, tb.position, sb);
         }
     }
 }

@@ -18,7 +18,7 @@ Isometric 2D action RPG built with **Raylib** (purely code-based).
 
 The casket drops:
 - `Iron Armor` (equip buff: +10 max HP)
-- `Vile of Pure Blood` (stackable consumable, max stack 5; heals smoothly over 8 seconds when used)
+- `Vial of Pure Blood` (stackable consumable, max stack 5; heals smoothly over 8 seconds when used)
 
 ## Controls
 

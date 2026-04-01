@@ -10,6 +10,7 @@ enum class EquipSlot { Armor, Amulet, Ring, COUNT };
 
 struct ItemData {
     std::string name;
+    std::string iconPath{};
     EquipSlot slot{EquipSlot::Armor};
     bool isConsumable{false};
     bool isStackable{false};

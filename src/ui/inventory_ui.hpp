@@ -5,6 +5,10 @@
 #include "core/input.hpp"
 #include "game/items.hpp"
 
+namespace dreadcast {
+class ResourceManager;
+}
+
 namespace dreadcast::ui {
 
 /// Result of inventory interaction (e.g. drop item to ground).
@@ -28,6 +32,13 @@ class InventoryUI {
         open_ = !open_;
         if (open_) {
             contextOpen_ = false;
+            rarityInfoOpen_ = false;
+        } else {
+            dragging_ = false;
+            dragItemIndex_ = -1;
+            dragSourceBag_ = -1;
+            dragSourceEquip_ = -1;
+            dragSourceConsumable_ = -1;
         }
     }
     [[nodiscard]] bool isOpen() const { return open_; }
@@ -35,12 +46,20 @@ class InventoryUI {
         open_ = v;
         if (open_) {
             contextOpen_ = false;
+            rarityInfoOpen_ = false;
+        } else {
+            dragging_ = false;
+            dragItemIndex_ = -1;
+            dragSourceBag_ = -1;
+            dragSourceEquip_ = -1;
+            dragSourceConsumable_ = -1;
         }
     }
 
     InventoryAction update(InputManager &input, InventoryState &inv);
 
-    void draw(const Font &font, int screenW, int screenH, const InventoryState &inv);
+    void draw(const Font &font, dreadcast::ResourceManager &resources, int screenW, int screenH,
+              const InventoryState &inv);
 
   private:
     bool open_{false};
@@ -56,6 +75,7 @@ class InventoryUI {
     int dragItemIndex_{-1};
     int dragSourceBag_{-1};
     int dragSourceEquip_{-1};
+    int dragSourceConsumable_{-1};
 
     bool contextOpen_{false};
     Rectangle contextRect_{};
@@ -68,6 +88,8 @@ class InventoryUI {
     int contextConsumableSlot_{-1};
     bool contextIsCarried_{true};
     bool contextOpt0IsEquip_{true};
+
+    bool rarityInfoOpen_{false};
 };
 
 } // namespace dreadcast::ui

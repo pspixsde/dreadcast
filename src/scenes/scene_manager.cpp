@@ -45,4 +45,10 @@ void SceneManager::draw(ResourceManager &resources) {
     }
 }
 
+void SceneManager::drawCursor(ResourceManager &resources) {
+    if (!stack_.empty()) {
+        stack_.back()->drawCursor(resources);
+    }
+}
+
 } // namespace dreadcast

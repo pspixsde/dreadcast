@@ -26,6 +26,7 @@ class SceneManager {
 
     void update(InputManager &input, ResourceManager &resources, float frameDt);
     void draw(ResourceManager &resources);
+    void drawCursor(ResourceManager &resources);
 
   private:
     std::vector<std::unique_ptr<Scene>> stack_;

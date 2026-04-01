@@ -1,20 +1,25 @@
 #pragma once
 
 #include <entt/entt.hpp>
+#include <raylib.h>
 
 #include "config.hpp"
 #include "core/camera.hpp"
 #include "core/timer.hpp"
 #include "game/items.hpp"
+#include "game/map_data.hpp"
 #include "scenes/scene.hpp"
 #include "ui/button.hpp"
 #include "ui/inventory_ui.hpp"
+
+#include <vector>
 
 namespace dreadcast {
 
 class GameplayScene final : public Scene {
   public:
     explicit GameplayScene(int selectedClassIndex = 0);
+    ~GameplayScene();
 
     void onEnter() override;
     void onExit() override;
@@ -22,10 +27,11 @@ class GameplayScene final : public Scene {
     void update(SceneManager &scenes, InputManager &input, ResourceManager &resources,
                 float frameDt) override;
     void draw(ResourceManager &resources) override;
+    void drawCursor(ResourceManager &resources) override;
 
   private:
     void spawnWorld();
-    void spawnWalls();
+    void spawnWalls(const MapData &map);
     void applyPlayerMaxHpFromEquipment();
     void tickHealOverTime(float fixedDt);
     void tryUseConsumableSlot(int slotIndex);
@@ -40,6 +46,13 @@ class GameplayScene final : public Scene {
     void drawLootPickupHighlight(ResourceManager &resources);
     void drawGameOverScreen(ResourceManager &resources);
     void drawDamageVignette();
+    void drawFogOfWarLegacy();
+    void initFogResources();
+    void unloadFogResources();
+    void drawWorldContent(ResourceManager &resources);
+    void drawFogMaskTexture();
+    void drawFogCompositePass();
+    void drawFogMaskDebugPreview();
 
     void spawnItemPickupAtPlayer(int itemIndex);
     void spawnItemPickupAtWorld(const Vector2 &worldPos, int itemIndex);
@@ -71,6 +84,19 @@ class GameplayScene final : public Scene {
 
     entt::entity hoveredPickup_{entt::null};
     entt::entity hoveredInteract_{entt::null};
+
+    /// Cached from settings each frame for virtual aiming.
+    float aimMouseSensitivity_{1.0F};
+    Vector2 aimScreenPos_{0.0F, 0.0F};
+    bool aimScreenInit_{false};
+
+    RenderTexture2D fogSceneTarget_{};
+    RenderTexture2D fogMaskTarget_{};
+    Shader fogCompositeShader_{};
+    bool fogResourcesReady_{false};
+    int fogOverlayLocStrength_{-1};
+    std::vector<Vector2> fogVisWorld_{};
+    std::vector<Vector2> fogVisFan_{};
 };
 
 } // namespace dreadcast

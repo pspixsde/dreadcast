@@ -1,5 +1,8 @@
 #include "scenes/settings_scene.hpp"
 
+#include <algorithm>
+#include <cstdio>
+
 #include <raylib.h>
 
 #include "config.hpp"
@@ -10,6 +13,47 @@
 
 namespace dreadcast {
 
+namespace {
+
+constexpr float kMouseSensMin = 0.1F;
+constexpr float kMouseSensMax = 3.0F;
+
+void updateMouseSensitivitySlider(Vector2 mouse, bool mouseDown, bool mousePressed,
+                                  ResourceManager &resources, bool &dragging, Rectangle track) {
+    if (mousePressed && CheckCollisionPointRec(mouse, track)) {
+        dragging = true;
+    }
+    if (!mouseDown) {
+        dragging = false;
+    }
+    if (dragging || (mousePressed && CheckCollisionPointRec(mouse, track))) {
+        float t = (mouse.x - track.x) / track.width;
+        t = std::clamp(t, 0.0F, 1.0F);
+        resources.settings().mouseSensitivity = kMouseSensMin + t * (kMouseSensMax - kMouseSensMin);
+    }
+}
+
+void drawMouseSensitivitySlider(const Font &font, Vector2 mouse, float value, Rectangle track) {
+    const float labelSz = 22.0F;
+    DrawTextEx(font, "Mouse sensitivity", {track.x, track.y - 32.0F}, labelSz, 1.0F,
+               ui::theme::LABEL_TEXT);
+    DrawRectangleRec(track, Fade(ui::theme::BTN_FILL, 200));
+    DrawRectangleLinesEx(track, 2.0F, ui::theme::BTN_BORDER);
+    const float t = (value - kMouseSensMin) / (kMouseSensMax - kMouseSensMin);
+    const float knobX = track.x + t * track.width;
+    const float knobY = track.y + track.height * 0.5F;
+    const bool over = CheckCollisionPointCircle(mouse, {knobX, knobY}, 14.0F) ||
+                      CheckCollisionPointRec(mouse, track);
+    DrawCircleV({knobX, knobY}, over ? 13.0F : 11.0F, ui::theme::BTN_HOVER);
+    DrawCircleLinesV({knobX, knobY}, over ? 13.0F : 11.0F, ui::theme::BTN_BORDER);
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%.2f", static_cast<double>(value));
+    DrawTextEx(font, buf, {track.x + track.width + 16.0F, track.y - 2.0F}, 20.0F, 1.0F,
+               RAYWHITE);
+}
+
+} // namespace
+
 void SettingsScene::update(SceneManager &scenes, InputManager &input,
                            ResourceManager &resources, float /*frameDt*/) {
     if (input.isKeyPressed(KEY_ESCAPE)) {
@@ -19,30 +63,51 @@ void SettingsScene::update(SceneManager &scenes, InputManager &input,
 
     const Vector2 mouse = input.mousePosition();
     const bool click = input.isMouseButtonPressed(MOUSE_BUTTON_LEFT);
+    const bool mouseDown = input.isMouseButtonHeld(MOUSE_BUTTON_LEFT);
 
     const int w = config::WINDOW_WIDTH;
     const int h = config::WINDOW_HEIGHT;
 
     const float tabY = 110.0F;
-    const float tabW = 180.0F;
+    const float tabW = 170.0F;
     const float tabH = 40.0F;
-    const float gap = 10.0F;
-    const float tabX = (static_cast<float>(w) - (tabW * 2.0F + gap)) * 0.5F;
-    controlsTabButton_.rect = {tabX, tabY, tabW, tabH};
+    const float gap = 8.0F;
+    const float tabsTotal = tabW * 3.0F + gap * 2.0F;
+    const float tabX = (static_cast<float>(w) - tabsTotal) * 0.5F;
+
+    gameplayTabButton_.rect = {tabX, tabY, tabW, tabH};
+    gameplayTabButton_.label = "Gameplay";
+    controlsTabButton_.rect = {tabX + tabW + gap, tabY, tabW, tabH};
     controlsTabButton_.label = "Controls";
-    videoTabButton_.rect = {tabX + tabW + gap, tabY, tabW, tabH};
+    videoTabButton_.rect = {tabX + (tabW + gap) * 2.0F, tabY, tabW, tabH};
     videoTabButton_.label = "Video";
 
     if (click) {
-        if (controlsTabButton_.wasClicked(mouse, click)) {
+        if (gameplayTabButton_.wasClicked(mouse, click)) {
+            activeTab_ = Tab::Gameplay;
+        } else if (controlsTabButton_.wasClicked(mouse, click)) {
             activeTab_ = Tab::Controls;
         } else if (videoTabButton_.wasClicked(mouse, click)) {
             activeTab_ = Tab::Video;
         }
     }
 
+    if (activeTab_ == Tab::Gameplay) {
+        const Rectangle sensTrack = {static_cast<float>(w) * 0.5F - 150.0F, 210.0F, 300.0F,
+                                       22.0F};
+        updateMouseSensitivitySlider(mouse, mouseDown, click, resources, draggingMouseSensSlider_,
+                                     sensTrack);
+    } else {
+        draggingMouseSensSlider_ = false;
+    }
+
     if (activeTab_ == Tab::Video) {
-        fpsCounterToggleButton_.rect = {static_cast<float>(w) * 0.5F - 160.0F, 250.0F, 320.0F, 48.0F};
+        const float labelSz = 22.0F;
+        const char *label = "Show FPS Counter";
+        const Vector2 labelDim = MeasureTextEx(resources.uiFont(), label, labelSz, 1.0F);
+        const float rowY = 190.0F;
+        const float rowX = static_cast<float>(w) * 0.5F - 220.0F;
+        fpsCounterToggleButton_.rect = {rowX + labelDim.x + 160.0F, rowY - 3.0F, 80.0F, 34.0F};
         fpsCounterToggleButton_.label =
             resources.settings().showFpsCounter ? "On" : "Off";
         if (fpsCounterToggleButton_.wasClicked(mouse, click)) {
@@ -75,24 +140,34 @@ void SettingsScene::draw(ResourceManager &resources) {
     const Vector2 mouse = GetMousePosition();
 
     const float tabY = 110.0F;
-    const float tabW = 180.0F;
+    const float tabW = 170.0F;
     const float tabH = 40.0F;
-    const float gap = 10.0F;
-    const float tabX = (static_cast<float>(w) - (tabW * 2.0F + gap)) * 0.5F;
+    const float gap = 8.0F;
+    const float tabsTotal = tabW * 3.0F + gap * 2.0F;
+    const float tabX = (static_cast<float>(w) - tabsTotal) * 0.5F;
 
-    controlsTabButton_.rect = {tabX, tabY, tabW, tabH};
+    gameplayTabButton_.rect = {tabX, tabY, tabW, tabH};
+    gameplayTabButton_.label = "Gameplay";
+    controlsTabButton_.rect = {tabX + tabW + gap, tabY, tabW, tabH};
     controlsTabButton_.label = "Controls";
-    videoTabButton_.rect = {tabX + tabW + gap, tabY, tabW, tabH};
+    videoTabButton_.rect = {tabX + (tabW + gap) * 2.0F, tabY, tabW, tabH};
     videoTabButton_.label = "Video";
 
-    controlsTabButton_.draw(font, 20.0F, mouse,
-                             activeTab_ == Tab::Controls ? ui::theme::BTN_HOVER : ui::theme::BTN_FILL,
-                             ui::theme::BTN_HOVER, RAYWHITE, ui::theme::BTN_BORDER);
-    videoTabButton_.draw(font, 20.0F, mouse,
+    gameplayTabButton_.draw(font, 18.0F, mouse,
+                            activeTab_ == Tab::Gameplay ? ui::theme::BTN_HOVER : ui::theme::BTN_FILL,
+                            ui::theme::BTN_HOVER, RAYWHITE, ui::theme::BTN_BORDER);
+    controlsTabButton_.draw(font, 18.0F, mouse,
+                            activeTab_ == Tab::Controls ? ui::theme::BTN_HOVER : ui::theme::BTN_FILL,
+                            ui::theme::BTN_HOVER, RAYWHITE, ui::theme::BTN_BORDER);
+    videoTabButton_.draw(font, 18.0F, mouse,
                          activeTab_ == Tab::Video ? ui::theme::BTN_HOVER : ui::theme::BTN_FILL,
                          ui::theme::BTN_HOVER, RAYWHITE, ui::theme::BTN_BORDER);
 
-    if (activeTab_ == Tab::Controls) {
+    if (activeTab_ == Tab::Gameplay) {
+        const Rectangle sensTrack = {static_cast<float>(w) * 0.5F - 150.0F, 210.0F, 300.0F,
+                                     22.0F};
+        drawMouseSensitivitySlider(font, mouse, resources.settings().mouseSensitivity, sensTrack);
+    } else if (activeTab_ == Tab::Controls) {
         const float rowLabelX = static_cast<float>(w) * 0.5F - 280.0F;
         const float rowKeyX = static_cast<float>(w) * 0.5F + 40.0F;
         float rowY = 190.0F;
@@ -104,7 +179,7 @@ void SettingsScene::draw(ResourceManager &resources) {
             const char *key;
         };
         const Row rows[] = {{"Move", "WASD / Arrow keys"},
-                            {"Aim", "Mouse"},
+                            {"Aim", "Mouse (sensitivity in Gameplay tab)"},
                             {"Ranged attack", "Left mouse button"},
                             {"Melee attack", "Right mouse button"},
                             {"Pick up item", "E (near drop, cursor on item)"},
@@ -121,14 +196,15 @@ void SettingsScene::draw(ResourceManager &resources) {
         }
     } else {
         const float labelSz = 22.0F;
-        DrawTextEx(font, "Show FPS Counter",
-                   {static_cast<float>(w) * 0.5F - 210.0F, 190.0F}, labelSz, 1.0F,
-                   ui::theme::LABEL_TEXT);
+        const char *label = "Show FPS Counter";
+        const Vector2 labelDim = MeasureTextEx(font, label, labelSz, 1.0F);
+        const float rowY = 190.0F;
+        const float rowX = static_cast<float>(w) * 0.5F - 220.0F;
+        DrawTextEx(font, label, {rowX, rowY}, labelSz, 1.0F, ui::theme::LABEL_TEXT);
 
-        fpsCounterToggleButton_.rect = {static_cast<float>(w) * 0.5F - 160.0F, 250.0F, 320.0F,
-                                         48.0F};
+        fpsCounterToggleButton_.rect = {rowX + labelDim.x + 160.0F, rowY - 3.0F, 80.0F, 34.0F};
         fpsCounterToggleButton_.label = resources.settings().showFpsCounter ? "On" : "Off";
-        fpsCounterToggleButton_.draw(font, 22.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER,
+        fpsCounterToggleButton_.draw(font, 18.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER,
                                      RAYWHITE, ui::theme::BTN_BORDER);
     }
 

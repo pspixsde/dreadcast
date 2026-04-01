@@ -1,10 +1,12 @@
 #include "ui/inventory_ui.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <cmath>
 #include <string>
 
 #include "config.hpp"
+#include "core/resource_manager.hpp"
 #include "ui/theme.hpp"
 
 namespace dreadcast::ui {
@@ -55,6 +57,26 @@ Rectangle makeBagSlotRect(int screenW, int screenH, int bagIndex) {
             py + 100.0F + static_cast<float>(row) * (cellH + gap), cellW, cellH};
 }
 
+Rectangle makeInventoryPanelRect(int screenW, int screenH) {
+    const float panelW = 680.0F;
+    const float panelH = 420.0F;
+    const float px = (static_cast<float>(screenW) - panelW) * 0.5F;
+    const float py = (static_cast<float>(screenH) - panelH) * 0.5F;
+    return {px, py, panelW, panelH};
+}
+
+Rectangle makeRarityPanelRect(int screenW, int screenH) {
+    const Rectangle inv = makeInventoryPanelRect(screenW, screenH);
+    const float w = 380.0F;
+    const float h = 280.0F;
+    return {inv.x + (inv.width - w) * 0.5F, inv.y + (inv.height - h) * 0.5F, w, h};
+}
+
+Vector2 infoIconCenter(int screenW, int screenH) {
+    const Rectangle inv = makeInventoryPanelRect(screenW, screenH);
+    return {inv.x + inv.width - 30.0F, inv.y + 28.0F};
+}
+
 int hitTestBag(int screenW, int screenH, Vector2 mouse) {
     for (int i = 0; i < dreadcast::BAG_SLOT_COUNT; ++i) {
         if (CheckCollisionPointRec(mouse, makeBagSlotRect(screenW, screenH, i))) {
@@ -89,6 +111,20 @@ std::string itemLabel(const dreadcast::ItemData &it) {
         s += std::to_string(it.stackCount);
     }
     return s;
+}
+
+void drawItemIcon(const dreadcast::ItemData &it, dreadcast::ResourceManager &resources, Rectangle r) {
+    if (it.iconPath.empty()) {
+        return;
+    }
+    const Texture2D tex = resources.getTexture(it.iconPath);
+    if (tex.id == 0 || tex.width <= 0 || tex.height <= 0) {
+        return;
+    }
+    const float pad = 3.0F;
+    const Rectangle dst{r.x + pad, r.y + pad, r.height - pad * 2.0F, r.height - pad * 2.0F};
+    const Rectangle src{0.0F, 0.0F, static_cast<float>(tex.width), static_cast<float>(tex.height)};
+    DrawTexturePro(tex, src, dst, {0.0F, 0.0F}, 0.0F, WHITE);
 }
 
 void clampRectToScreen(Rectangle &r, int screenW, int screenH) {
@@ -175,7 +211,9 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
     InventoryAction action{};
     if (!open_) {
         dragging_ = false;
+        dragSourceConsumable_ = -1;
         contextOpen_ = false;
+        rarityInfoOpen_ = false;
         return action;
     }
 
@@ -185,6 +223,31 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
     const bool leftPress = input.isMouseButtonPressed(MOUSE_BUTTON_LEFT);
     const bool leftRelease = input.isMouseButtonReleased(MOUSE_BUTTON_LEFT);
     const bool rightPress = input.isMouseButtonPressed(MOUSE_BUTTON_RIGHT);
+
+    const Rectangle invPanel = makeInventoryPanelRect(sw, sh);
+    const Rectangle rarityPanel = makeRarityPanelRect(sw, sh);
+    const Vector2 infoCenter = infoIconCenter(sw, sh);
+    const float infoR = 12.0F;
+
+    if (leftPress && CheckCollisionPointCircle(mouse, infoCenter, infoR)) {
+        rarityInfoOpen_ = !rarityInfoOpen_;
+        contextOpen_ = false;
+        dragging_ = false;
+        return action;
+    }
+
+    if (rarityInfoOpen_) {
+        if (input.isKeyPressed(KEY_ESCAPE)) {
+            rarityInfoOpen_ = false;
+            return action;
+        }
+        if (leftPress) {
+            if (!CheckCollisionPointRec(mouse, rarityPanel) && CheckCollisionPointRec(mouse, invPanel)) {
+                rarityInfoOpen_ = false;
+            }
+            return action;
+        }
+    }
 
     if (input.isKeyPressed(KEY_ESCAPE) && contextOpen_) {
         contextOpen_ = false;
@@ -395,6 +458,19 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
                     dragItemIndex_ = idx;
                     dragSourceBag_ = -1;
                     dragSourceEquip_ = e;
+                    dragSourceConsumable_ = -1;
+                }
+            } else {
+                const int c = hitTestConsumable(sw, sh, mouse);
+                if (c >= 0) {
+                    const int idx = inv.consumableSlots[static_cast<size_t>(c)];
+                    if (idx >= 0) {
+                        dragging_ = true;
+                        dragItemIndex_ = idx;
+                        dragSourceBag_ = -1;
+                        dragSourceEquip_ = -1;
+                        dragSourceConsumable_ = c;
+                    }
                 }
             }
         }
@@ -407,12 +483,7 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
         const int eqHit = hitTestEquip(sw, sh, mouse);
         const int consHit = hitTestConsumable(sw, sh, mouse);
 
-        const float panelW = 680.0F;
-        const float panelH = 420.0F;
-        const float px = (static_cast<float>(sw) - panelW) * 0.5F;
-        const float py = (static_cast<float>(sh) - panelH) * 0.5F;
-        const Rectangle panelRect{px, py, panelW, panelH};
-        const bool outsidePanel = !CheckCollisionPointRec(mouse, panelRect);
+        const bool outsidePanel = !CheckCollisionPointRec(mouse, invPanel);
 
         if (dragSourceBag_ >= 0) {
             if (eqHit >= 0) {
@@ -422,6 +493,11 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
                 }
             } else if (bagHit >= 0 && bagHit != dragSourceBag_) {
                 swapBagSlots(inv, dragSourceBag_, bagHit);
+            } else if (consHit >= 0 &&
+                       inv.items[static_cast<size_t>(dragItemIndex_)].isConsumable) {
+                const int prev = inv.consumableSlots[static_cast<size_t>(consHit)];
+                inv.consumableSlots[static_cast<size_t>(consHit)] = dragItemIndex_;
+                inv.bagSlots[static_cast<size_t>(dragSourceBag_)] = prev;
             } else if (outsidePanel) {
                 action.type = InventoryAction::Drop;
                 action.itemIndex = dragItemIndex_;
@@ -439,10 +515,31 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
                 action.equipSlot = static_cast<EquipSlot>(dragSourceEquip_);
                 inv.equipped[static_cast<size_t>(dragSourceEquip_)] = -1;
             }
+        } else if (dragSourceConsumable_ >= 0) {
+            if (consHit >= 0 && consHit != dragSourceConsumable_) {
+                std::swap(inv.consumableSlots[static_cast<size_t>(dragSourceConsumable_)],
+                          inv.consumableSlots[static_cast<size_t>(consHit)]);
+            } else if (bagHit >= 0) {
+                const int bIdx = inv.bagSlots[static_cast<size_t>(bagHit)];
+                if (bIdx < 0) {
+                    inv.bagSlots[static_cast<size_t>(bagHit)] = dragItemIndex_;
+                    inv.consumableSlots[static_cast<size_t>(dragSourceConsumable_)] = -1;
+                } else if (inv.items[static_cast<size_t>(bIdx)].isConsumable) {
+                    inv.bagSlots[static_cast<size_t>(bagHit)] = dragItemIndex_;
+                    inv.consumableSlots[static_cast<size_t>(dragSourceConsumable_)] = bIdx;
+                }
+            } else if (outsidePanel) {
+                action.type = InventoryAction::Drop;
+                action.itemIndex = dragItemIndex_;
+                action.dropFromEquipped = false;
+                action.bagSlot = -1;
+                inv.consumableSlots[static_cast<size_t>(dragSourceConsumable_)] = -1;
+            }
         }
 
         dragSourceBag_ = -1;
         dragSourceEquip_ = -1;
+        dragSourceConsumable_ = -1;
         dragItemIndex_ = -1;
 
         // Keep dragging-out drop behavior mutually exclusive with slot placement.
@@ -455,16 +552,17 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
     return action;
 }
 
-void InventoryUI::draw(const Font &font, int screenW, int screenH,
+void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, int screenW, int screenH,
                        const InventoryState &inv) {
     if (!open_) {
         return;
     }
 
-    const float panelW = 680.0F;
-    const float panelH = 420.0F;
-    const float px = (static_cast<float>(screenW) - panelW) * 0.5F;
-    const float py = (static_cast<float>(screenH) - panelH) * 0.5F;
+    const Rectangle panel = makeInventoryPanelRect(screenW, screenH);
+    const float panelW = panel.width;
+    const float panelH = panel.height;
+    const float px = panel.x;
+    const float py = panel.y;
     DrawRectangle(0, 0, screenW, screenH, ui::theme::INVENTORY_OVERLAY);
     Color panelFill = ui::theme::PANEL_FILL;
     panelFill.a = 250;
@@ -501,8 +599,10 @@ void InventoryUI::draw(const Font &font, int screenW, int screenH,
         if (idx >= 0 && idx < static_cast<int>(inv.items.size())) {
             const bool ghost = dragging_ && dragSourceEquip_ == i;
             const Color c = ghost ? Fade(RAYWHITE, 0.35F) : RAYWHITE;
-            const std::string lbl = itemLabel(inv.items[static_cast<size_t>(idx)]);
-            DrawTextEx(font, lbl.c_str(), {r.x + 6.0F, r.y + 26.0F}, small, 1.0F, c);
+            const auto &it = inv.items[static_cast<size_t>(idx)];
+            drawItemIcon(it, resources, r);
+            const std::string lbl = itemLabel(it);
+            DrawTextEx(font, lbl.c_str(), {r.x + r.height, r.y + 26.0F}, small, 1.0F, c);
         }
     }
 
@@ -512,8 +612,12 @@ void InventoryUI::draw(const Font &font, int screenW, int screenH,
         DrawRectangleLinesEx(r, 1.5F, ui::theme::SLOT_BORDER);
         const int idx = inv.consumableSlots[static_cast<size_t>(i)];
         if (idx >= 0 && idx < static_cast<int>(inv.items.size())) {
-            const std::string lbl = itemLabel(inv.items[static_cast<size_t>(idx)]);
-            DrawTextEx(font, lbl.c_str(), {r.x + 6.0F, r.y + 8.0F}, small, 1.0F, RAYWHITE);
+            const bool ghost = dragging_ && dragSourceConsumable_ == i;
+            const Color c = ghost ? Fade(RAYWHITE, 0.35F) : RAYWHITE;
+            const auto &it = inv.items[static_cast<size_t>(idx)];
+            drawItemIcon(it, resources, r);
+            const std::string lbl = itemLabel(it);
+            DrawTextEx(font, lbl.c_str(), {r.x + r.height, r.y + 8.0F}, small, 1.0F, c);
         }
     }
 
@@ -525,8 +629,10 @@ void InventoryUI::draw(const Font &font, int screenW, int screenH,
         if (idx >= 0 && idx < static_cast<int>(inv.items.size())) {
             const bool ghost = dragging_ && dragSourceBag_ == i;
             const Color c = ghost ? Fade(RAYWHITE, 0.35F) : RAYWHITE;
-            const std::string lbl = itemLabel(inv.items[static_cast<size_t>(idx)]);
-            DrawTextEx(font, lbl.c_str(), {r.x + 4.0F, r.y + 12.0F}, small, 1.0F, c);
+            const auto &it = inv.items[static_cast<size_t>(idx)];
+            drawItemIcon(it, resources, r);
+            const std::string lbl = itemLabel(it);
+            DrawTextEx(font, lbl.c_str(), {r.x + r.height - 2.0F, r.y + 12.0F}, small, 1.0F, c);
         }
     }
 
@@ -599,14 +705,41 @@ void InventoryUI::draw(const Font &font, int screenW, int screenH,
     if (tipIdx >= 0 && tipIdx < static_cast<int>(inv.items.size())) {
         const auto &it = inv.items[static_cast<size_t>(tipIdx)];
         if (!it.description.empty()) {
+            const bool altHeld = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
             const float tipSz = 14.0F;
             const std::string title = itemLabel(it);
+            std::string ext;
+            if (altHeld) {
+                char hpBuf[64];
+                std::snprintf(hpBuf, sizeof(hpBuf), "Slot: %s",
+                              it.isConsumable
+                                  ? "Consumable"
+                                  : (it.slot == EquipSlot::Armor
+                                         ? "Armor"
+                                         : (it.slot == EquipSlot::Amulet ? "Amulet" : "Ring")));
+                ext += hpBuf;
+                if (it.maxHpBonus > 0.001F) {
+                    char bonusBuf[64];
+                    std::snprintf(bonusBuf, sizeof(bonusBuf), " | +%.0f Max HP",
+                                  static_cast<double>(it.maxHpBonus));
+                    ext += bonusBuf;
+                }
+                if (it.isConsumable) {
+                    char consBuf[80];
+                    std::snprintf(consBuf, sizeof(consBuf), " | Stack %d/%d", it.stackCount,
+                                  std::max(1, it.maxStack));
+                    ext += consBuf;
+                }
+            }
             const Vector2 titleDim = MeasureTextEx(font, title.c_str(), tipSz + 2.0F, 1.0F);
             const Vector2 descDim = MeasureTextEx(font, it.description.c_str(), tipSz, 1.0F);
+            const Vector2 extDim =
+                altHeld ? MeasureTextEx(font, ext.c_str(), tipSz - 1.0F, 1.0F) : Vector2{0.0F, 0.0F};
             const float pad = 6.0F;
-            const float tw = std::max(titleDim.x, descDim.x) + pad * 2.0F;
-            const float th = titleDim.y + descDim.y + pad * 3.0F;
-            Rectangle tip{mouse.x + 14.0F, mouse.y + 14.0F, tw, th};
+            const float tw = std::max(std::max(titleDim.x, descDim.x), extDim.x) + pad * 2.0F;
+            const float th =
+                titleDim.y + descDim.y + (altHeld ? extDim.y + 4.0F : 0.0F) + pad * 3.0F;
+            Rectangle tip{mouse.x + 14.0F, mouse.y - th - 14.0F, tw, th};
             clampRectToScreen(tip, screenW, screenH);
             DrawRectangleRec(tip, Fade(ui::theme::PANEL_FILL, 235));
             DrawRectangleLinesEx(tip, 1.5F, ui::theme::BTN_BORDER);
@@ -615,7 +748,45 @@ void InventoryUI::draw(const Font &font, int screenW, int screenH,
             DrawTextEx(font, it.description.c_str(),
                        {tip.x + pad, tip.y + pad + titleDim.y + 6.0F}, tipSz, 1.0F,
                        ui::theme::LABEL_TEXT);
+            if (altHeld) {
+                DrawTextEx(font, ext.c_str(),
+                           {tip.x + pad, tip.y + pad + titleDim.y + 6.0F + descDim.y + 4.0F},
+                           tipSz - 1.0F, 1.0F, ui::theme::MUTED_TEXT);
+            }
         }
+    }
+
+    const Vector2 infoCenter = infoIconCenter(screenW, screenH);
+    const float infoR = 12.0F;
+    DrawCircleLines(static_cast<int>(infoCenter.x), static_cast<int>(infoCenter.y), infoR,
+                    ui::theme::SLOT_BORDER);
+    DrawTextEx(font, "i", {infoCenter.x - 3.5F, infoCenter.y - 10.0F}, 20.0F, 1.0F,
+               ui::theme::LABEL_TEXT);
+
+    if (rarityInfoOpen_) {
+        const Rectangle rp = makeRarityPanelRect(screenW, screenH);
+        DrawRectangleRec(rp, Fade(ui::theme::PANEL_FILL, 248));
+        DrawRectangleLinesEx(rp, 2.0F, ui::theme::PANEL_BORDER);
+        DrawTextEx(font, "Item Rarity", {rp.x + 16.0F, rp.y + 12.0F}, 28.0F, 1.0F, RAYWHITE);
+
+        float y = rp.y + 56.0F;
+        const float fs = 17.0F;
+        DrawTextEx(font, "Common - Basic items with no special properties", {rp.x + 16.0F, y}, fs,
+                   1.0F, {180, 180, 180, 255});
+        y += 34.0F;
+        DrawTextEx(font, "Uncommon - Slightly enhanced attributes", {rp.x + 16.0F, y}, fs, 1.0F,
+                   {100, 220, 100, 255});
+        y += 34.0F;
+        DrawTextEx(font, "Rare - Noticeably powerful, harder to find", {rp.x + 16.0F, y}, fs, 1.0F,
+                   {100, 160, 255, 255});
+        y += 34.0F;
+        DrawTextEx(font, "Epic - Exceptional power, very rare drops", {rp.x + 16.0F, y}, fs, 1.0F,
+                   {190, 120, 255, 255});
+        y += 34.0F;
+        DrawTextEx(font, "Legendary - Unique items of immense power", {rp.x + 16.0F, y}, fs, 1.0F,
+                   {255, 195, 90, 255});
+        DrawTextEx(font, "Rarity system coming soon", {rp.x + 16.0F, rp.y + rp.height - 30.0F},
+                   16.0F, 1.0F, ui::theme::LABEL_TEXT);
     }
 }
 

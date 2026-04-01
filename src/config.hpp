@@ -23,6 +23,10 @@ inline constexpr float CAMERA_FOLLOW_LERP = 8.0F;
 inline constexpr const char *UI_FONT_PATH = "assets/fonts/Cinzel.ttf";
 inline constexpr int UI_FONT_BASE_SIZE = 96;
 
+/// Software cursor: 128×128 source art is scaled by this for on-screen size (hotspot scales too).
+/// 0.25 → 4× smaller than full size (~32 px); tune if needed.
+inline constexpr float CURSOR_DISPLAY_SCALE = 0.35F;
+
 inline constexpr float MANA_COST_SHOT = 10.0F;
 inline constexpr float PROJECTILE_DAMAGE = 10.0F;
 inline constexpr float PROJECTILE_SPEED = 600.0F;
@@ -34,6 +38,22 @@ inline constexpr float ENEMY_PROJECTILE_MAX_RANGE = 400.0F;
 
 inline constexpr float IMP_AGITATION_RANGE = 350.0F;
 inline constexpr float ENEMY_CALM_DOWN_DELAY = 5.0F;
+inline constexpr float IMP_SPRITE_SIZE = 40.0F;
+inline constexpr float IMP_PREFERRED_RANGE = 220.0F;
+inline constexpr float IMP_KITE_SPEED = 120.0F;
+inline constexpr float IMP_ADVANCE_SPEED = 75.0F;
+inline constexpr float IMP_STRAFE_BIAS = 0.4F;
+/// Below this distance Imps kite harder to avoid melee; above it they prioritize chasing in the
+/// outer preferred band.
+inline constexpr float IMP_PANIC_RANGE = 80.0F;
+
+inline constexpr float HELLHOUND_HP = 60.0F;
+inline constexpr float HELLHOUND_DAMAGE = 15.0F;
+inline constexpr float HELLHOUND_SPRITE_SIZE = 48.0F;
+inline constexpr float HELLHOUND_CHASE_SPEED = 210.0F;
+inline constexpr float HELLHOUND_MELEE_RANGE = 44.0F;
+inline constexpr float HELLHOUND_MELEE_COOLDOWN = 1.0F;
+inline constexpr float HELLHOUND_AGITATION_RANGE = 420.0F;
 
 inline constexpr float PLAYER_BASE_MAX_HP = 100.0F;
 
@@ -52,9 +72,17 @@ inline constexpr float IMP_MIN_SHOOT_RANGE = 60.0F;
 
 inline constexpr float MANA_SHARD_AMOUNT = 20.0F;
 
-inline constexpr float ENEMY_VELOCITY_DAMPING = 0.88F;
+/// Enemy steering: lerp current velocity toward AI desired velocity (per second scale, clamped).
+inline constexpr float ENEMY_STEER_RATE = 12.0F;
+/// When seeking last known player position, stop searching inside this radius (world units).
+inline constexpr float ENEMY_SEEK_ARRIVE_RADIUS = 22.0F;
 
 /// Max distance from player (world units) to interact with ground loot.
 inline constexpr float LOOT_PICKUP_RANGE = 80.0F;
+
+inline constexpr float FOG_OF_WAR_RADIUS = 500.0F;
+inline constexpr unsigned char FOG_DARKNESS_ALPHA = 145;
+/// Angular samples for world-space vision polygon (ray cast per direction).
+inline constexpr int FOG_VISIBILITY_SAMPLES = 360;
 
 } // namespace dreadcast::config

@@ -14,7 +14,8 @@
 namespace dreadcast::ecs {
 
 void combat_player_ranged(entt::registry &registry, const InputManager &input,
-                          const Camera2D &camera, entt::entity player, float &noManaFlashTimer) {
+                          const Camera2D &camera, entt::entity player, float &noManaFlashTimer,
+                          Vector2 aimScreenPos) {
     if (!registry.valid(player) || !input.isMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
         return;
     }
@@ -32,7 +33,7 @@ void combat_player_ranged(entt::registry &registry, const InputManager &input,
 
     const auto &pt = registry.get<Transform>(player);
     const auto &ps = registry.get<Sprite>(player);
-    const Vector2 isoMouse = GetScreenToWorld2D(input.mousePosition(), camera);
+    const Vector2 isoMouse = GetScreenToWorld2D(aimScreenPos, camera);
     const Vector2 worldMouse = dreadcast::isoToWorld(isoMouse);
     const float dx = worldMouse.x - pt.position.x;
     const float dy = worldMouse.y - pt.position.y;
@@ -57,44 +58,22 @@ void combat_player_ranged(entt::registry &registry, const InputManager &input,
                          config::PROJECTILE_MAX_RANGE, 0.0F, dir, true});
 }
 
-void combat_player_melee(entt::registry &registry, const InputManager &input, entt::entity player,
-                         float fixedDt) {
-    if (!registry.valid(player) || !registry.all_of<Transform, MeleeAttacker>(player)) {
+namespace {
+
+void applyMeleeSwingHit(entt::registry &registry, entt::entity player, MeleeAttacker &melee) {
+    if (melee.hitAppliedThisSwing || !registry.all_of<Transform>(player)) {
+        return;
+    }
+    const float dur = MeleeAttacker::kSwingDuration[melee.swingIndex];
+    const float t = melee.phaseTimer / dur;
+    if (t < MeleeAttacker::kHitWindowStart || t > MeleeAttacker::kHitWindowEnd) {
         return;
     }
 
-    auto &melee = registry.get<MeleeAttacker>(player);
     const auto &pt = registry.get<Transform>(player);
-
-    const bool rmbHeld = input.isMouseButtonHeld(MOUSE_BUTTON_RIGHT);
-    if (melee.rmbHeldPrev && !rmbHeld) {
-        melee.reEngageCooldown = 1.0F; // prevent right-click spam
-    }
-    melee.rmbHeldPrev = rmbHeld;
-
-    if (melee.reEngageCooldown > 0.0F) {
-        melee.reEngageCooldown -= fixedDt;
-        if (melee.reEngageCooldown < 0.0F) {
-            melee.reEngageCooldown = 0.0F;
-        }
-    }
-
-    melee.isAttacking = rmbHeld && melee.reEngageCooldown <= 0.0F;
-    if (melee.isAttacking) {
-        melee.swingPhase += fixedDt * 12.0F;
-    } else {
-        melee.swingPhase = 0.0F;
-    }
-
-    if (melee.cooldownTimer > 0.0F) {
-        melee.cooldownTimer -= fixedDt;
-    }
-
-    if (!melee.isAttacking || melee.cooldownTimer > 0.0F) {
-        return;
-    }
-
     const Vector2 forward = {std::cosf(pt.rotation), std::sinf(pt.rotation)};
+    const float dmgScale = MeleeAttacker::kDamageScale[melee.swingIndex];
+    const float kbScale = MeleeAttacker::kKnockbackScale[melee.swingIndex];
 
     const auto enemies = registry.view<Enemy, Transform, Health, Sprite>();
     for (const auto e : enemies) {
@@ -116,14 +95,102 @@ void combat_player_melee(entt::registry &registry, const InputManager &input, en
         }
 
         auto &health = registry.get<Health>(e);
-        health.current -= melee.damage;
+        health.current -= melee.damage * dmgScale;
 
         auto &vel = registry.get_or_emplace<Velocity>(e);
-        vel.value.x += nd.x * melee.knockback;
-        vel.value.y += nd.y * melee.knockback;
-
-        melee.cooldownTimer = melee.cooldown;
+        vel.value.x += nd.x * melee.knockback * kbScale;
+        vel.value.y += nd.y * melee.knockback * kbScale;
     }
+
+    melee.hitAppliedThisSwing = true;
+}
+
+} // namespace
+
+void combat_player_melee(entt::registry &registry, const InputManager &input, entt::entity player,
+                         float fixedDt) {
+    if (!registry.valid(player) || !registry.all_of<Transform, MeleeAttacker>(player)) {
+        return;
+    }
+
+    auto &melee = registry.get<MeleeAttacker>(player);
+    const bool held = input.isMouseButtonHeld(MOUSE_BUTTON_RIGHT);
+    const bool pressed = input.isMouseButtonPressed(MOUSE_BUTTON_RIGHT);
+
+    if (melee.singleSwingCooldownTimer > 0.0F) {
+        melee.singleSwingCooldownTimer -= fixedDt;
+        if (melee.singleSwingCooldownTimer < 0.0F) {
+            melee.singleSwingCooldownTimer = 0.0F;
+        }
+    }
+
+    switch (melee.phase) {
+    case MeleeAttacker::Phase::Idle: {
+        const bool holdEdge = held && !melee.rmbHeldPrev;
+        if (melee.singleSwingCooldownTimer <= 0.0F && (pressed || holdEdge)) {
+            melee.phase = MeleeAttacker::Phase::Swing;
+            melee.swingIndex = 0;
+            melee.phaseTimer = 0.0F;
+            melee.hitAppliedThisSwing = false;
+        }
+        break;
+    }
+    case MeleeAttacker::Phase::Swing: {
+        melee.phaseTimer += fixedDt;
+        applyMeleeSwingHit(registry, player, melee);
+
+        const float dur = MeleeAttacker::kSwingDuration[melee.swingIndex];
+        if (melee.phaseTimer < dur) {
+            break;
+        }
+        if (melee.swingIndex < 2) {
+            if (held) {
+                melee.phase = MeleeAttacker::Phase::BetweenSwings;
+                melee.phaseTimer = 0.0F;
+            } else {
+                melee.phase = MeleeAttacker::Phase::Idle;
+                melee.singleSwingCooldownTimer = MeleeAttacker::kSingleSwingCooldown;
+            }
+        } else {
+            melee.phase = MeleeAttacker::Phase::Recovery;
+            melee.phaseTimer = 0.0F;
+        }
+        break;
+    }
+    case MeleeAttacker::Phase::BetweenSwings: {
+        if (!held) {
+            melee.phase = MeleeAttacker::Phase::Idle;
+            melee.singleSwingCooldownTimer = MeleeAttacker::kSingleSwingCooldown;
+            break;
+        }
+        melee.phaseTimer += fixedDt;
+        if (melee.phaseTimer >= MeleeAttacker::kBetweenSwingsPause) {
+            ++melee.swingIndex;
+            melee.phase = MeleeAttacker::Phase::Swing;
+            melee.phaseTimer = 0.0F;
+            melee.hitAppliedThisSwing = false;
+        }
+        break;
+    }
+    case MeleeAttacker::Phase::Recovery: {
+        melee.phaseTimer += fixedDt;
+        if (melee.phaseTimer < MeleeAttacker::kRecoveryDuration) {
+            break;
+        }
+        if (held) {
+            melee.swingIndex = 0;
+            melee.phase = MeleeAttacker::Phase::Swing;
+            melee.phaseTimer = 0.0F;
+            melee.hitAppliedThisSwing = false;
+        } else {
+            melee.phase = MeleeAttacker::Phase::Idle;
+            melee.singleSwingCooldownTimer = MeleeAttacker::kSingleSwingCooldown;
+        }
+        break;
+    }
+    }
+
+    melee.rmbHeldPrev = held;
 }
 
 } // namespace dreadcast::ecs

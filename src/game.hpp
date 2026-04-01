@@ -8,7 +8,7 @@ namespace dreadcast {
 
 class Game {
   public:
-    void run();
+    void run(bool editorMode = false);
 
   private:
     InputManager input_{};

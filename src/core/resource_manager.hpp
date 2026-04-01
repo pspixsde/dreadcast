@@ -10,6 +10,8 @@ namespace dreadcast {
 /// Runtime, user-tweakable settings shared across scenes.
 struct GameSettings {
     bool showFpsCounter{true};
+    /// Multiplier on aim vector from player screen position (0.1–3.0 typical).
+    float mouseSensitivity{1.0F};
 };
 
 /// Centralized texture, sound, and UI font loading.
