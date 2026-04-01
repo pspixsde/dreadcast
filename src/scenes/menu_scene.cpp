@@ -22,11 +22,6 @@ MenuScene::MenuScene(int selectedClassIndex) : selectedClassIndex_(selectedClass
 
 void MenuScene::update(SceneManager &scenes, InputManager &input, ResourceManager & /*resources*/,
                        float /*frameDt*/) {
-    if (input.isKeyPressed(KEY_ESCAPE)) {
-        scenes.requestQuit();
-        return;
-    }
-
     const Vector2 mouse = input.mousePosition();
     const bool click = input.isMouseButtonPressed(MOUSE_BUTTON_LEFT);
 

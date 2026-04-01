@@ -14,11 +14,6 @@ void movement_system(entt::registry &registry, float fixedDt) {
         auto &vel = view.get<Velocity>(entity);
         transform.position.x += vel.value.x * fixedDt;
         transform.position.y += vel.value.y * fixedDt;
-
-        if (registry.all_of<Enemy>(entity)) {
-            vel.value.x *= config::ENEMY_VELOCITY_DAMPING;
-            vel.value.y *= config::ENEMY_VELOCITY_DAMPING;
-        }
     }
 }
 

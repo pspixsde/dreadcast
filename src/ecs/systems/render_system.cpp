@@ -6,6 +6,7 @@
 #include <entt/entt.hpp>
 #include <raylib.h>
 
+#include "config.hpp"
 #include "core/iso_utils.hpp"
 #include "core/resource_manager.hpp"
 #include "core/types.hpp"
@@ -14,6 +15,45 @@
 namespace dreadcast::ecs {
 
 namespace {
+Rectangle wallRect(const Transform &t, const Wall &w) {
+    return {t.position.x - w.halfW, t.position.y - w.halfH, w.halfW * 2.0F, w.halfH * 2.0F};
+}
+
+bool segmentIntersectsRect(Vector2 from, Vector2 to, Rectangle rect) {
+    const float EPS = 1.0e-6F;
+    Vector2 d{to.x - from.x, to.y - from.y};
+    float t0 = 0.0F;
+    float t1 = 1.0F;
+    auto updateAxis = [&](float start, float delta, float minB, float maxB) -> bool {
+        if (std::fabs(delta) < EPS) {
+            return start >= minB && start <= maxB;
+        }
+        const float invD = 1.0F / delta;
+        float tNear = (minB - start) * invD;
+        float tFar = (maxB - start) * invD;
+        if (tNear > tFar) {
+            std::swap(tNear, tFar);
+        }
+        t0 = std::max(t0, tNear);
+        t1 = std::min(t1, tFar);
+        return t0 <= t1;
+    };
+    return updateAxis(from.x, d.x, rect.x, rect.x + rect.width) &&
+           updateAxis(from.y, d.y, rect.y, rect.y + rect.height);
+}
+
+bool hasLineOfSight(entt::registry &registry, Vector2 from, Vector2 to) {
+    const auto walls = registry.view<Wall, Transform>();
+    for (const auto w : walls) {
+        const auto &t = registry.get<Transform>(w);
+        const auto &wall = registry.get<Wall>(w);
+        if (segmentIntersectsRect(from, to, wallRect(t, wall))) {
+            return false;
+        }
+    }
+    return true;
+}
+
 
 Vector2 facingToWorldDir(FacingDir d) {
     switch (d) {
@@ -85,8 +125,8 @@ Vector2 agitationShake(const Agitation *ag) {
     if (ag == nullptr || !ag->agitated) {
         return {0.0F, 0.0F};
     }
-    const float t = static_cast<float>(GetTime());
-    return {std::sinf(t * 25.0F) * 2.5F, std::cosf(t * 23.0F) * 2.0F};
+    // Disable positional jitter; agitation is communicated via tint/marker only.
+    return {0.0F, 0.0F};
 }
 
 void drawIsoPlaceholder(entt::registry &registry, entt::entity entity, const Transform &transform,
@@ -105,10 +145,13 @@ void drawIsoPlaceholder(entt::registry &registry, entt::entity entity, const Tra
     }
 }
 
-void drawEnemyOverlays(entt::registry &registry, const Font &font) {
+void drawEnemyOverlays(entt::registry &registry, const Font &font, Vector2 fogOrigin, float fogRadius) {
     const auto view = registry.view<Enemy, Transform, Sprite, Health, NameTag>();
     for (const auto entity : view) {
         const auto &transform = view.get<Transform>(entity);
+        if (!visible_to_player(registry, fogOrigin, transform.position, fogRadius)) {
+            continue;
+        }
         const auto &sprite = view.get<Sprite>(entity);
         const auto &health = view.get<Health>(entity);
         const auto &tag = view.get<NameTag>(entity);
@@ -148,7 +191,7 @@ void drawMeleeArc(entt::registry &registry) {
     const auto view = registry.view<Player, MeleeAttacker, Transform>();
     for (const auto entity : view) {
         const auto &melee = view.get<MeleeAttacker>(entity);
-        if (!melee.isAttacking) {
+        if (!melee.isMeleeArcActive()) {
             continue;
         }
         const auto &transform = view.get<Transform>(entity);
@@ -161,11 +204,23 @@ void drawMeleeArc(entt::registry &registry) {
         }
         isoF.x /= flen;
         isoF.y /= flen;
-        const float deg = std::atan2f(isoF.y, isoF.x) * RAD2DEG;
-        DrawCircleSector(isoCenter, melee.range, deg - 45.0F, deg + 45.0F, 16,
-                         Fade({255, 200, 120, 255}, 0.25F));
-        DrawCircleSectorLines(isoCenter, melee.range, deg - 45.0F, deg + 45.0F, 16,
-                              Fade({255, 220, 160, 255}, 0.55F));
+        const float baseDeg = std::atan2f(isoF.y, isoF.x) * RAD2DEG;
+        const float dur = MeleeAttacker::kSwingDuration[melee.swingIndex];
+        const float u = std::clamp(melee.phaseTimer / dur, 0.0F, 1.0F);
+        const float halfArc = MeleeAttacker::kArcHalfDeg[melee.swingIndex];
+        const float sweepSign = (melee.swingIndex % 2 == 0) ? 1.0F : -1.0F;
+        const float sweep = sweepSign * (u * 56.0F - 28.0F);
+        const float start = baseDeg - halfArc + sweep;
+        const float end = baseDeg + halfArc + sweep;
+        const float radius = melee.range * (melee.swingIndex == 2 ? 1.08F : 1.0F);
+        const float fillA = 0.22F + static_cast<float>(melee.swingIndex) * 0.06F;
+        const float lineA = 0.48F + static_cast<float>(melee.swingIndex) * 0.05F;
+        DrawCircleSector(isoCenter, radius, start, end, 22,
+                         Fade({255, static_cast<unsigned char>(200 - melee.swingIndex * 15), 100, 255},
+                              fillA));
+        DrawCircleSectorLines(isoCenter, radius, start, end, 22,
+                              Fade({255, static_cast<unsigned char>(230 - melee.swingIndex * 20), 140, 255},
+                                   lineA));
     }
 }
 
@@ -188,8 +243,15 @@ void drawWallEntity(const Transform &transform, const Wall &wall) {
     DrawLineV(p4, p1, outline);
 }
 
-void drawSpriteEntity(entt::entity entity, entt::registry &registry, ResourceManager &resources) {
+void drawSpriteEntity(entt::entity entity, entt::registry &registry, ResourceManager &resources,
+                      Vector2 fogOrigin, float fogRadius) {
     const auto &transform = registry.get<Transform>(entity);
+    const bool shouldFogHide =
+        registry.all_of<Enemy>(entity) || registry.all_of<ManaShard>(entity) ||
+        (registry.all_of<Projectile>(entity) && !registry.get<Projectile>(entity).fromPlayer);
+    if (shouldFogHide && !visible_to_player(registry, fogOrigin, transform.position, fogRadius)) {
+        return;
+    }
     const auto &sprite = registry.get<Sprite>(entity);
     const auto *agitation = registry.try_get<Agitation>(entity);
     const Vector2 shake = agitationShake(agitation);
@@ -248,6 +310,13 @@ void drawSpriteEntity(entt::entity entity, entt::registry &registry, ResourceMan
 } // namespace
 
 void render_system(entt::registry &registry, const Font &font, ResourceManager &resources) {
+    Vector2 fogOrigin{0.0F, 0.0F};
+    for (const auto p : registry.view<Player, Transform>()) {
+        fogOrigin = registry.get<Transform>(p).position;
+        break;
+    }
+    const float fogRadius = config::FOG_OF_WAR_RADIUS;
+
     for (const auto w : registry.view<Wall, Transform>()) {
         drawWallEntity(registry.get<Transform>(w), registry.get<Wall>(w));
     }
@@ -257,11 +326,20 @@ void render_system(entt::registry &registry, const Font &font, ResourceManager &
         if (registry.all_of<Wall>(entity)) {
             continue;
         }
-        drawSpriteEntity(entity, registry, resources);
+        drawSpriteEntity(entity, registry, resources, fogOrigin, fogRadius);
     }
 
-    drawEnemyOverlays(registry, font);
+    drawEnemyOverlays(registry, font, fogOrigin, fogRadius);
     drawMeleeArc(registry);
+}
+
+bool visible_to_player(entt::registry &registry, Vector2 playerPos, Vector2 targetPos, float radius) {
+    const float dx = targetPos.x - playerPos.x;
+    const float dy = targetPos.y - playerPos.y;
+    if (dx * dx + dy * dy > radius * radius) {
+        return false;
+    }
+    return hasLineOfSight(registry, playerPos, targetPos);
 }
 
 } // namespace dreadcast::ecs

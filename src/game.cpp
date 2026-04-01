@@ -6,11 +6,12 @@
 #include <raylib.h>
 
 #include "config.hpp"
+#include "scenes/editor_scene.hpp"
 #include "scenes/menu_scene.hpp"
 
 namespace dreadcast {
 
-void Game::run() {
+void Game::run(bool editorMode) {
     InitWindow(config::WINDOW_WIDTH, config::WINDOW_HEIGHT, config::WINDOW_TITLE);
     /// ESC is used for pause / inventory — do not map it to closing the window (X still closes).
     SetExitKey(KEY_NULL);
@@ -18,8 +19,13 @@ void Game::run() {
     SetTargetFPS(config::TARGET_FPS);
 
     resources_.loadUiFont(config::UI_FONT_PATH, config::UI_FONT_BASE_SIZE);
+    HideCursor();
 
-    scenes_.replace(std::make_unique<MenuScene>());
+    if (editorMode) {
+        scenes_.replace(std::make_unique<EditorScene>());
+    } else {
+        scenes_.replace(std::make_unique<MenuScene>());
+    }
 
     while (!WindowShouldClose() && !scenes_.shouldQuit()) {
         input_.beginFrame();
@@ -29,11 +35,11 @@ void Game::run() {
         BeginDrawing();
         ClearBackground(BLACK);
         scenes_.draw(resources_);
+        scenes_.drawCursor(resources_);
 
         if (resources_.settings().showFpsCounter) {
             const Font &font = resources_.uiFont();
             const int w = config::WINDOW_WIDTH;
-            const int h = config::WINDOW_HEIGHT;
             char buf[32];
             std::snprintf(buf, sizeof(buf), "%d FPS", static_cast<int>(GetFPS()));
             const float fontSize = 18.0F;

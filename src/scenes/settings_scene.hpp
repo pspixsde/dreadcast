@@ -5,7 +5,7 @@
 
 namespace dreadcast {
 
-/// Settings overlay: Controls tab with keybind reference; Back / Esc returns.
+/// Settings overlay: Gameplay, Controls, Video tabs; Back / Esc returns.
 class SettingsScene final : public Scene {
   public:
     void update(SceneManager &scenes, InputManager &input, ResourceManager &resources,
@@ -13,14 +13,17 @@ class SettingsScene final : public Scene {
     void draw(ResourceManager &resources) override;
 
   private:
-    enum class Tab { Controls, Video };
+    enum class Tab { Gameplay, Controls, Video };
 
     ui::Button backButton_{};
-    Tab activeTab_{Tab::Controls};
+    Tab activeTab_{Tab::Gameplay};
 
+    ui::Button gameplayTabButton_{};
     ui::Button controlsTabButton_{};
     ui::Button videoTabButton_{};
     ui::Button fpsCounterToggleButton_{};
+
+    bool draggingMouseSensSlider_{false};
 };
 
 } // namespace dreadcast

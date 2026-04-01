@@ -13,15 +13,16 @@
 
 namespace dreadcast::ecs {
 
-void input_system(entt::registry &registry, const InputManager &input, const Camera2D &camera) {
-    const Vector2 isoMouse = GetScreenToWorld2D(input.mousePosition(), camera);
-    const Vector2 worldMouse = dreadcast::isoToWorld(isoMouse);
-
+void input_system(entt::registry &registry, const InputManager &input, const Camera2D &camera,
+                  Vector2 aimScreenPos) {
     const auto view = registry.view<Player, Transform, Velocity, Facing>();
     for (const auto entity : view) {
         auto &transform = view.get<Transform>(entity);
         auto &vel = view.get<Velocity>(entity);
         auto &facing = view.get<Facing>(entity);
+
+        const Vector2 isoMouse = GetScreenToWorld2D(aimScreenPos, camera);
+        const Vector2 worldMouse = dreadcast::isoToWorld(isoMouse);
 
         Vec2 move{0.0F, 0.0F};
         if (input.isKeyHeld(KEY_W) || input.isKeyHeld(KEY_UP)) {

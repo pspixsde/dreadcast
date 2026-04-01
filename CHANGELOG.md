@@ -2,6 +2,66 @@
 
 All notable changes to **Dreadcast** will be documented in this file.
 
+## v0.7.0 — 2026-04-01
+
+### Added
+
+- **Gameplay settings tab:** First tab in Settings with **mouse sensitivity** slider (0.1–3.0); aim uses scaled offset from the player’s screen position (persisted in `ResourceManager` settings).
+- **Fog of war (visual):** World-space **visibility polygon** (angular raycasts vs `Wall` AABBs, capped by `FOG_OF_WAR_RADIUS`), projected through `worldToIso` + camera; **fog mask** render target matches the scene buffer size. Composite: **draw scene RT** with default shader, then **single-texture** overlay shader (fog mask → black with alpha) so Raylib’s batch only binds `texture0` (no unreliable second sampler). If render targets or the shader fail to load, falls back to the previous **DrawRing** vignette.
+- **Editor multi-map workflow:** Scan `assets/maps/*.map`, **Prev / Next** cycle maps, **New map** creates `map_NNN`, Save/Load use the current map name; **Ctrl+C / Ctrl+V** copy-paste selection; wall **edge handles** for mouse resize; **middle-mouse camera grip** (screen-locked world point); **toolbar blocks world clicks**; **Enemy type** button sits to the right of the **Enemy** tool (also when an enemy is selected).
+- **Enemy AI:** Steering lerp (no per-tick velocity damping jitter), **calm-down delay** before deaggro, **last-known position** pursuit when LOS breaks, Imp **panic vs chase** bands (`IMP_PANIC_RANGE`).
+- **Item icons:** `ItemData::iconPath` drives small **PPM** icons in the inventory grid and HUD consumable slots (e.g. Iron Armor, Vial of Pure Blood under `assets/textures/items/`).
+- **Scene cursor hook:** Default `Scene::drawCursor` draws the software cursor; gameplay overrides for aim / interact states (OS cursor hidden globally).
+
+### Changed
+
+- **Cursors:** Software-drawn sprites from `assets/cursors/`; no **invalid** cursor for low mana / full inventory; **Interact** cursor also on loot hover.
+- **Main menu:** **Esc** no longer quits the game.
+- **Video settings:** FPS toggle moved further right; Controls text notes aim sensitivity lives under Gameplay.
+- **Melee (RMB):** **Three-hit** string with hit windows, hold to chain swings and full **Recovery** between combos, release finishes the current swing; **per-swing damage/knockback** and **animated cone** width/sweep.
+- **Fog culling:** **Mana shards** hidden without line-of-sight like enemies (radius + wall LOS in `render_system`).
+
+## v0.6.0 — 2026-03-27
+
+### Added
+
+- **Hellhound enemy type:** New melee-only enemy with **60 HP**, **15 damage**, **1.0s** melee cooldown, chase behavior, and dedicated map/editor enemy type support (`imp` / `hellhound`).
+- **Unit collision:** Player and enemies now physically separate from each other to prevent overlapping/stacking inside one another.
+- **Fog of war:** Gameplay now uses a visibility radius around the player with wall-based line-of-sight gating for enemies and enemy projectiles, plus a darkened outer area.
+- **Editor ALT overlays:** Holding **Alt** in editor now shows enemy aggro ranges, unit collision bounds, and player fog-of-war radius preview.
+- **Editor enemy placement type:** Enemy placement tool can now switch between spawning **Imp** and **Hellhound** entries in map data.
+- **Editor camera drag-pan:** Camera can now be panned by holding mouse buttons and dragging (in addition to WASD).
+
+### Changed
+
+- **Imp size + behavior:** Imps are now smaller (closer to player size) and use kiting movement to keep sight and maintain ranged spacing instead of getting cornered easily.
+- **Map enemy format:** Map enemy lines now store enemy type (`ENEMY x y type`), while remaining backward compatible with old maps that omit type.
+- **Passive regen tuning:** Undead Hunter passive regen is now **+0.5 HP/s** and **+0.5 Mana/s**.
+- **Max HP scaling:** Equipping/unequipping max-HP items now preserves current HP percentage (e.g., 90/100 -> 99/110), rather than treating increased max HP as missing HP.
+- **Settings layout:** FPS on/off toggle in **Settings -> Video** is positioned further right from its label for clearer spacing.
+- **Status timer shape:** Consumable status timer outline now depletes as a square path around the status icon, matching icon shape.
+- **Editor wall feedback:** Selected walls now display their current width/height values while editing.
+
+### Fixed
+
+- **False damage feedback on max-HP changes:** Max-HP manipulation from equipment no longer triggers damage-style HP-loss feedback.
+
+## v0.5.0 — 2026-03-27
+
+### Added
+
+- **Editor mode:** Launch with `--editor` to open an in-game map editor that supports placing/moving/resizing walls, setting player spawn, placing enemies, moving the Old Casket, deleting/duplicating selected objects, and saving/loading map data.
+- **Map persistence:** Map layout now loads from `assets/maps/default.map` during normal gameplay, so maps authored in editor mode are used when running the game without editor mode.
+- **Inventory rarity info widget:** Inventory panel now has an info icon in the upper-right that opens an overlay with a placeholder rarity-system explainer.
+
+### Changed
+
+- **HUD scale/layout:** Portrait, HP bar, and mana bar are larger; portrait is scaled up relatively more and centered better against the bar stack to account for consumable/status space.
+- **Status effect timer:** Consumable heal status icon now uses a constant-width radial progress stroke that depletes clockwise from 12 o'clock instead of animating border thickness.
+- **Tooltips:** Inventory and world item tooltips are cursor-relative and render above the cursor; holding **Alt** expands tooltip content vertically upward for extended details.
+- **Inventory interactions:** Consumables now support drag-and-drop into/out of consumable slots (including slot swap and drag-drop to ground).
+- **Settings UI:** FPS toggle control is now compact and aligned on the same row as the "Show FPS Counter" description.
+
 ## v0.4.1 — 2026-03-25
 
 ### Added

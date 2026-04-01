@@ -10,6 +10,8 @@
 #include "ui/theme.hpp"
 
 #include "config.hpp"
+#include "core/fog_visibility.hpp"
+#include "core/cursor_draw.hpp"
 #include "core/input.hpp"
 #include "core/iso_utils.hpp"
 #include "core/resource_manager.hpp"
@@ -24,6 +26,7 @@
 #include "ecs/systems/render_system.hpp"
 #include "ecs/systems/wall_system.hpp"
 #include "game/character.hpp"
+#include "game/map_data.hpp"
 #include "scenes/menu_scene.hpp"
 #include "scenes/scene_manager.hpp"
 #include "scenes/settings_scene.hpp"
@@ -32,54 +35,161 @@ namespace dreadcast {
 
 namespace {
 
+/// Set to `true` to show raw fog RT in the top-right (black = visible hole).
+constexpr bool kFogDebugDrawMaskPreview = false;
+
+// Single-texture overlay: samples fog mask (R=white fog). Outputs black with alpha so default
+// alpha-blend darkens the framebuffer like mix(scene, black, m*fogStrength) without needing a
+// second sampler (Raylib's batch only reliably binds texture0 for DrawTexturePro).
+static const char *kFogOverlayFs = R"(
+#version 330
+in vec2 fragTexCoord;
+in vec4 fragColor;
+out vec4 finalColor;
+uniform sampler2D texture0;
+uniform vec4 colDiffuse;
+uniform float fogStrength;
+void main() {
+    float m = texture(texture0, fragTexCoord).r;
+    float a = clamp(m * fogStrength, 0.0, 1.0);
+    finalColor = vec4(0.0, 0.0, 0.0, a) * colDiffuse * fragColor;
+}
+)";
+
 void spawnWallBlock(entt::registry &reg, float cx, float cy, float halfW, float halfH) {
     const auto e = reg.create();
     reg.emplace<ecs::Transform>(e, ecs::Transform{{cx, cy}, 0.0F});
     reg.emplace<ecs::Wall>(e, ecs::Wall{halfW, halfH});
 }
 
+void clampRectToScreen(Rectangle &r, int screenW, int screenH) {
+    if (r.x < 4.0F) {
+        r.x = 4.0F;
+    }
+    if (r.y < 4.0F) {
+        r.y = 4.0F;
+    }
+    if (r.x + r.width > static_cast<float>(screenW) - 4.0F) {
+        r.x = static_cast<float>(screenW) - r.width - 4.0F;
+    }
+    if (r.y + r.height > static_cast<float>(screenH) - 4.0F) {
+        r.y = static_cast<float>(screenH) - r.height - 4.0F;
+    }
+}
+
 } // namespace
 
 GameplayScene::GameplayScene(int selectedClassIndex) : selectedClass_(selectedClassIndex) {}
 
+GameplayScene::~GameplayScene() { unloadFogResources(); }
+
 void GameplayScene::onEnter() {
     camera_.init(config::WINDOW_WIDTH, config::WINDOW_HEIGHT);
+    initFogResources();
     if (!spawned_) {
         spawnWorld();
         spawned_ = true;
     }
 }
 
-void GameplayScene::onExit() {}
+void GameplayScene::onExit() { unloadFogResources(); }
 
-void GameplayScene::spawnWalls() {
-    // Safe area (player ~(-100,0)): west, north, south, east split (gap at y≈0)
-    spawnWallBlock(registry_, -220.0F, 0.0F, 22.0F, 190.0F);
-    spawnWallBlock(registry_, -40.0F, -210.0F, 220.0F, 22.0F);
-    spawnWallBlock(registry_, -40.0F, 210.0F, 220.0F, 22.0F);
-    spawnWallBlock(registry_, 180.0F, 95.0F, 22.0F, 75.0F);
-    spawnWallBlock(registry_, 180.0F, -95.0F, 22.0F, 75.0F);
+void GameplayScene::initFogResources() {
+    if (fogResourcesReady_) {
+        return;
+    }
+    fogSceneTarget_ = LoadRenderTexture(config::WINDOW_WIDTH, config::WINDOW_HEIGHT);
+    // Same dimensions as the scene RT so fog mask UVs match texture0 in the composite shader.
+    fogMaskTarget_ = LoadRenderTexture(config::WINDOW_WIDTH, config::WINDOW_HEIGHT);
+    if (!IsRenderTextureValid(fogSceneTarget_) || !IsRenderTextureValid(fogMaskTarget_)) {
+        if (IsRenderTextureValid(fogSceneTarget_)) {
+            UnloadRenderTexture(fogSceneTarget_);
+        }
+        if (IsRenderTextureValid(fogMaskTarget_)) {
+            UnloadRenderTexture(fogMaskTarget_);
+        }
+        fogSceneTarget_ = {};
+        fogMaskTarget_ = {};
+        return;
+    }
+    SetTextureFilter(fogSceneTarget_.texture, TEXTURE_FILTER_BILINEAR);
+    SetTextureFilter(fogMaskTarget_.texture, TEXTURE_FILTER_BILINEAR);
 
-    // Imp arena bounds (north/south/east; west opens toward safe zone).
-    // East wall is split with a real gap at y≈0 (two halfH=120 blocks meet flush and seal the door).
-    spawnWallBlock(registry_, 520.0F, -320.0F, 420.0F, 22.0F);
-    spawnWallBlock(registry_, 520.0F, 320.0F, 420.0F, 22.0F);
-    spawnWallBlock(registry_, 930.0F, 135.0F, 22.0F, 100.0F);
-    spawnWallBlock(registry_, 930.0F, -135.0F, 22.0F, 100.0F);
+    fogCompositeShader_ = LoadShaderFromMemory(nullptr, kFogOverlayFs);
+    if (!IsShaderValid(fogCompositeShader_)) {
+        UnloadRenderTexture(fogSceneTarget_);
+        UnloadRenderTexture(fogMaskTarget_);
+        fogSceneTarget_ = {};
+        fogMaskTarget_ = {};
+        return;
+    }
+    fogOverlayLocStrength_ = GetShaderLocation(fogCompositeShader_, "fogStrength");
+    if (fogOverlayLocStrength_ < 0) {
+        UnloadShader(fogCompositeShader_);
+        UnloadRenderTexture(fogSceneTarget_);
+        UnloadRenderTexture(fogMaskTarget_);
+        fogCompositeShader_ = {};
+        fogSceneTarget_ = {};
+        fogMaskTarget_ = {};
+        return;
+    }
+    fogResourcesReady_ = true;
+}
 
-    // Casket alcove (east)
-    spawnWallBlock(registry_, 1040.0F, -210.0F, 220.0F, 22.0F);
-    spawnWallBlock(registry_, 1040.0F, 210.0F, 220.0F, 22.0F);
-    spawnWallBlock(registry_, 1200.0F, 0.0F, 22.0F, 180.0F);
-    spawnWallBlock(registry_, 880.0F, 120.0F, 22.0F, 70.0F);
-    spawnWallBlock(registry_, 880.0F, -120.0F, 22.0F, 70.0F);
+void GameplayScene::unloadFogResources() {
+    if (IsRenderTextureValid(fogSceneTarget_)) {
+        UnloadRenderTexture(fogSceneTarget_);
+    }
+    if (IsRenderTextureValid(fogMaskTarget_)) {
+        UnloadRenderTexture(fogMaskTarget_);
+    }
+    if (IsShaderValid(fogCompositeShader_)) {
+        UnloadShader(fogCompositeShader_);
+    }
+    fogSceneTarget_ = {};
+    fogMaskTarget_ = {};
+    fogCompositeShader_ = {};
+    fogResourcesReady_ = false;
+}
+
+void GameplayScene::drawWorldContent(ResourceManager &resources) {
+    const int gridExtent = 2000;
+    const int step = 64;
+    const int tiles = gridExtent / step;
+    const Color gridCol = {55, 32, 32, 255};
+    for (int i = -tiles; i <= tiles; ++i) {
+        const float x = static_cast<float>(i * step);
+        const Vector2 a = worldToIso(Vector2{x, static_cast<float>(-gridExtent)});
+        const Vector2 b = worldToIso(Vector2{x, static_cast<float>(gridExtent)});
+        DrawLineV(a, b, gridCol);
+    }
+    for (int j = -tiles; j <= tiles; ++j) {
+        const float y = static_cast<float>(j * step);
+        const Vector2 a = worldToIso(Vector2{static_cast<float>(-gridExtent), y});
+        const Vector2 b = worldToIso(Vector2{static_cast<float>(gridExtent), y});
+        DrawLineV(a, b, gridCol);
+    }
+
+    ecs::render_system(registry_, resources.uiFont(), resources);
+    drawLootPickupHighlight(resources);
+}
+
+void GameplayScene::spawnWalls(const MapData &map) {
+    for (const WallData &w : map.walls) {
+        spawnWallBlock(registry_, w.cx, w.cy, w.halfW, w.halfH);
+    }
 }
 
 void GameplayScene::spawnWorld() {
     registry_.clear();
+    MapData map = defaultMapData();
+    MapData loaded;
+    if (loaded.loadFromFile("assets/maps/default.map")) {
+        map = loaded;
+    }
 
     player_ = registry_.create();
-    registry_.emplace<ecs::Transform>(player_, ecs::Transform{{-100.0F, 0.0F}, 0.0F});
+    registry_.emplace<ecs::Transform>(player_, ecs::Transform{map.playerSpawn, 0.0F});
     registry_.emplace<ecs::Velocity>(player_, ecs::Velocity{});
     registry_.emplace<ecs::Sprite>(player_,
                                    ecs::Sprite{{0, 220, 255, 255}, 36.0F, 36.0F});
@@ -90,32 +200,46 @@ void GameplayScene::spawnWorld() {
     registry_.emplace<ecs::Facing>(player_, ecs::Facing{});
     registry_.emplace<ecs::Player>(player_);
 
-    spawnWalls();
+    spawnWalls(map);
 
-    const Vector2 enemyPositions[] = {{450.0F, -200.0F}, {400.0F, 150.0F}, {650.0F, 100.0F}};
-    for (const Vector2 &p : enemyPositions) {
+    for (const EnemySpawnData &p : map.enemies) {
         const auto e = registry_.create();
-        registry_.emplace<ecs::Transform>(e, ecs::Transform{p, 0.0F});
+        registry_.emplace<ecs::Transform>(e, ecs::Transform{{p.x, p.y}, 0.0F});
         registry_.emplace<ecs::Velocity>(e, ecs::Velocity{});
-        registry_.emplace<ecs::Sprite>(
-            e, ecs::Sprite{{220, 90, 60, 255}, 72.0F, 72.0F});
+        const bool hellhound = (p.type == "hellhound");
+        const Color tint = hellhound ? Color{160, 70, 40, 255} : Color{220, 90, 60, 255};
+        const float size =
+            hellhound ? config::HELLHOUND_SPRITE_SIZE : config::IMP_SPRITE_SIZE;
+        registry_.emplace<ecs::Sprite>(e, ecs::Sprite{tint, size, size});
         registry_.emplace<ecs::Facing>(e, ecs::Facing{});
-        registry_.emplace<ecs::Health>(e, ecs::Health{50.0F, 50.0F});
+        const float hp = hellhound ? config::HELLHOUND_HP : 50.0F;
+        registry_.emplace<ecs::Health>(e, ecs::Health{hp, hp});
         registry_.emplace<ecs::Enemy>(e);
-        registry_.emplace<ecs::NameTag>(e, ecs::NameTag{"Imp"});
-        registry_.emplace<ecs::EnemyAI>(
-            e, ecs::EnemyAI{config::IMP_SHOOT_COOLDOWN, config::IMP_SHOOT_COOLDOWN,
-                            config::IMP_MIN_SHOOT_RANGE});
+        registry_.emplace<ecs::NameTag>(e, ecs::NameTag{hellhound ? "Hellhound" : "Imp"});
+        registry_.emplace<ecs::EnemyAI>(e, ecs::EnemyAI{
+                                               hellhound ? ecs::EnemyType::Hellhound
+                                                         : ecs::EnemyType::Imp,
+                                               config::IMP_SHOOT_COOLDOWN,
+                                               config::IMP_SHOOT_COOLDOWN,
+                                               config::IMP_MIN_SHOOT_RANGE,
+                                               hellhound ? config::HELLHOUND_DAMAGE : 0.0F,
+                                               hellhound ? config::HELLHOUND_MELEE_RANGE : 0.0F,
+                                               config::HELLHOUND_MELEE_COOLDOWN,
+                                               0.0F,
+                                               hellhound ? config::HELLHOUND_CHASE_SPEED : 0.0F});
         registry_.emplace<ecs::Agitation>(
-            e, ecs::Agitation{config::IMP_AGITATION_RANGE, config::ENEMY_CALM_DOWN_DELAY, 0.0F,
-                              false});
+            e, ecs::Agitation{hellhound ? config::HELLHOUND_AGITATION_RANGE
+                                        : config::IMP_AGITATION_RANGE,
+                              config::ENEMY_CALM_DOWN_DELAY, 0.0F, false});
     }
 
-    const auto casket = registry_.create();
-    registry_.emplace<ecs::Transform>(casket, ecs::Transform{{1050.0F, 0.0F}, 0.0F});
-    registry_.emplace<ecs::Velocity>(casket, ecs::Velocity{});
-    registry_.emplace<ecs::Sprite>(casket, ecs::Sprite{{90, 70, 55, 255}, 56.0F, 40.0F});
-    registry_.emplace<ecs::Interactable>(casket, ecs::Interactable{"Old Casket", false});
+    if (map.hasCasket) {
+        const auto casket = registry_.create();
+        registry_.emplace<ecs::Transform>(casket, ecs::Transform{map.casketPos, 0.0F});
+        registry_.emplace<ecs::Velocity>(casket, ecs::Velocity{});
+        registry_.emplace<ecs::Sprite>(casket, ecs::Sprite{{90, 70, 55, 255}, 56.0F, 40.0F});
+        registry_.emplace<ecs::Interactable>(casket, ecs::Interactable{"Old Casket", false});
+    }
 
     prevPlayerHp_ = config::PLAYER_BASE_MAX_HP;
 }
@@ -135,10 +259,11 @@ void GameplayScene::applyPlayerMaxHpFromEquipment() {
     if (std::fabs(hp.max - newMax) < 0.001F) {
         return;
     }
+    const float hpRatio = hp.max > 0.001F ? hp.current / hp.max : 1.0F;
     hp.max = newMax;
-    if (hp.current > hp.max) {
-        hp.current = hp.max;
-    }
+    hp.current = std::clamp(hpRatio * hp.max, 0.0F, hp.max);
+    // Max-HP scaling changes are not incoming damage events.
+    prevPlayerHp_ = hp.current;
 }
 
 void GameplayScene::tickHealOverTime(float fixedDt) {
@@ -265,8 +390,8 @@ void GameplayScene::spawnItemPickupAtWorld(const Vector2 &worldPos, int itemInde
     registry_.emplace<ecs::ItemPickup>(e, ecs::ItemPickup{itemIndex});
 }
 
-void GameplayScene::update(SceneManager &scenes, InputManager &input,
-                           [[maybe_unused]] ResourceManager &resources, float frameDt) {
+void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceManager &resources,
+                           float frameDt) {
     noManaFlashTimer_ = std::max(0.0F, noManaFlashTimer_ - frameDt);
     inventoryFullFlashTimer_ = std::max(0.0F, inventoryFullFlashTimer_ - frameDt);
     damageFlashTimer_ = std::max(0.0F, damageFlashTimer_ - frameDt);
@@ -345,10 +470,24 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input,
         return;
     }
 
+    aimMouseSensitivity_ = resources.settings().mouseSensitivity;
+    if (!aimScreenInit_) {
+        aimScreenPos_ = input.mousePosition();
+        aimScreenInit_ = true;
+    }
+    if (!paused_ && !inventoryUi_.isOpen()) {
+        const Vector2 d = input.mouseDelta();
+        aimScreenPos_.x = std::clamp(aimScreenPos_.x + d.x * aimMouseSensitivity_, 0.0F,
+                                     static_cast<float>(config::WINDOW_WIDTH));
+        aimScreenPos_.y = std::clamp(aimScreenPos_.y + d.y * aimMouseSensitivity_, 0.0F,
+                                     static_cast<float>(config::WINDOW_HEIGHT));
+    }
+
     const bool invOpen = inventoryUi_.isOpen();
     if (!invOpen) {
-        ecs::input_system(registry_, input, camera_.camera());
-        ecs::combat_player_ranged(registry_, input, camera_.camera(), player_, noManaFlashTimer_);
+        ecs::input_system(registry_, input, camera_.camera(), aimScreenPos_);
+        ecs::combat_player_ranged(registry_, input, camera_.camera(), player_, noManaFlashTimer_,
+                                  aimScreenPos_);
     } else if (registry_.valid(player_) && registry_.all_of<ecs::Velocity>(player_)) {
         auto &vel = registry_.get<ecs::Velocity>(player_);
         vel.value.x = 0.0F;
@@ -361,12 +500,15 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input,
             ecs::combat_player_melee(registry_, input, player_, config::FIXED_DT);
         } else if (registry_.valid(player_) && registry_.all_of<ecs::MeleeAttacker>(player_)) {
             auto &melee = registry_.get<ecs::MeleeAttacker>(player_);
-            melee.isAttacking = false;
-            melee.swingPhase = 0.0F;
+            melee.phase = ecs::MeleeAttacker::Phase::Idle;
+            melee.phaseTimer = 0.0F;
+            melee.swingIndex = 0;
+            melee.hitAppliedThisSwing = false;
         }
         ecs::enemy_ai_system(registry_, config::FIXED_DT);
         ecs::movement_system(registry_, config::FIXED_DT);
         ecs::wall_resolve_collisions(registry_);
+        ecs::unit_resolve_collisions(registry_);
         ecs::wall_destroy_projectiles(registry_);
         ecs::projectile_system(registry_, config::FIXED_DT);
         ecs::collision::projectile_hits(registry_);
@@ -424,6 +566,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input,
                     inter.opened = true;
                     ItemData armor{};
                     armor.name = "Iron Armor";
+                    armor.iconPath = "assets/textures/items/iron_armor_icon.ppm";
                     armor.slot = EquipSlot::Armor;
                     armor.maxHpBonus = 10.0F;
                     armor.description = "+10 Max HP";
@@ -431,6 +574,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input,
 
                     ItemData vile{};
                     vile.name = "Vial of Pure Blood";
+                    vile.iconPath = "assets/textures/items/vial_pure_blood_icon.ppm";
                     vile.isConsumable = true;
                     vile.isStackable = true;
                     vile.maxStack = 5;
@@ -493,37 +637,32 @@ void GameplayScene::draw(ResourceManager &resources) {
     const int w = config::WINDOW_WIDTH;
     const int h = config::WINDOW_HEIGHT;
 
-    DrawRectangle(0, 0, w, h, ui::theme::CLEAR_BG);
+    if (fogResourcesReady_) {
+        BeginTextureMode(fogSceneTarget_);
+        ClearBackground(ui::theme::CLEAR_BG);
+        BeginMode2D(camera_.camera());
+        drawWorldContent(resources);
+        EndMode2D();
+        EndTextureMode();
 
-    BeginMode2D(camera_.camera());
-
-    const int gridExtent = 2000;
-    const int step = 64;
-    const int tiles = gridExtent / step;
-    const Color gridCol = {55, 32, 32, 255};
-    for (int i = -tiles; i <= tiles; ++i) {
-        const float x = static_cast<float>(i * step);
-        const Vector2 a = worldToIso(Vector2{x, static_cast<float>(-gridExtent)});
-        const Vector2 b = worldToIso(Vector2{x, static_cast<float>(gridExtent)});
-        DrawLineV(a, b, gridCol);
+        drawFogMaskTexture();
+        drawFogCompositePass();
+        if (kFogDebugDrawMaskPreview) {
+            drawFogMaskDebugPreview();
+        }
+    } else {
+        DrawRectangle(0, 0, w, h, ui::theme::CLEAR_BG);
+        BeginMode2D(camera_.camera());
+        drawWorldContent(resources);
+        EndMode2D();
+        drawFogOfWarLegacy();
     }
-    for (int j = -tiles; j <= tiles; ++j) {
-        const float y = static_cast<float>(j * step);
-        const Vector2 a = worldToIso(Vector2{static_cast<float>(-gridExtent), y});
-        const Vector2 b = worldToIso(Vector2{static_cast<float>(gridExtent), y});
-        DrawLineV(a, b, gridCol);
-    }
-
-    ecs::render_system(registry_, resources.uiFont(), resources);
-    drawLootPickupHighlight(resources);
-
-    EndMode2D();
 
     drawDamageVignette();
     drawHud(resources);
     drawFlashMessages(resources);
 
-    inventoryUi_.draw(resources.uiFont(), w, h, inventory_);
+    inventoryUi_.draw(resources.uiFont(), resources, w, h, inventory_);
 
     drawLootProximityPrompt(resources);
 
@@ -533,6 +672,131 @@ void GameplayScene::draw(ResourceManager &resources) {
     if (gameOver_) {
         drawGameOverScreen(resources);
     }
+}
+
+void GameplayScene::drawFogMaskTexture() {
+    if (!IsTextureValid(fogMaskTarget_.texture)) {
+        return;
+    }
+
+    const Camera2D cam = camera_.camera();
+
+    if (!registry_.valid(player_) || !registry_.all_of<ecs::Transform>(player_)) {
+        BeginTextureMode(fogMaskTarget_);
+        ClearBackground(BLACK);
+        EndTextureMode();
+        return;
+    }
+
+    const auto &pt = registry_.get<ecs::Transform>(player_);
+    const Vector2 playerWorld = pt.position;
+
+    buildVisibilityPolygonWorld(playerWorld, registry_, config::FOG_OF_WAR_RADIUS, fogVisWorld_);
+
+    const int n = static_cast<int>(fogVisWorld_.size());
+    const Vector2 centerIso = worldToIso(playerWorld);
+
+    // Fan in world ray order. Vertices must be in the same space as drawWorldContent (isometric
+    // camera space): projecting with GetWorldToScreen2D into a CPU Image misaligned the mask
+    // relative to the scene rendered into fogSceneTarget_ (different projection path).
+    fogVisFan_.clear();
+    fogVisFan_.reserve(static_cast<size_t>(n) + 3U);
+    fogVisFan_.push_back(centerIso);
+    for (int i = 0; i < n; ++i) {
+        fogVisFan_.push_back(worldToIso(fogVisWorld_[static_cast<size_t>(i)]));
+    }
+    if (static_cast<int>(fogVisFan_.size()) >= 3) {
+        fogVisFan_.push_back(fogVisFan_[1]);
+    }
+
+    BeginTextureMode(fogMaskTarget_);
+    ClearBackground(WHITE);
+    BeginMode2D(cam);
+
+    if (static_cast<int>(fogVisFan_.size()) >= 4) {
+        DrawTriangleFan(fogVisFan_.data(), static_cast<int>(fogVisFan_.size()), BLACK);
+        constexpr float kRadialSealThick = 2.25F;
+        constexpr float kRimSealThick = 2.5F;
+        const int fanLast = static_cast<int>(fogVisFan_.size()) - 1;
+        for (int i = 1; i < fanLast; ++i) {
+            DrawLineEx(centerIso, fogVisFan_[static_cast<size_t>(i)], kRadialSealThick, BLACK);
+        }
+        for (int i = 1; i < fanLast; ++i) {
+            DrawLineEx(fogVisFan_[static_cast<size_t>(i)], fogVisFan_[static_cast<size_t>(i + 1)],
+                       kRimSealThick, BLACK);
+        }
+    } else {
+        DrawCircleV(centerIso, config::FOG_OF_WAR_RADIUS, BLACK);
+    }
+
+    EndMode2D();
+    EndTextureMode();
+}
+
+void GameplayScene::drawFogCompositePass() {
+    const float strength =
+        static_cast<float>(config::FOG_DARKNESS_ALPHA) / 255.0F;
+    const Rectangle src = {0.0F, 0.0F, static_cast<float>(fogSceneTarget_.texture.width),
+                           -static_cast<float>(fogSceneTarget_.texture.height)};
+    const Rectangle dst = {0.0F, 0.0F, static_cast<float>(config::WINDOW_WIDTH),
+                           static_cast<float>(config::WINDOW_HEIGHT)};
+    // Pass 1: world (default shader) — only texture0 is used; guaranteed binding.
+    DrawTexturePro(fogSceneTarget_.texture, src, dst, Vector2{0.0F, 0.0F}, 0.0F, WHITE);
+    // Pass 2: fog mask as alpha-only overlay — same DrawTexture path, single sampler.
+    SetShaderValue(fogCompositeShader_, fogOverlayLocStrength_, &strength, SHADER_UNIFORM_FLOAT);
+    BeginShaderMode(fogCompositeShader_);
+    DrawTexturePro(fogMaskTarget_.texture, src, dst, Vector2{0.0F, 0.0F}, 0.0F, WHITE);
+    EndShaderMode();
+}
+
+void GameplayScene::drawFogMaskDebugPreview() {
+    if (!fogResourcesReady_) {
+        return;
+    }
+    constexpr float previewW = 320.0F;
+    constexpr float previewH = 180.0F;
+    constexpr float margin = 12.0F;
+    const float x = static_cast<float>(config::WINDOW_WIDTH) - previewW - margin;
+    const float y = margin;
+    const Rectangle src = {0.0F, 0.0F, static_cast<float>(fogMaskTarget_.texture.width),
+                           -static_cast<float>(fogMaskTarget_.texture.height)};
+    const Rectangle dst = {x, y, previewW, previewH};
+    DrawTexturePro(fogMaskTarget_.texture, src, dst, Vector2{0.0F, 0.0F}, 0.0F, WHITE);
+    DrawRectangleLines(static_cast<int>(x), static_cast<int>(y), static_cast<int>(previewW),
+                       static_cast<int>(previewH), LIME);
+}
+
+void GameplayScene::drawCursor(ResourceManager &resources) {
+    const Vector2 m = (!paused_ && !gameOver_ && !inventoryUi_.isOpen() && aimScreenInit_)
+                          ? aimScreenPos_
+                          : GetMousePosition();
+    if (gameOver_ || paused_ || inventoryUi_.isOpen()) {
+        drawCustomCursor(resources, CursorKind::Default, m);
+        return;
+    }
+    if (registry_.valid(hoveredInteract_) || registry_.valid(hoveredPickup_)) {
+        drawCustomCursor(resources, CursorKind::Interact, m);
+        return;
+    }
+    drawCustomCursor(resources, CursorKind::Aim, m);
+}
+
+void GameplayScene::drawFogOfWarLegacy() {
+    if (!registry_.valid(player_) || !registry_.all_of<ecs::Transform>(player_)) {
+        return;
+    }
+    // Fallback when fog RenderTexture/shader init failed (GPU / driver).
+    const auto &pt = registry_.get<ecs::Transform>(player_);
+    const Vector2 center =
+        GetWorldToScreen2D(worldToIso(pt.position), camera_.camera());
+    const float inner = config::FOG_OF_WAR_RADIUS * camera_.camera().zoom;
+    const float outer = std::sqrt(static_cast<float>(config::WINDOW_WIDTH * config::WINDOW_WIDTH +
+                                                      config::WINDOW_HEIGHT * config::WINDOW_HEIGHT));
+    if (outer <= inner + 1.0F) {
+        return;
+    }
+    DrawRing(center, inner, outer, 0.0F, 360.0F, 120,
+             {0, 0, 0, config::FOG_DARKNESS_ALPHA});
 }
 
 void GameplayScene::drawDamageVignette() {
@@ -573,12 +837,12 @@ void GameplayScene::drawHud(ResourceManager &resources) {
     const auto &mp = registry_.get<ecs::Mana>(player_);
 
     const float margin = 16.0F;
-    const float portraitR = 42.0F;
-    const float barW = 280.0F;
-    const float barHpH = 28.0F;
-    const float barMpH = 18.0F;
+    const float portraitR = 58.0F;
+    const float barW = 320.0F;
+    const float barHpH = 34.0F;
+    const float barMpH = 22.0F;
     const float barGap = 4.0F;
-    const float barX = margin + portraitR * 2.0F + 8.0F;
+    const float barX = margin + portraitR * 2.0F + 12.0F;
     const float hudBottomAll = static_cast<float>(h) - margin;
     const float consumableRowH = 44.0F;
     const float hudBottom = hudBottomAll - consumableRowH;
@@ -596,7 +860,9 @@ void GameplayScene::drawHud(ResourceManager &resources) {
                   static_cast<int>(hudW + 8.0F), static_cast<int>(hudH + 8.0F), ui::theme::HUD_BACKING);
 
     const float cx = margin + portraitR;
-    const float cy = hudBottom - portraitR;
+    const float barsTop = hpBarTop;
+    const float barsBottom = hpBarTop + barHpH + barGap + barMpH;
+    const float cy = barsTop + (barsBottom - barsTop) * 0.5F;
     DrawCircle(static_cast<int>(cx), static_cast<int>(cy), portraitR, ui::theme::PORTRAIT_FILL);
     DrawCircleLines(static_cast<int>(cx), static_cast<int>(cy), portraitR, ui::theme::PORTRAIT_RING);
 
@@ -686,13 +952,15 @@ void GameplayScene::drawHud(ResourceManager &resources) {
         if (idx >= 0 && idx < static_cast<int>(inventory_.items.size())) {
             const auto &it = inventory_.items[static_cast<size_t>(idx)];
             const int count = it.stackCount;
-            std::string shortName = it.name;
-            const size_t sp = shortName.find(' ');
-            if (sp != std::string::npos) {
-                shortName.resize(sp);
+            if (!it.iconPath.empty()) {
+                const Texture2D tex = resources.getTexture(it.iconPath);
+                if (tex.id != 0) {
+                    const Rectangle src{0.0F, 0.0F, static_cast<float>(tex.width),
+                                        static_cast<float>(tex.height)};
+                    const Rectangle dst{sx + 26.0F, slotY + 2.0F, slotH - 4.0F, slotH - 4.0F};
+                    DrawTexturePro(tex, src, dst, {0.0F, 0.0F}, 0.0F, WHITE);
+                }
             }
-            DrawTextEx(font, shortName.c_str(), {sx + 34.0F, slotY + 5.0F}, 14.0F, 1.0F,
-                       ui::theme::LABEL_TEXT);
 
             char cntBuf[16];
             std::snprintf(cntBuf, sizeof(cntBuf), "%d", count);
@@ -712,11 +980,57 @@ void GameplayScene::drawHud(ResourceManager &resources) {
                       static_cast<int>(icon), {120, 20, 30, 255});
         DrawRectangleLines(static_cast<int>(ix), static_cast<int>(iy), static_cast<int>(icon),
                            static_cast<int>(icon), {220, 80, 80, 255});
-        const float thick = 3.0F * tRem;
-        if (thick > 0.05F) {
-            DrawRectangleLinesEx(
-                Rectangle{ix - thick, iy - thick, icon + thick * 2.0F, icon + thick * 2.0F}, thick,
-                Fade({255, 200, 120, 255}, 0.85F));
+        if (tRem > 0.001F) {
+            const float x0 = ix - 2.5F;
+            const float y0 = iy - 2.5F;
+            const float x1 = ix + icon + 2.5F;
+            const float y1 = iy + icon + 2.5F;
+            const float perimeter = (x1 - x0) * 2.0F + (y1 - y0) * 2.0F;
+            // Clockwise path from 12 o'clock; skip the "expired" prefix so the gap grows clockwise.
+            float skipDist = (1.0F - tRem) * perimeter;
+            float drawBudget = tRem * perimeter;
+            const float thickness = 3.5F;
+            const Color col = Fade({255, 200, 120, 255}, 0.85F);
+
+            auto processSeg = [&](Vector2 a, Vector2 b) {
+                Vector2 d{b.x - a.x, b.y - a.y};
+                float len = std::sqrt(d.x * d.x + d.y * d.y);
+                if (len <= 0.001F) {
+                    return;
+                }
+                if (skipDist > 0.0F) {
+                    if (skipDist >= len) {
+                        skipDist -= len;
+                        return;
+                    }
+                    const float u = skipDist / len;
+                    a = {a.x + d.x * u, a.y + d.y * u};
+                    d = {b.x - a.x, b.y - a.y};
+                    len = std::sqrt(d.x * d.x + d.y * d.y);
+                    skipDist = 0.0F;
+                    if (len <= 0.001F) {
+                        return;
+                    }
+                }
+                if (drawBudget <= 0.0F) {
+                    return;
+                }
+                if (drawBudget >= len) {
+                    DrawLineEx(a, b, thickness, col);
+                    drawBudget -= len;
+                    return;
+                }
+                const float t = drawBudget / len;
+                DrawLineEx(a, {a.x + d.x * t, a.y + d.y * t}, thickness, col);
+                drawBudget = 0.0F;
+            };
+
+            const Vector2 topMid{(x0 + x1) * 0.5F, y0};
+            processSeg(topMid, {x1, y0});
+            processSeg({x1, y0}, {x1, y1});
+            processSeg({x1, y1}, {x0, y1});
+            processSeg({x0, y1}, {x0, y0});
+            processSeg({x0, y0}, topMid);
         }
     }
 
@@ -804,13 +1118,11 @@ void GameplayScene::drawLootProximityPrompt(ResourceManager &resources) {
     if (!registry_.valid(player_) || !registry_.all_of<ecs::Transform>(player_)) {
         return;
     }
-    const auto &pickupT = registry_.get<ecs::Transform>(hoveredPickup_);
     const char *name = inventory_.items[static_cast<size_t>(idx)].name.c_str();
     const float nameSz = 16.0F;
     const char *prompt = "Press [E] to pick up";
     const float promptSz = 18.0F;
-    const Vector2 iso = worldToIso(pickupT.position);
-    const Vector2 screen = GetWorldToScreen2D(iso, camera_.camera());
+    const Vector2 mouse = GetMousePosition();
     const Vector2 nameDim = MeasureTextEx(font, name, nameSz, 1.0F);
     const Vector2 prDim = MeasureTextEx(font, prompt, promptSz, 1.0F);
     const bool altHeld = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
@@ -824,19 +1136,18 @@ void GameplayScene::drawLootProximityPrompt(ResourceManager &resources) {
         boxW = std::max(boxW, descDim.x + 24.0F);
         boxH += descDim.y + 8.0F;
     }
-    const float bx = screen.x - boxW * 0.5F;
-    const float by = screen.y - 52.0F;
-    const Rectangle bg{bx, by, boxW, boxH};
+    Rectangle bg{mouse.x + 14.0F, mouse.y - boxH - 14.0F, boxW, boxH};
+    clampRectToScreen(bg, config::WINDOW_WIDTH, config::WINDOW_HEIGHT);
     DrawRectangleRec(bg, {0, 0, 0, 210});
     DrawRectangleLinesEx(bg, 2.0F, ui::theme::BTN_BORDER);
-    DrawTextEx(font, name, {bx + 12.0F, by + 8.0F}, nameSz, 1.0F, RAYWHITE);
-    float textY = by + 16.0F + nameDim.y;
+    DrawTextEx(font, name, {bg.x + 12.0F, bg.y + 8.0F}, nameSz, 1.0F, RAYWHITE);
+    float textY = bg.y + 16.0F + nameDim.y;
     if (altHeld && !desc.empty()) {
         const float descSz = 14.0F;
-        DrawTextEx(font, desc.c_str(), {bx + 12.0F, textY}, descSz, 1.0F, ui::theme::LABEL_TEXT);
+        DrawTextEx(font, desc.c_str(), {bg.x + 12.0F, textY}, descSz, 1.0F, ui::theme::LABEL_TEXT);
         textY += descDim.y + 6.0F;
     }
-    DrawTextEx(font, prompt, {bx + (boxW - prDim.x) * 0.5F, textY}, promptSz, 1.0F,
+    DrawTextEx(font, prompt, {bg.x + (boxW - prDim.x) * 0.5F, textY}, promptSz, 1.0F,
                ui::theme::LABEL_TEXT);
 }
 

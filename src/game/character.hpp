@@ -15,9 +15,9 @@ struct CharacterClass {
 inline constexpr CharacterClass AVAILABLE_CLASSES[] = {
     {"Undead Hunter", "Masters of cursed weaponry and relentless aggression.",
      "• Ranged curse bolt (LMB) — mana cost, hits at range.\n"
-     "• Relentless melee cleave (RMB) — cone damage and knockback.\n"
+     "• Three-hit melee combo (RMB) — frontal cone, hold to loop, per-hit knockback.\n"
      "• Built for aggression: close the gap, manage mana, punish mistakes.",
-     1.0F, 2.0F},
+     0.5F, 0.5F},
 };
 inline constexpr int CLASS_COUNT = 1;
 
