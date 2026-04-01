@@ -26,6 +26,7 @@
 #include "ecs/systems/render_system.hpp"
 #include "ecs/systems/wall_system.hpp"
 #include "game/character.hpp"
+#include "game/item_factory.hpp"
 #include "game/map_data.hpp"
 #include "scenes/menu_scene.hpp"
 #include "scenes/scene_manager.hpp"
@@ -182,6 +183,7 @@ void GameplayScene::spawnWalls(const MapData &map) {
 
 void GameplayScene::spawnWorld() {
     registry_.clear();
+    inventory_ = InventoryState{};
     MapData map = defaultMapData();
     MapData loaded;
     if (loaded.loadFromFile("assets/maps/default.map")) {
@@ -239,6 +241,15 @@ void GameplayScene::spawnWorld() {
         registry_.emplace<ecs::Velocity>(casket, ecs::Velocity{});
         registry_.emplace<ecs::Sprite>(casket, ecs::Sprite{{90, 70, 55, 255}, 56.0F, 40.0F});
         registry_.emplace<ecs::Interactable>(casket, ecs::Interactable{"Old Casket", false});
+    }
+
+    for (const ItemSpawnData &isp : map.itemSpawns) {
+        ItemData it = makeItemFromMapKind(isp.kind);
+        if (it.name.empty()) {
+            continue;
+        }
+        const int idx = inventory_.addItem(std::move(it));
+        spawnItemPickupAtWorld({isp.x, isp.y}, idx);
     }
 
     prevPlayerHp_ = config::PLAYER_BASE_MAX_HP;
@@ -564,23 +575,8 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
                 auto &inter = registry_.get<ecs::Interactable>(hoveredInteract_);
                 if (!inter.opened && inter.name == "Old Casket") {
                     inter.opened = true;
-                    ItemData armor{};
-                    armor.name = "Iron Armor";
-                    armor.iconPath = "assets/textures/items/iron_armor_icon.ppm";
-                    armor.slot = EquipSlot::Armor;
-                    armor.maxHpBonus = 10.0F;
-                    armor.description = "+10 Max HP";
-                    const int armorIdx = inventory_.addItem(std::move(armor));
-
-                    ItemData vile{};
-                    vile.name = "Vial of Pure Blood";
-                    vile.iconPath = "assets/textures/items/vial_pure_blood_icon.ppm";
-                    vile.isConsumable = true;
-                    vile.isStackable = true;
-                    vile.maxStack = 5;
-                    vile.stackCount = 1;
-                    vile.description = "Regenerates 40 HP over 8 seconds";
-                    const int vileIdx = inventory_.addItem(std::move(vile));
+                    const int armorIdx = inventory_.addItem(makeItemFromMapKind("iron_armor"));
+                    const int vileIdx = inventory_.addItem(makeItemFromMapKind("vial_pure_blood"));
 
                     const auto &ct = registry_.get<ecs::Transform>(hoveredInteract_);
                     const auto &casketSpr = registry_.get<ecs::Sprite>(hoveredInteract_);
@@ -957,7 +953,19 @@ void GameplayScene::drawHud(ResourceManager &resources) {
                 if (tex.id != 0) {
                     const Rectangle src{0.0F, 0.0F, static_cast<float>(tex.width),
                                         static_cast<float>(tex.height)};
-                    const Rectangle dst{sx + 26.0F, slotY + 2.0F, slotH - 4.0F, slotH - 4.0F};
+                    const float keyPad = 26.0F;
+                    const float ip = 2.0F;
+                    const float maxW = slotW - keyPad - ip * 2.0F;
+                    const float maxH = slotH - ip * 2.0F;
+                    float dw = maxH * 7.0F / 5.0F;
+                    float dh = maxH;
+                    if (dw > maxW) {
+                        dw = maxW;
+                        dh = dw * 5.0F / 7.0F;
+                    }
+                    const float ix = sx + keyPad + (maxW - dw) * 0.5F;
+                    const float iy = slotY + ip + (maxH - dh) * 0.5F;
+                    const Rectangle dst{ix, iy, dw, dh};
                     DrawTexturePro(tex, src, dst, {0.0F, 0.0F}, 0.0F, WHITE);
                 }
             }

@@ -8,10 +8,14 @@ namespace dreadcast {
 
 enum class EquipSlot { Armor, Amulet, Ring, COUNT };
 
+/// Rarity tier (gear uses Tarnished…Abyssal naming; consumable vials use Clouded… tiers).
+enum class ItemRarity : uint8_t { Common = 0, Uncommon, Rare, Epic, Legendary, Special };
+
 struct ItemData {
     std::string name;
     std::string iconPath{};
     EquipSlot slot{EquipSlot::Armor};
+    ItemRarity rarity{ItemRarity::Common};
     bool isConsumable{false};
     bool isStackable{false};
     int maxStack{1};

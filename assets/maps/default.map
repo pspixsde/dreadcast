@@ -17,4 +17,7 @@ ENEMY 712.857 -77.1429 imp
 ENEMY 561.257 166.401 hellhound
 ENEMY 340.605 -102.077 hellhound
 ENEMY 513.975 -275.447 hellhound
+ITEM -243 7 iron_armor
+ITEM -225.5 -92.5 vial_pure_blood
+ITEM -223.995 -164.733 vial_pure_blood
 CASKET 1154.29 -52.8571

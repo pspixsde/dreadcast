@@ -3,9 +3,11 @@
 #include <algorithm>
 #include <cstdio>
 #include <cmath>
+#include <sstream>
 #include <string>
 
 #include "config.hpp"
+#include "game/item_rarity.hpp"
 #include "core/resource_manager.hpp"
 #include "ui/theme.hpp"
 
@@ -13,53 +15,77 @@ namespace dreadcast::ui {
 
 namespace {
 
+// Slot dimensions (width:height = 7:5). Equip largest, consumable medium, bag smallest.
+constexpr float kInvPanelW = 760.0F;
+constexpr float kInvPanelH = 480.0F;
+constexpr float kEquipSlotW = 120.0F;
+constexpr float kEquipSlotH = 86.0F;
+constexpr float kConsumableSlotW = 108.0F;
+constexpr float kConsumableSlotH = 77.0F;
+constexpr float kBagSlotW = 98.0F;
+constexpr float kBagSlotH = 70.0F;
+constexpr float kSlotGap = 10.0F;
+/// Width used to center armor (row 1) and the amulet+ring pair (row 2).
+constexpr float kEquipColumnInnerW = 280.0F;
+
 Rectangle makeEquipSlotRect(int screenW, int screenH, int equipIndex) {
     (void)screenW;
-    const float panelW = 680.0F;
-    const float panelH = 420.0F;
+    const float panelW = kInvPanelW;
+    const float panelH = kInvPanelH;
     const float px = (static_cast<float>(screenW) - panelW) * 0.5F;
     const float py = (static_cast<float>(screenH) - panelH) * 0.5F;
-    const float colW = 220.0F;
-    const float slotH = 56.0F;
-    const float gap = 10.0F;
-    const float x = px + 24.0F;
+    const float colLeft = px + 24.0F;
     const float y0 = py + 80.0F;
-    return {x, y0 + static_cast<float>(equipIndex) * (slotH + gap), colW - 16.0F, slotH};
+    const float row1Y = y0 + kEquipSlotH + kSlotGap;
+    const float pairW = kEquipSlotW * 2.0F + kSlotGap;
+
+    if (equipIndex == 0) {
+        // Armor — centered on row 1.
+        const float x = colLeft + (kEquipColumnInnerW - kEquipSlotW) * 0.5F;
+        return {x, y0, kEquipSlotW, kEquipSlotH};
+    }
+    if (equipIndex == 1) {
+        // Amulet — left slot on row 2.
+        const float x = colLeft + (kEquipColumnInnerW - pairW) * 0.5F;
+        return {x, row1Y, kEquipSlotW, kEquipSlotH};
+    }
+    if (equipIndex == 2) {
+        // Ring — right slot on row 2.
+        const float x0 = colLeft + (kEquipColumnInnerW - pairW) * 0.5F;
+        return {x0 + kEquipSlotW + kSlotGap, row1Y, kEquipSlotW, kEquipSlotH};
+    }
+    return {0.0F, 0.0F, 0.0F, 0.0F};
 }
 
 Rectangle makeConsumableSlotRect(int screenW, int screenH, int consumableIndex) {
-    const float panelW = 680.0F;
-    const float panelH = 420.0F;
+    const float panelW = kInvPanelW;
+    const float panelH = kInvPanelH;
     const float px = (static_cast<float>(screenW) - panelW) * 0.5F;
     const float py = (static_cast<float>(screenH) - panelH) * 0.5F;
-    const float slotH = 56.0F;
-    const float gap = 10.0F;
     const float y0 = py + 80.0F;
-    const float afterEquip = y0 + 3.0F * (slotH + gap) + 24.0F;
-    const float cellW = 104.0F;
-    const float cellH = 48.0F;
-    const float x = px + 24.0F + static_cast<float>(consumableIndex) * (cellW + gap);
-    return {x, afterEquip, cellW, cellH};
+    const float equipBlockH = 2.0F * kEquipSlotH + kSlotGap;
+    const float afterEquip = y0 + equipBlockH + 24.0F;
+    const float x = px + 24.0F + static_cast<float>(consumableIndex) *
+                                      (kConsumableSlotW + kSlotGap);
+    return {x, afterEquip, kConsumableSlotW, kConsumableSlotH};
 }
 
 Rectangle makeBagSlotRect(int screenW, int screenH, int bagIndex) {
-    const float panelW = 680.0F;
-    const float panelH = 420.0F;
+    const float panelW = kInvPanelW;
+    const float panelH = kInvPanelH;
     const float px = (static_cast<float>(screenW) - panelW) * 0.5F;
     const float py = (static_cast<float>(screenH) - panelH) * 0.5F;
-    const float col0 = px + 320.0F;
+    const float col0 = px + 340.0F;
     const int row = bagIndex / 3;
     const int col = bagIndex % 3;
-    const float cellW = 80.0F;
-    const float cellH = 44.0F;
-    const float gap = 10.0F;
-    return {col0 + static_cast<float>(col) * (cellW + gap),
-            py + 100.0F + static_cast<float>(row) * (cellH + gap), cellW, cellH};
+    return {col0 + static_cast<float>(col) * (kBagSlotW + kSlotGap),
+            py + 100.0F + static_cast<float>(row) * (kBagSlotH + kSlotGap), kBagSlotW,
+            kBagSlotH};
 }
 
 Rectangle makeInventoryPanelRect(int screenW, int screenH) {
-    const float panelW = 680.0F;
-    const float panelH = 420.0F;
+    const float panelW = kInvPanelW;
+    const float panelH = kInvPanelH;
     const float px = (static_cast<float>(screenW) - panelW) * 0.5F;
     const float py = (static_cast<float>(screenH) - panelH) * 0.5F;
     return {px, py, panelW, panelH};
@@ -67,8 +93,8 @@ Rectangle makeInventoryPanelRect(int screenW, int screenH) {
 
 Rectangle makeRarityPanelRect(int screenW, int screenH) {
     const Rectangle inv = makeInventoryPanelRect(screenW, screenH);
-    const float w = 380.0F;
-    const float h = 280.0F;
+    const float w = 400.0F;
+    const float h = 450.0F;
     return {inv.x + (inv.width - w) * 0.5F, inv.y + (inv.height - h) * 0.5F, w, h};
 }
 
@@ -113,18 +139,41 @@ std::string itemLabel(const dreadcast::ItemData &it) {
     return s;
 }
 
-void drawItemIcon(const dreadcast::ItemData &it, dreadcast::ResourceManager &resources, Rectangle r) {
-    if (it.iconPath.empty()) {
-        return;
+float measureMultilineHeight(const Font &font, const std::string &text, float fontSize) {
+    if (text.empty()) {
+        return 0.0F;
     }
-    const Texture2D tex = resources.getTexture(it.iconPath);
-    if (tex.id == 0 || tex.width <= 0 || tex.height <= 0) {
-        return;
+    std::istringstream iss(text);
+    std::string line;
+    float h = 0.0F;
+    while (std::getline(iss, line)) {
+        const Vector2 d = MeasureTextEx(font, line.c_str(), fontSize, 1.0F);
+        h += d.y + 4.0F;
     }
-    const float pad = 3.0F;
-    const Rectangle dst{r.x + pad, r.y + pad, r.height - pad * 2.0F, r.height - pad * 2.0F};
-    const Rectangle src{0.0F, 0.0F, static_cast<float>(tex.width), static_cast<float>(tex.height)};
-    DrawTexturePro(tex, src, dst, {0.0F, 0.0F}, 0.0F, WHITE);
+    return std::max(0.0F, h - 4.0F);
+}
+
+float maxLineWidthMultiline(const Font &font, const std::string &text, float fontSize) {
+    float w = 0.0F;
+    std::istringstream iss(text);
+    std::string line;
+    while (std::getline(iss, line)) {
+        const Vector2 d = MeasureTextEx(font, line.c_str(), fontSize, 1.0F);
+        w = std::max(w, d.x);
+    }
+    return w;
+}
+
+void drawMultilineText(const Font &font, const std::string &text, float x, float y, float fontSize,
+                       Color col) {
+    std::istringstream iss(text);
+    std::string line;
+    float yy = y;
+    while (std::getline(iss, line)) {
+        DrawTextEx(font, line.c_str(), {x, yy}, fontSize, 1.0F, col);
+        const Vector2 d = MeasureTextEx(font, line.c_str(), fontSize, 1.0F);
+        yy += d.y + 4.0F;
+    }
 }
 
 void clampRectToScreen(Rectangle &r, int screenW, int screenH) {
@@ -143,6 +192,22 @@ void clampRectToScreen(Rectangle &r, int screenW, int screenH) {
 }
 
 } // namespace
+
+void InventoryUI::drawItemIcon(const dreadcast::ItemData &it, dreadcast::ResourceManager &resources,
+                                 Rectangle slotRect, Color tint) {
+    if (it.iconPath.empty()) {
+        return;
+    }
+    const Texture2D tex = resources.getTexture(it.iconPath);
+    if (tex.id == 0 || tex.width <= 0 || tex.height <= 0) {
+        return;
+    }
+    const float ix = slotRect.x + (slotRect.width - ITEM_ICON_DRAW_W) * 0.5F;
+    const float iy = slotRect.y + (slotRect.height - ITEM_ICON_DRAW_H) * 0.5F;
+    const Rectangle dst{ix, iy, ITEM_ICON_DRAW_W, ITEM_ICON_DRAW_H};
+    const Rectangle src{0.0F, 0.0F, static_cast<float>(tex.width), static_cast<float>(tex.height)};
+    DrawTexturePro(tex, src, dst, {0.0F, 0.0F}, 0.0F, tint);
+}
 
 void InventoryUI::tryEquipFromBag(InventoryState &inv, int bagIndex) {
     if (bagIndex < 0 || bagIndex >= dreadcast::BAG_SLOT_COUNT) {
@@ -165,6 +230,40 @@ void InventoryUI::tryEquipFromBag(InventoryState &inv, int bagIndex) {
         eq = itemIdx;
         inv.bagSlots[static_cast<size_t>(bagIndex)] = -1;
     }
+}
+
+void InventoryUI::tryEquipConsumableFromBag(InventoryState &inv, int bagIndex) {
+    if (bagIndex < 0 || bagIndex >= dreadcast::BAG_SLOT_COUNT) {
+        return;
+    }
+    const int itemIdx = inv.bagSlots[static_cast<size_t>(bagIndex)];
+    if (itemIdx < 0 || itemIdx >= static_cast<int>(inv.items.size())) {
+        return;
+    }
+    if (!inv.items[static_cast<size_t>(itemIdx)].isConsumable) {
+        return;
+    }
+    const int empty = inv.firstEmptyConsumableSlot();
+    if (empty >= 0) {
+        inv.consumableSlots[static_cast<size_t>(empty)] = itemIdx;
+        inv.bagSlots[static_cast<size_t>(bagIndex)] = -1;
+    }
+}
+
+void InventoryUI::tryUnequipConsumableToBag(InventoryState &inv, int consumableSlotIndex) {
+    if (consumableSlotIndex < 0 || consumableSlotIndex >= dreadcast::CONSUMABLE_SLOT_COUNT) {
+        return;
+    }
+    const int itemIdx = inv.consumableSlots[static_cast<size_t>(consumableSlotIndex)];
+    if (itemIdx < 0 || itemIdx >= static_cast<int>(inv.items.size())) {
+        return;
+    }
+    const int bag = inv.firstEmptyBagSlot();
+    if (bag < 0) {
+        return;
+    }
+    inv.bagSlots[static_cast<size_t>(bag)] = itemIdx;
+    inv.consumableSlots[static_cast<size_t>(consumableSlotIndex)] = -1;
 }
 
 void InventoryUI::tryUnequip(InventoryState &inv, EquipSlot slot) {
@@ -440,6 +539,37 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
     }
 
     if (leftPress && !dragging_) {
+        const bool shiftHeld = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+        if (shiftHeld) {
+            const int eqShift = hitTestEquip(sw, sh, mouse);
+            if (eqShift >= 0) {
+                const int eqIdx = inv.equipped[static_cast<size_t>(eqShift)];
+                if (eqIdx >= 0) {
+                    tryUnequip(inv, static_cast<EquipSlot>(eqShift));
+                }
+                return action;
+            }
+            const int consShift = hitTestConsumable(sw, sh, mouse);
+            if (consShift >= 0) {
+                const int cIdx = inv.consumableSlots[static_cast<size_t>(consShift)];
+                if (cIdx >= 0) {
+                    tryUnequipConsumableToBag(inv, consShift);
+                }
+                return action;
+            }
+            const int b = hitTestBag(sw, sh, mouse);
+            if (b >= 0) {
+                const int idx = inv.bagSlots[static_cast<size_t>(b)];
+                if (idx >= 0 && idx < static_cast<int>(inv.items.size())) {
+                    if (inv.items[static_cast<size_t>(idx)].isConsumable) {
+                        tryEquipConsumableFromBag(inv, b);
+                    } else {
+                        tryEquipFromBag(inv, b);
+                    }
+                }
+            }
+            return action;
+        }
         const int b = hitTestBag(sw, sh, mouse);
         if (b >= 0) {
             const int idx = inv.bagSlots[static_cast<size_t>(b)];
@@ -579,13 +709,12 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
     DrawTextEx(font, "Equipped", {px + 24.0F, py + 56.0F}, labelSize, 1.0F,
                ui::theme::LABEL_TEXT);
 
-    const float slotH = 56.0F;
-    const float gap = 10.0F;
     const float y0 = py + 80.0F;
-    const float consLabelY = y0 + 3.0F * (slotH + gap) + 4.0F;
+    const float equipBlockH = 2.0F * kEquipSlotH + kSlotGap;
+    const float consLabelY = y0 + equipBlockH + 4.0F;
     DrawTextEx(font, "Consumables", {px + 24.0F, consLabelY}, labelSize, 1.0F,
                ui::theme::LABEL_TEXT);
-    DrawTextEx(font, "Carried", {px + 320.0F, py + 56.0F}, labelSize, 1.0F,
+    DrawTextEx(font, "Carried", {px + 340.0F, py + 56.0F}, labelSize, 1.0F,
                ui::theme::LABEL_TEXT);
 
     const float small = 14.0F;
@@ -598,11 +727,9 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
         const int idx = inv.equipped[static_cast<size_t>(i)];
         if (idx >= 0 && idx < static_cast<int>(inv.items.size())) {
             const bool ghost = dragging_ && dragSourceEquip_ == i;
-            const Color c = ghost ? Fade(RAYWHITE, 0.35F) : RAYWHITE;
+            const Color tint = ghost ? Fade(RAYWHITE, 0.35F) : RAYWHITE;
             const auto &it = inv.items[static_cast<size_t>(idx)];
-            drawItemIcon(it, resources, r);
-            const std::string lbl = itemLabel(it);
-            DrawTextEx(font, lbl.c_str(), {r.x + r.height, r.y + 26.0F}, small, 1.0F, c);
+            InventoryUI::drawItemIcon(it, resources, r, tint);
         }
     }
 
@@ -613,11 +740,21 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
         const int idx = inv.consumableSlots[static_cast<size_t>(i)];
         if (idx >= 0 && idx < static_cast<int>(inv.items.size())) {
             const bool ghost = dragging_ && dragSourceConsumable_ == i;
-            const Color c = ghost ? Fade(RAYWHITE, 0.35F) : RAYWHITE;
+            const Color tint = ghost ? Fade(RAYWHITE, 0.35F) : RAYWHITE;
             const auto &it = inv.items[static_cast<size_t>(idx)];
-            drawItemIcon(it, resources, r);
-            const std::string lbl = itemLabel(it);
-            DrawTextEx(font, lbl.c_str(), {r.x + r.height, r.y + 8.0F}, small, 1.0F, c);
+            InventoryUI::drawItemIcon(it, resources, r, tint);
+            if (it.isStackable && it.stackCount >= 1) {
+                char cntBuf[16];
+                std::snprintf(cntBuf, sizeof(cntBuf), "%d", it.stackCount);
+                const float stackFs = 13.0F;
+                const Vector2 cd = MeasureTextEx(font, cntBuf, stackFs, 1.0F);
+                const float sp = 4.0F;
+                const float tx = r.x + r.width - cd.x - sp;
+                const float ty = r.y + r.height - cd.y - sp;
+                DrawTextEx(font, cntBuf, {tx + 1.0F, ty + 1.0F}, stackFs, 1.0F,
+                           Fade(BLACK, 200));
+                DrawTextEx(font, cntBuf, {tx, ty}, stackFs, 1.0F, RAYWHITE);
+            }
         }
     }
 
@@ -628,11 +765,9 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
         const int idx = inv.bagSlots[static_cast<size_t>(i)];
         if (idx >= 0 && idx < static_cast<int>(inv.items.size())) {
             const bool ghost = dragging_ && dragSourceBag_ == i;
-            const Color c = ghost ? Fade(RAYWHITE, 0.35F) : RAYWHITE;
+            const Color tint = ghost ? Fade(RAYWHITE, 0.35F) : RAYWHITE;
             const auto &it = inv.items[static_cast<size_t>(idx)];
-            drawItemIcon(it, resources, r);
-            const std::string lbl = itemLabel(it);
-            DrawTextEx(font, lbl.c_str(), {r.x + r.height - 2.0F, r.y + 12.0F}, small, 1.0F, c);
+            InventoryUI::drawItemIcon(it, resources, r, tint);
         }
     }
 
@@ -675,15 +810,24 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
 
     if (dragging_ && dragItemIndex_ >= 0 &&
         dragItemIndex_ < static_cast<int>(inv.items.size())) {
-        const std::string lbl = itemLabel(inv.items[static_cast<size_t>(dragItemIndex_)]);
-        const float sz = 16.0F;
+        const auto &dit = inv.items[static_cast<size_t>(dragItemIndex_)];
         const Vector2 m = GetMousePosition();
-        const Vector2 dim = MeasureTextEx(font, lbl.c_str(), sz, 1.0F);
-        const float pad = 6.0F;
-        const Rectangle bg{m.x + 8.0F, m.y + 8.0F, dim.x + pad * 2.0F, dim.y + pad * 2.0F};
-        DrawRectangleRec(bg, Fade(ui::theme::PANEL_FILL, 220));
-        DrawRectangleLinesEx(bg, 1.5F, ui::theme::BTN_BORDER);
-        DrawTextEx(font, lbl.c_str(), {bg.x + pad, bg.y + pad}, sz, 1.0F, RAYWHITE);
+        const float ix = m.x - ITEM_ICON_DRAW_W * 0.5F;
+        const float iy = m.y - ITEM_ICON_DRAW_H * 0.5F;
+        if (!dit.iconPath.empty()) {
+            const Texture2D tex = resources.getTexture(dit.iconPath);
+            if (tex.id != 0 && tex.width > 0 && tex.height > 0) {
+                const Rectangle dst{ix, iy, ITEM_ICON_DRAW_W, ITEM_ICON_DRAW_H};
+                const Rectangle src{0.0F, 0.0F, static_cast<float>(tex.width),
+                                    static_cast<float>(tex.height)};
+                DrawRectangleRec({ix + 3.0F, iy + 5.0F, ITEM_ICON_DRAW_W, ITEM_ICON_DRAW_H},
+                                 Fade(BLACK, 55));
+                DrawTexturePro(tex, src, dst, {0.0F, 0.0F}, 0.0F, RAYWHITE);
+                DrawRectangleLinesEx(
+                    {ix - 2.0F, iy - 2.0F, ITEM_ICON_DRAW_W + 4.0F, ITEM_ICON_DRAW_H + 4.0F}, 2.0F,
+                    ui::theme::SLOT_BORDER);
+            }
+        }
     }
 
     const Vector2 mouse = GetMousePosition();
@@ -704,55 +848,73 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
     }
     if (tipIdx >= 0 && tipIdx < static_cast<int>(inv.items.size())) {
         const auto &it = inv.items[static_cast<size_t>(tipIdx)];
+        const bool altHeld = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
+        const float tipSz = 14.0F;
+        const std::string title = itemLabel(it);
+        const std::string rline = dreadcast::rarityLine(it);
+        const Color rcol = dreadcast::rarityColor(it.rarity);
+
+        std::string ext;
+        if (altHeld) {
+            char hpBuf[64];
+            std::snprintf(hpBuf, sizeof(hpBuf), "Slot: %s",
+                          it.isConsumable
+                              ? "Consumable"
+                              : (it.slot == EquipSlot::Armor
+                                     ? "Armor"
+                                     : (it.slot == EquipSlot::Amulet ? "Amulet" : "Ring")));
+            ext += hpBuf;
+            if (it.maxHpBonus > 0.001F) {
+                char bonusBuf[64];
+                std::snprintf(bonusBuf, sizeof(bonusBuf), " | +%.0f Max HP",
+                              static_cast<double>(it.maxHpBonus));
+                ext += bonusBuf;
+            }
+            if (it.isConsumable) {
+                char consBuf[80];
+                std::snprintf(consBuf, sizeof(consBuf), " | Stack %d/%d", it.stackCount,
+                              std::max(1, it.maxStack));
+                ext += consBuf;
+            }
+        }
+
+        const Vector2 titleDim = MeasureTextEx(font, title.c_str(), tipSz + 2.0F, 1.0F);
+        const Vector2 rarityDim = MeasureTextEx(font, rline.c_str(), tipSz, 1.0F);
+        const float descH = measureMultilineHeight(font, it.description, tipSz);
+        const float descW = maxLineWidthMultiline(font, it.description, tipSz);
+        const Vector2 extDim =
+            altHeld ? MeasureTextEx(font, ext.c_str(), tipSz - 1.0F, 1.0F) : Vector2{0.0F, 0.0F};
+        const float pad = 6.0F;
+        const float gap = 6.0F;
+        float hContent = titleDim.y + gap + rarityDim.y;
         if (!it.description.empty()) {
-            const bool altHeld = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
-            const float tipSz = 14.0F;
-            const std::string title = itemLabel(it);
-            std::string ext;
-            if (altHeld) {
-                char hpBuf[64];
-                std::snprintf(hpBuf, sizeof(hpBuf), "Slot: %s",
-                              it.isConsumable
-                                  ? "Consumable"
-                                  : (it.slot == EquipSlot::Armor
-                                         ? "Armor"
-                                         : (it.slot == EquipSlot::Amulet ? "Amulet" : "Ring")));
-                ext += hpBuf;
-                if (it.maxHpBonus > 0.001F) {
-                    char bonusBuf[64];
-                    std::snprintf(bonusBuf, sizeof(bonusBuf), " | +%.0f Max HP",
-                                  static_cast<double>(it.maxHpBonus));
-                    ext += bonusBuf;
-                }
-                if (it.isConsumable) {
-                    char consBuf[80];
-                    std::snprintf(consBuf, sizeof(consBuf), " | Stack %d/%d", it.stackCount,
-                                  std::max(1, it.maxStack));
-                    ext += consBuf;
-                }
-            }
-            const Vector2 titleDim = MeasureTextEx(font, title.c_str(), tipSz + 2.0F, 1.0F);
-            const Vector2 descDim = MeasureTextEx(font, it.description.c_str(), tipSz, 1.0F);
-            const Vector2 extDim =
-                altHeld ? MeasureTextEx(font, ext.c_str(), tipSz - 1.0F, 1.0F) : Vector2{0.0F, 0.0F};
-            const float pad = 6.0F;
-            const float tw = std::max(std::max(titleDim.x, descDim.x), extDim.x) + pad * 2.0F;
-            const float th =
-                titleDim.y + descDim.y + (altHeld ? extDim.y + 4.0F : 0.0F) + pad * 3.0F;
-            Rectangle tip{mouse.x + 14.0F, mouse.y - th - 14.0F, tw, th};
-            clampRectToScreen(tip, screenW, screenH);
-            DrawRectangleRec(tip, Fade(ui::theme::PANEL_FILL, 235));
-            DrawRectangleLinesEx(tip, 1.5F, ui::theme::BTN_BORDER);
-            DrawTextEx(font, title.c_str(), {tip.x + pad, tip.y + pad}, tipSz + 2.0F, 1.0F,
-                       RAYWHITE);
-            DrawTextEx(font, it.description.c_str(),
-                       {tip.x + pad, tip.y + pad + titleDim.y + 6.0F}, tipSz, 1.0F,
-                       ui::theme::LABEL_TEXT);
-            if (altHeld) {
-                DrawTextEx(font, ext.c_str(),
-                           {tip.x + pad, tip.y + pad + titleDim.y + 6.0F + descDim.y + 4.0F},
-                           tipSz - 1.0F, 1.0F, ui::theme::MUTED_TEXT);
-            }
+            hContent += gap + descH;
+        }
+        if (altHeld) {
+            hContent += gap + extDim.y;
+        }
+        const float tw = std::max(
+                           std::max(titleDim.x, rarityDim.x),
+                           std::max(it.description.empty() ? 0.0F : descW, extDim.x)) +
+                       pad * 2.0F;
+        const float th = hContent + pad * 2.0F;
+        Rectangle tip{mouse.x + 14.0F, mouse.y - th - 14.0F, tw, th};
+        clampRectToScreen(tip, screenW, screenH);
+        DrawRectangleRec(tip, Fade(ui::theme::PANEL_FILL, 235));
+        DrawRectangleLinesEx(tip, 1.5F,
+                             Color{rcol.r, rcol.g, rcol.b, static_cast<unsigned char>(210)});
+        float yc = tip.y + pad;
+        DrawTextEx(font, title.c_str(), {tip.x + pad, yc}, tipSz + 2.0F, 1.0F, RAYWHITE);
+        yc += titleDim.y + gap;
+        DrawTextEx(font, rline.c_str(), {tip.x + pad, yc}, tipSz, 1.0F, rcol);
+        yc += rarityDim.y + gap;
+        if (!it.description.empty()) {
+            drawMultilineText(font, it.description, tip.x + pad, yc, tipSz, ui::theme::LABEL_TEXT);
+            yc += descH + gap;
+        }
+        if (altHeld) {
+            DrawTextEx(font, ext.c_str(), {tip.x + pad, yc}, tipSz - 1.0F, 1.0F,
+                       ui::theme::MUTED_TEXT);
         }
     }
 
@@ -769,24 +931,53 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
         DrawRectangleLinesEx(rp, 2.0F, ui::theme::PANEL_BORDER);
         DrawTextEx(font, "Item Rarity", {rp.x + 16.0F, rp.y + 12.0F}, 28.0F, 1.0F, RAYWHITE);
 
-        float y = rp.y + 56.0F;
-        const float fs = 17.0F;
-        DrawTextEx(font, "Common - Basic items with no special properties", {rp.x + 16.0F, y}, fs,
-                   1.0F, {180, 180, 180, 255});
-        y += 34.0F;
-        DrawTextEx(font, "Uncommon - Slightly enhanced attributes", {rp.x + 16.0F, y}, fs, 1.0F,
-                   {100, 220, 100, 255});
-        y += 34.0F;
-        DrawTextEx(font, "Rare - Noticeably powerful, harder to find", {rp.x + 16.0F, y}, fs, 1.0F,
-                   {100, 160, 255, 255});
-        y += 34.0F;
-        DrawTextEx(font, "Epic - Exceptional power, very rare drops", {rp.x + 16.0F, y}, fs, 1.0F,
-                   {190, 120, 255, 255});
-        y += 34.0F;
-        DrawTextEx(font, "Legendary - Unique items of immense power", {rp.x + 16.0F, y}, fs, 1.0F,
-                   {255, 195, 90, 255});
-        DrawTextEx(font, "Rarity system coming soon", {rp.x + 16.0F, rp.y + rp.height - 30.0F},
-                   16.0F, 1.0F, ui::theme::LABEL_TEXT);
+        float y = rp.y + 48.0F;
+        const float fs = 14.0F;
+        const float lh = 18.0F;
+        DrawTextEx(font, "Gear (armor, rings, amulets)", {rp.x + 16.0F, y}, fs + 2.0F, 1.0F,
+                   ui::theme::SUBTITLE_TEXT);
+        y += lh + 2.0F;
+        auto lineGear = [&](const char *a, const char *b, Color c) {
+            DrawTextEx(font, a, {rp.x + 20.0F, y}, fs, 1.0F, c);
+            DrawTextEx(font, b, {rp.x + 20.0F, y + lh * 0.9F}, fs - 1.0F, 1.0F,
+                       ui::theme::LABEL_TEXT);
+            y += lh * 2.05F;
+        };
+        lineGear("Common — Tarnished",
+                 "Used, rusted, and discarded by the masses.",
+                 dreadcast::rarityColor(dreadcast::ItemRarity::Common));
+        lineGear("Uncommon — Blighted",
+                 "Touched by the decay of Hell; starting to \"change.\"",
+                 dreadcast::rarityColor(dreadcast::ItemRarity::Uncommon));
+        lineGear("Rare — Cursed", "Possesses a malevolent will; it wants to be used.",
+                 dreadcast::rarityColor(dreadcast::ItemRarity::Rare));
+        lineGear("Epic — Dread", "Items that have caused legendary massacres.",
+                 dreadcast::rarityColor(dreadcast::ItemRarity::Epic));
+        lineGear("Legendary — Abyssal", "Forged from the core of the pit; reality-bending.",
+                 dreadcast::rarityColor(dreadcast::ItemRarity::Legendary));
+
+        y += 4.0F;
+        DrawTextEx(font, "Vials (consumables)", {rp.x + 16.0F, y}, fs + 2.0F, 1.0F,
+                   ui::theme::SUBTITLE_TEXT);
+        y += lh + 2.0F;
+        auto lineVial = [&](const char *a, const char *b, Color c) {
+            DrawTextEx(font, a, {rp.x + 20.0F, y}, fs, 1.0F, c);
+            DrawTextEx(font, b, {rp.x + 20.0F, y + lh * 0.9F}, fs - 1.0F, 1.0F,
+                       ui::theme::LABEL_TEXT);
+            y += lh * 2.15F;
+        };
+        lineVial("Tier 1 — Clouded [Vial] (Common)",
+                 "Murky, full of sediment; heals, but leaves a bitter aftertaste of madness.",
+                 dreadcast::rarityColor(dreadcast::ItemRarity::Common));
+        lineVial("Tier 2 — Lucid [Vial] (Uncommon)",
+                 "Filtered through the silks of a tormented soul; a steady, haunting glow.",
+                 dreadcast::rarityColor(dreadcast::ItemRarity::Uncommon));
+        lineVial("Tier 3 — Absolute [Vial] (Rare)",
+                 "Pure, undiluted essence; demands the flesh stay together.",
+                 dreadcast::rarityColor(dreadcast::ItemRarity::Rare));
+        lineVial("Special — unique mechanics",
+                 "Not always stronger — odd effects and strange rules.",
+                 dreadcast::rarityColor(dreadcast::ItemRarity::Special));
     }
 }
 
