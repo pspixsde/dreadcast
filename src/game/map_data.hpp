@@ -24,7 +24,7 @@ struct EnemySpawnData {
 };
 
 /// Ground item pickup placement (`ITEM x y kind` in `.map` files). `kind` values: `iron_armor`,
-/// `vial_pure_blood` (see `makeItemFromMapKind`).
+/// `barbed_tunic`, `vial_pure_blood`, `vial_cordial_manic` (see `makeItemFromMapKind`).
 struct ItemSpawnData {
     float x{0.0F};
     float y{0.0F};

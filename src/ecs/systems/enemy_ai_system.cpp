@@ -10,6 +10,7 @@
 #include "core/iso_utils.hpp"
 #include "core/types.hpp"
 #include "ecs/components.hpp"
+#include "game/items.hpp"
 
 namespace dreadcast::ecs {
 
@@ -68,14 +69,68 @@ void applySteering(Velocity &vel, Vector2 desired, float fixedDt) {
     vel.value.y = dreadcast::Lerp(vel.value.y, desired.y, k);
 }
 
+/// If the direct path from `from` toward `dir` is blocked, try perpendicular directions
+/// and return a modified direction that avoids the nearest wall.
+Vector2 wallAvoidDir(entt::registry &registry, Vector2 from, Vector2 dir, float probeLen) {
+    const Vector2 testPt{from.x + dir.x * probeLen, from.y + dir.y * probeLen};
+    if (hasLineOfSight(registry, from, testPt)) {
+        return dir;
+    }
+    const Vector2 perpL{-dir.y, dir.x};
+    const Vector2 perpR{dir.y, -dir.x};
+    const Vector2 testL{from.x + perpL.x * probeLen, from.y + perpL.y * probeLen};
+    const Vector2 testR{from.x + perpR.x * probeLen, from.y + perpR.y * probeLen};
+    const bool clearL = hasLineOfSight(registry, from, testL);
+    const bool clearR = hasLineOfSight(registry, from, testR);
+
+    if (clearL && !clearR) {
+        return Vec2Normalize(Vector2{dir.x * 0.3F + perpL.x * 0.7F,
+                                     dir.y * 0.3F + perpL.y * 0.7F});
+    }
+    if (clearR && !clearL) {
+        return Vec2Normalize(Vector2{dir.x * 0.3F + perpR.x * 0.7F,
+                                     dir.y * 0.3F + perpR.y * 0.7F});
+    }
+    if (clearL) {
+        return Vec2Normalize(Vector2{dir.x * 0.3F + perpL.x * 0.7F,
+                                     dir.y * 0.3F + perpL.y * 0.7F});
+    }
+    return dir;
+}
+
+void updateStuckDetection(EnemyAI &ai, const Transform &transform, Vector2 desiredVel,
+                          float fixedDt) {
+    const float dispX = transform.position.x - ai.prevPosition.x;
+    const float dispY = transform.position.y - ai.prevPosition.y;
+    const float disp = std::sqrt(dispX * dispX + dispY * dispY);
+    const float desSpd = std::sqrt(desiredVel.x * desiredVel.x + desiredVel.y * desiredVel.y);
+
+    if (desSpd > 5.0F && disp < config::ENEMY_STUCK_MIN_DISP) {
+        ai.stuckTimer += fixedDt;
+    } else {
+        ai.stuckTimer = 0.0F;
+    }
+    ai.prevPosition = transform.position;
+}
+
+Vector2 applyStuckAvoidance(entt::registry &registry, Vector2 pos, Vector2 desiredVel,
+                            float stuckTimer) {
+    if (stuckTimer < config::ENEMY_STUCK_THRESHOLD) {
+        return desiredVel;
+    }
+    const float spd = std::sqrt(desiredVel.x * desiredVel.x + desiredVel.y * desiredVel.y);
+    if (spd < 0.001F) {
+        return desiredVel;
+    }
+    const Vector2 dir{desiredVel.x / spd, desiredVel.y / spd};
+    const Vector2 avoid = wallAvoidDir(registry, pos, dir, 50.0F);
+    return {avoid.x * spd, avoid.y * spd};
+}
+
 } // namespace
 
-void enemy_ai_system(entt::registry &registry, float fixedDt) {
-    entt::entity playerEntity = entt::null;
-    for (const auto p : registry.view<Player>()) {
-        playerEntity = p;
-        break;
-    }
+void enemy_ai_system(entt::registry &registry, float fixedDt, entt::entity playerEntity,
+                     dreadcast::InventoryState *inventory) {
     if (playerEntity == entt::null || !registry.all_of<Transform>(playerEntity)) {
         return;
     }
@@ -89,6 +144,18 @@ void enemy_ai_system(entt::registry &registry, float fixedDt) {
         auto &ag = registry.get<Agitation>(e);
         auto &vel = registry.get<Velocity>(e);
         const auto &enemySprite = registry.get<Sprite>(e);
+
+        if (registry.all_of<KnockbackState>(e)) {
+            auto &kb = registry.get<KnockbackState>(e);
+            kb.elapsed += fixedDt;
+            if (kb.elapsed >= kb.duration) {
+                registry.remove<KnockbackState>(e);
+            } else {
+                vel.value.x *= config::KNOCKBACK_FRICTION;
+                vel.value.y *= config::KNOCKBACK_FRICTION;
+                continue;
+            }
+        }
 
         const float dx = playerT.position.x - transform.position.x;
         const float dy = playerT.position.y - transform.position.y;
@@ -145,6 +212,8 @@ void enemy_ai_system(entt::registry &registry, float fixedDt) {
                 transform.rotation = std::atan2f(sy, sx);
                 facing.dir = dreadcast::facingFromAngle(transform.rotation);
             }
+            updateStuckDetection(ai, transform, desiredVel, fixedDt);
+            desiredVel = applyStuckAvoidance(registry, transform.position, desiredVel, ai.stuckTimer);
             applySteering(vel, desiredVel, fixedDt);
             continue;
         }
@@ -165,12 +234,25 @@ void enemy_ai_system(entt::registry &registry, float fixedDt) {
                 desiredVel = {0.0F, 0.0F};
                 if (ai.meleeTimer <= 0.0F) {
                     if (registry.all_of<Health>(playerEntity)) {
-                        auto &playerHp = registry.get<Health>(playerEntity);
-                        playerHp.current -= ai.meleeDamage;
+                        if (registry.all_of<ManicEffect>(playerEntity)) {
+                            ai.meleeTimer = ai.meleeCooldown;
+                        } else {
+                            auto &playerHp = registry.get<Health>(playerEntity);
+                            const float dmg = ai.meleeDamage;
+                            playerHp.current -= dmg;
+                            const float rf =
+                                inventory ? inventory->totalEquippedDamageReflect() : 0.0F;
+                            if (rf > 0.001F && registry.all_of<Health>(e)) {
+                                auto &eh = registry.get<Health>(e);
+                                eh.current -= dmg * rf;
+                            }
+                            ai.meleeTimer = ai.meleeCooldown;
+                        }
                     }
-                    ai.meleeTimer = ai.meleeCooldown;
                 }
             }
+            updateStuckDetection(ai, transform, desiredVel, fixedDt);
+            desiredVel = applyStuckAvoidance(registry, transform.position, desiredVel, ai.stuckTimer);
             applySteering(vel, desiredVel, fixedDt);
             continue;
         }
@@ -204,6 +286,8 @@ void enemy_ai_system(entt::registry &registry, float fixedDt) {
             }
         }
 
+        updateStuckDetection(ai, transform, desiredVel, fixedDt);
+        desiredVel = applyStuckAvoidance(registry, transform.position, desiredVel, ai.stuckTimer);
         applySteering(vel, desiredVel, fixedDt);
 
         ai.shootTimer -= fixedDt;
@@ -229,13 +313,9 @@ void enemy_ai_system(entt::registry &registry, float fixedDt) {
         registry.emplace<Velocity>(
             proj, Velocity{{dir.x * config::ENEMY_PROJECTILE_SPEED, dir.y * config::ENEMY_PROJECTILE_SPEED}});
         registry.emplace<Sprite>(proj, Sprite{{255, 120, 90, 255}, 9.0F, 9.0F});
-        registry.emplace<Projectile>(proj,
-                                     Projectile{config::PROJECTILE_DAMAGE,
-                                                config::ENEMY_PROJECTILE_SPEED,
-                                                config::ENEMY_PROJECTILE_MAX_RANGE,
-                                                0.0F,
-                                                dir,
-                                                false});
+        registry.emplace<Projectile>(
+            proj, Projectile{config::PROJECTILE_DAMAGE, config::ENEMY_PROJECTILE_SPEED,
+                             config::ENEMY_PROJECTILE_MAX_RANGE, 0.0F, dir, false, e});
     }
 }
 

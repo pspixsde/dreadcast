@@ -37,8 +37,12 @@ Rectangle EditorScene::toolbarPanelRect() const {
     return {4.0F, 4.0F, 210.0F, 580.0F};
 }
 
-bool EditorScene::isMouseOverToolbar(Vector2 screenMouse) const {
-    return CheckCollisionPointRec(screenMouse, toolbarPanelRect());
+Rectangle EditorScene::editorUiHitRect() const {
+    return {4.0F, 4.0F, 280.0F, 620.0F};
+}
+
+bool EditorScene::isMouseOverEditorUi(Vector2 screenMouse) const {
+    return CheckCollisionPointRec(screenMouse, editorUiHitRect());
 }
 
 void EditorScene::refreshMapFileList() {
@@ -122,10 +126,6 @@ void EditorScene::onEnter() {
     loadButton_.label = "Load";
     backButton_.rect = {16.0F, 510.0F, 118.0F, 34.0F};
     backButton_.label = "Back";
-    enemyTypeButton_.rect = {142.0F, 158.0F, 118.0F, 34.0F};
-    enemyTypeButton_.label = "Enemy: Imp";
-    itemTypeButton_.rect = {142.0F, 290.0F, 118.0F, 34.0F};
-    itemTypeButton_.label = "Item: Armor";
 }
 
 Vector2 EditorScene::worldMouseFromScreen(const Vector2 &screenMouse) const {
@@ -197,13 +197,16 @@ void EditorScene::handlePlacement(const Vector2 &worldMouse) {
         selected_.type = SelectedType::PlayerSpawn;
         selected_.index = -1;
         break;
-    case Tool::PlaceItem:
-        map_.itemSpawns.push_back(
-            {worldMouse.x, worldMouse.y,
-             selectedItemKind_ == 0 ? "iron_armor" : "vial_pure_blood"});
+    case Tool::PlaceItem: {
+        static const char *kItemKinds[] = {"iron_armor", "vial_pure_blood", "vial_cordial_manic",
+                                           "barbed_tunic", "runic_shell"};
+        const int nk = static_cast<int>(sizeof(kItemKinds) / sizeof(kItemKinds[0]));
+        const int ki = std::clamp(selectedItemKind_, 0, nk - 1);
+        map_.itemSpawns.push_back({worldMouse.x, worldMouse.y, kItemKinds[static_cast<size_t>(ki)]});
         selected_.type = SelectedType::Item;
         selected_.index = static_cast<int>(map_.itemSpawns.size()) - 1;
         break;
+    }
     case Tool::Select:
         break;
     }
@@ -454,7 +457,15 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
         if (selected_.type == SelectedType::Item && selected_.index >= 0 &&
             selected_.index < static_cast<int>(map_.itemSpawns.size())) {
             const std::string &k = map_.itemSpawns[static_cast<size_t>(selected_.index)].kind;
-            selectedItemKind_ = (k == "vial_pure_blood") ? 1 : 0;
+            if (k == "vial_pure_blood") {
+                selectedItemKind_ = 1;
+            } else if (k == "vial_cordial_manic") {
+                selectedItemKind_ = 2;
+            } else if (k == "barbed_tunic") {
+                selectedItemKind_ = 3;
+            } else {
+                selectedItemKind_ = 0;
+            }
         }
         if (selected_.type != SelectedType::None) {
             Vector2 center = worldMouse;
@@ -516,11 +527,13 @@ void EditorScene::update(SceneManager &scenes, InputManager &input, ResourceMana
     statusTimer_ = std::max(0.0F, statusTimer_ - frameDt);
     const Vector2 mouse = input.mousePosition();
     const bool click = input.isMouseButtonPressed(MOUSE_BUTTON_LEFT);
-    const bool overToolbar = isMouseOverToolbar(mouse);
+    const bool overUi = isMouseOverEditorUi(mouse);
+    bool uiConsumedClick = false;
 
     for (int i = 0; i < static_cast<int>(toolButtons_.size()); ++i) {
         if (toolButtons_[static_cast<size_t>(i)].wasClicked(mouse, click)) {
             activeTool_ = static_cast<Tool>(i);
+            uiConsumedClick = true;
         }
     }
     if (mapPrevButton_.wasClicked(mouse, click)) {
@@ -530,6 +543,7 @@ void EditorScene::update(SceneManager &scenes, InputManager &input, ResourceMana
         const bool ok = loadMap();
         statusText_ = ok ? "Loaded map" : "Load failed";
         statusTimer_ = 2.0F;
+        uiConsumedClick = true;
     }
     if (mapNextButton_.wasClicked(mouse, click)) {
         ensureValidMapIndex();
@@ -538,20 +552,24 @@ void EditorScene::update(SceneManager &scenes, InputManager &input, ResourceMana
         const bool ok = loadMap();
         statusText_ = ok ? "Loaded map" : "Load failed";
         statusTimer_ = 2.0F;
+        uiConsumedClick = true;
     }
     if (mapNewButton_.wasClicked(mouse, click)) {
         newMap();
+        uiConsumedClick = true;
     }
     if (saveButton_.wasClicked(mouse, click)) {
         const bool ok = saveMap();
         ensureValidMapIndex();
         statusText_ = ok ? "Saved map" : "Save failed";
         statusTimer_ = 2.0F;
+        uiConsumedClick = true;
     }
     if (loadButton_.wasClicked(mouse, click)) {
         const bool ok = loadMap();
         statusText_ = ok ? "Loaded map" : "Load failed";
         statusTimer_ = 2.0F;
+        uiConsumedClick = true;
     }
     if (backButton_.wasClicked(mouse, click) || input.isKeyPressed(KEY_ESCAPE)) {
         scenes.replace(std::make_unique<MenuScene>());
@@ -560,21 +578,66 @@ void EditorScene::update(SceneManager &scenes, InputManager &input, ResourceMana
     const bool showEnemyType =
         activeTool_ == Tool::PlaceEnemy ||
         (activeTool_ == Tool::Select && selected_.type == SelectedType::Enemy);
-    enemyTypeButton_.rect = {toolButtons_[2].rect.x + toolButtons_[2].rect.width + 8.0F,
-                             toolButtons_[2].rect.y, 118.0F, 34.0F};
-    if (showEnemyType && enemyTypeButton_.wasClicked(mouse, click)) {
-        selectedEnemyType_ = (selectedEnemyType_ + 1) % 2;
+    constexpr float ddw = 188.0F;
+    constexpr float ddh = 28.0F;
+    const Rectangle enemyDdHeader{16.0F, 154.0F, ddw, ddh};
+    if (showEnemyType) {
+        if (click && CheckCollisionPointRec(mouse, enemyDdHeader)) {
+            enemyDropdownOpen_ = !enemyDropdownOpen_;
+            itemDropdownOpen_ = false;
+            uiConsumedClick = true;
+        }
+        if (enemyDropdownOpen_) {
+            const int nOpt = 2;
+            for (int oi = 0; oi < nOpt; ++oi) {
+                const Rectangle row{enemyDdHeader.x,
+                                    enemyDdHeader.y + enemyDdHeader.height + static_cast<float>(oi) *
+                                                                                  (ddh + 2.0F),
+                                    ddw, ddh};
+                if (click && CheckCollisionPointRec(mouse, row)) {
+                    selectedEnemyType_ = oi;
+                    enemyDropdownOpen_ = false;
+                    uiConsumedClick = true;
+                    break;
+                }
+            }
+        }
+    } else {
+        enemyDropdownOpen_ = false;
     }
-    enemyTypeButton_.label = selectedEnemyType_ == 0 ? "Enemy: Imp" : "Enemy: Hound";
 
     const bool showItemType = activeTool_ == Tool::PlaceItem ||
                               (activeTool_ == Tool::Select && selected_.type == SelectedType::Item);
-    itemTypeButton_.rect = {toolButtons_[5].rect.x + toolButtons_[5].rect.width + 8.0F,
-                            toolButtons_[5].rect.y, 118.0F, 34.0F};
-    if (showItemType && itemTypeButton_.wasClicked(mouse, click)) {
-        selectedItemKind_ = (selectedItemKind_ + 1) % 2;
+    const Rectangle itemDdHeader{16.0F, 286.0F, ddw, ddh};
+    if (showItemType) {
+        if (click && CheckCollisionPointRec(mouse, itemDdHeader)) {
+            itemDropdownOpen_ = !itemDropdownOpen_;
+            enemyDropdownOpen_ = false;
+            uiConsumedClick = true;
+        }
+        if (itemDropdownOpen_) {
+            constexpr int nItemOpt = 5;
+            for (int oi = 0; oi < nItemOpt; ++oi) {
+                const Rectangle row{itemDdHeader.x,
+                                    itemDdHeader.y + itemDdHeader.height + static_cast<float>(oi) *
+                                                                                (ddh + 2.0F),
+                                    ddw, ddh};
+                if (click && CheckCollisionPointRec(mouse, row)) {
+                    selectedItemKind_ = oi;
+                    itemDropdownOpen_ = false;
+                    uiConsumedClick = true;
+                    break;
+                }
+            }
+        }
+    } else {
+        itemDropdownOpen_ = false;
     }
-    itemTypeButton_.label = selectedItemKind_ == 0 ? "Item: Armor" : "Item: Vial";
+
+    if (click && !overUi) {
+        enemyDropdownOpen_ = false;
+        itemDropdownOpen_ = false;
+    }
 
     Vector2 camMove{0.0F, 0.0F};
     if (input.isKeyHeld(KEY_A)) {
@@ -602,8 +665,10 @@ void EditorScene::update(SceneManager &scenes, InputManager &input, ResourceMana
         const Vector2 isoGrip = worldToIso(cart);
         const Vector2 screenGrip = GetWorldToScreen2D(isoGrip, camera_.camera());
         const Vector2 d = {mouse.x - screenGrip.x, mouse.y - screenGrip.y};
-        camera_.setFollowTarget({camera_.camera().target.x - d.x / camera_.camera().zoom,
-                                 camera_.camera().target.y - d.y / camera_.camera().zoom});
+        const float z = camera_.camera().zoom;
+        camera_.camera().target.x -= d.x / z;
+        camera_.camera().target.y -= d.y / z;
+        camera_.syncFollowFromCamera();
     }
 
     const float wheel = GetMouseWheelMove();
@@ -612,7 +677,7 @@ void EditorScene::update(SceneManager &scenes, InputManager &input, ResourceMana
     }
 
     const Vector2 worldMouse = worldMouseFromScreen(mouse);
-    if (!overToolbar) {
+    if (!overUi && !uiConsumedClick) {
         handleSelectionInput(input, worldMouse);
     }
     if (input.isKeyPressed(KEY_DELETE)) {
@@ -627,7 +692,7 @@ void EditorScene::update(SceneManager &scenes, InputManager &input, ResourceMana
         copySelectionToClipboard();
     }
     if ((input.isKeyHeld(KEY_LEFT_CONTROL) || input.isKeyHeld(KEY_RIGHT_CONTROL)) &&
-        input.isKeyPressed(KEY_V) && !overToolbar) {
+        input.isKeyPressed(KEY_V) && !overUi) {
         pasteFromClipboard(worldMouse);
     }
 
@@ -745,11 +810,17 @@ void EditorScene::drawEditorWorld(const Font &font) {
         const ItemSpawnData &it = map_.itemSpawns[static_cast<size_t>(i)];
         const Vector2 iso = worldToIso({it.x, it.y});
         const bool sel = selected_.type == SelectedType::Item && selected_.index == i;
-        const bool vial = (it.kind == "vial_pure_blood");
         const float r = sel ? 12.0F : 9.0F;
         DrawCircleV(iso, r, sel ? Color{255, 220, 130, 255} : Color{190, 130, 240, 255});
-        DrawTextEx(font, vial ? "Vial" : "Armor", {iso.x + 8.0F, iso.y - 18.0F}, 14.0F, 1.0F,
-                   RAYWHITE);
+        const char *tag = "Armor";
+        if (it.kind == "vial_pure_blood") {
+            tag = "Vial";
+        } else if (it.kind == "vial_cordial_manic") {
+            tag = "Manic";
+        } else if (it.kind == "barbed_tunic") {
+            tag = "Tunic";
+        }
+        DrawTextEx(font, tag, {iso.x + 8.0F, iso.y - 18.0F}, 14.0F, 1.0F, RAYWHITE);
     }
 
     const Vector2 pIso = worldToIso(map_.playerSpawn);
@@ -795,19 +866,65 @@ void EditorScene::drawToolbar(const Font &font, Vector2 mouse) {
 
     saveButton_.draw(font, 17.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER, RAYWHITE,
                      ui::theme::BTN_BORDER);
+    constexpr float kDdW = 188.0F;
+    constexpr float kDdH = 28.0F;
     const bool showEnemyType =
         activeTool_ == Tool::PlaceEnemy ||
         (activeTool_ == Tool::Select && selected_.type == SelectedType::Enemy);
     if (showEnemyType) {
-        enemyTypeButton_.draw(font, 16.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER,
-                              RAYWHITE, ui::theme::BTN_BORDER);
+        const Rectangle enemyHdr{16.0F, 154.0F, kDdW, kDdH};
+        const bool ehov = CheckCollisionPointRec(mouse, enemyHdr);
+        DrawRectangleRec(enemyHdr, ehov ? ui::theme::BTN_HOVER : ui::theme::BTN_FILL);
+        DrawRectangleLinesEx(enemyHdr, 1.5F, ui::theme::BTN_BORDER);
+        const char *et = selectedEnemyType_ == 0 ? "Enemy: Imp" : "Enemy: Hellhound";
+        DrawTextEx(font, enemyDropdownOpen_ ? "Enemy: (select...)" : et,
+                   {enemyHdr.x + 6.0F, enemyHdr.y + 5.0F}, 15.0F, 1.0F, RAYWHITE);
+        if (enemyDropdownOpen_) {
+            const char *opts[2] = {"Imp", "Hellhound"};
+            for (int oi = 0; oi < 2; ++oi) {
+                const Rectangle row{enemyHdr.x,
+                                      enemyHdr.y + enemyHdr.height + static_cast<float>(oi) *
+                                                                        (kDdH + 2.0F),
+                                      kDdW, kDdH};
+                const bool rh = CheckCollisionPointRec(mouse, row);
+                DrawRectangleRec(row, rh ? ui::theme::BTN_HOVER : ui::theme::BTN_FILL);
+                DrawRectangleLinesEx(row, 1.0F, ui::theme::BTN_BORDER);
+                DrawTextEx(font, opts[oi], {row.x + 6.0F, row.y + 5.0F}, 14.0F, 1.0F, RAYWHITE);
+            }
+        }
     }
     const bool showItemTypeTb =
         activeTool_ == Tool::PlaceItem ||
         (activeTool_ == Tool::Select && selected_.type == SelectedType::Item);
     if (showItemTypeTb) {
-        itemTypeButton_.draw(font, 16.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER,
-                             RAYWHITE, ui::theme::BTN_BORDER);
+        static const char *kItemOptLbl[] = {"Iron Armor", "Vial of Pure Blood",
+                                             "Vial of Cordial Manic", "Barbed Tunic",
+                                             "Runic Shell"};
+        constexpr int kItemOptCount = static_cast<int>(sizeof(kItemOptLbl) / sizeof(kItemOptLbl[0]));
+        const Rectangle itemHdr{16.0F, 286.0F, kDdW, kDdH};
+        const bool ihov = CheckCollisionPointRec(mouse, itemHdr);
+        DrawRectangleRec(itemHdr, ihov ? ui::theme::BTN_HOVER : ui::theme::BTN_FILL);
+        DrawRectangleLinesEx(itemHdr, 1.5F, ui::theme::BTN_BORDER);
+        const int ik = std::clamp(selectedItemKind_, 0, kItemOptCount - 1);
+        char itemHdrTxt[72];
+        if (itemDropdownOpen_) {
+            std::snprintf(itemHdrTxt, sizeof(itemHdrTxt), "Item: (select...)");
+        } else {
+            std::snprintf(itemHdrTxt, sizeof(itemHdrTxt), "Item: %s", kItemOptLbl[ik]);
+        }
+        DrawTextEx(font, itemHdrTxt, {itemHdr.x + 4.0F, itemHdr.y + 5.0F}, 13.0F, 1.0F, RAYWHITE);
+        if (itemDropdownOpen_) {
+            for (int oi = 0; oi < kItemOptCount; ++oi) {
+                const Rectangle row{itemHdr.x,
+                                    itemHdr.y + itemHdr.height + static_cast<float>(oi) * (kDdH + 2.0F),
+                                    kDdW, kDdH};
+                const bool rh = CheckCollisionPointRec(mouse, row);
+                DrawRectangleRec(row, rh ? ui::theme::BTN_HOVER : ui::theme::BTN_FILL);
+                DrawRectangleLinesEx(row, 1.0F, ui::theme::BTN_BORDER);
+                DrawTextEx(font, kItemOptLbl[oi], {row.x + 4.0F, row.y + 4.0F}, 12.0F, 1.0F,
+                           RAYWHITE);
+            }
+        }
     }
     loadButton_.draw(font, 17.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER, RAYWHITE,
                      ui::theme::BTN_BORDER);

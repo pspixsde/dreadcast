@@ -94,7 +94,7 @@ Rectangle makeInventoryPanelRect(int screenW, int screenH) {
 Rectangle makeRarityPanelRect(int screenW, int screenH) {
     const Rectangle inv = makeInventoryPanelRect(screenW, screenH);
     const float w = 400.0F;
-    const float h = 450.0F;
+    const float h = 500.0F;
     return {inv.x + (inv.width - w) * 0.5F, inv.y + (inv.height - h) * 0.5F, w, h};
 }
 
@@ -189,6 +189,24 @@ void clampRectToScreen(Rectangle &r, int screenW, int screenH) {
     if (r.y + r.height > static_cast<float>(screenH) - 4.0F) {
         r.y = static_cast<float>(screenH) - r.height - 4.0F;
     }
+}
+
+/// Base slot fill + rarity tint (margin around centered icon reads as colored “padding”).
+void drawItemSlotSurface(Rectangle r, const dreadcast::ItemData *it, bool ghost) {
+    DrawRectangleRec(r, ui::theme::SLOT_FILL);
+    if (it != nullptr) {
+        const Color rc = dreadcast::rarityColor(it->rarity);
+        DrawRectangleRec(r, Fade(rc, ghost ? 0.12F : 0.28F));
+    }
+}
+
+void drawCordialManicBlockedOverlay(Rectangle slotRect) {
+    const float ix = slotRect.x + (slotRect.width - ITEM_ICON_DRAW_W) * 0.5F;
+    const float iy = slotRect.y + (slotRect.height - ITEM_ICON_DRAW_H) * 0.5F;
+    const Vector2 a{ix + 6.0F, iy + 6.0F};
+    const Vector2 b{ix + ITEM_ICON_DRAW_W - 6.0F, iy + ITEM_ICON_DRAW_H - 6.0F};
+    DrawLineEx(a, b, 4.0F, Fade(RED, 220));
+    DrawLineEx({a.x, b.y}, {b.x, a.y}, 4.0F, Fade(RED, 220));
 }
 
 } // namespace
@@ -683,7 +701,8 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
 }
 
 void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, int screenW, int screenH,
-                       const InventoryState &inv) {
+                       const InventoryState &inv, float playerHpRatio,
+                       float runicShellCdRatio, float runicShellCdSeconds) {
     if (!open_) {
         return;
     }
@@ -717,32 +736,72 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
     DrawTextEx(font, "Carried", {px + 340.0F, py + 56.0F}, labelSize, 1.0F,
                ui::theme::LABEL_TEXT);
 
-    const float small = 14.0F;
+    static const char *kSlotIconPaths[] = {
+        "assets/textures/ui/armor_slot.png",
+        "assets/textures/ui/amulet_slot.png",
+        "assets/textures/ui/ring_slot.png",
+    };
     for (int i = 0; i < static_cast<int>(EquipSlot::COUNT); ++i) {
         const Rectangle r = makeEquipSlotRect(screenW, screenH, i);
-        DrawRectangleRec(r, ui::theme::SLOT_FILL);
-        DrawRectangleLinesEx(r, 1.5F, ui::theme::SLOT_BORDER);
-        const char *ln = kSlotLabels[i];
-        DrawTextEx(font, ln, {r.x + 6.0F, r.y + 6.0F}, small, 1.0F, ui::theme::MUTED_TEXT);
         const int idx = inv.equipped[static_cast<size_t>(i)];
-        if (idx >= 0 && idx < static_cast<int>(inv.items.size())) {
-            const bool ghost = dragging_ && dragSourceEquip_ == i;
+        const dreadcast::ItemData *pit =
+            (idx >= 0 && idx < static_cast<int>(inv.items.size()))
+                ? &inv.items[static_cast<size_t>(idx)]
+                : nullptr;
+        const bool ghost = dragging_ && dragSourceEquip_ == i;
+        drawItemSlotSurface(r, pit, ghost);
+        DrawRectangleLinesEx(r, 1.5F, ui::theme::SLOT_BORDER);
+        if (pit == nullptr) {
+            const Texture2D slotTex = resources.getTexture(kSlotIconPaths[i]);
+            if (slotTex.id != 0 && slotTex.width > 0 && slotTex.height > 0) {
+                constexpr float iconSz = 40.0F;
+                const float ix = r.x + (r.width - iconSz) * 0.5F;
+                const float iy = r.y + (r.height - iconSz) * 0.5F;
+                const Rectangle src{0.0F, 0.0F, static_cast<float>(slotTex.width),
+                                    static_cast<float>(slotTex.height)};
+                const Rectangle dst{ix, iy, iconSz, iconSz};
+                DrawTexturePro(slotTex, src, dst, {0.0F, 0.0F}, 0.0F,
+                               Fade(ui::theme::MUTED_TEXT, 0.55F));
+            }
+        } else {
             const Color tint = ghost ? Fade(RAYWHITE, 0.35F) : RAYWHITE;
-            const auto &it = inv.items[static_cast<size_t>(idx)];
-            InventoryUI::drawItemIcon(it, resources, r, tint);
+            InventoryUI::drawItemIcon(*pit, resources, r, tint);
+            if (i == 0 && runicShellCdRatio > 0.001F && pit->name == "Runic Shell") {
+                DrawRectangleRec(r, Fade(BLACK, 0.45F * runicShellCdRatio));
+                char cdBuf[16];
+                const int sec = static_cast<int>(std::ceil(static_cast<double>(runicShellCdSeconds)));
+                std::snprintf(cdBuf, sizeof(cdBuf), "%ds", sec);
+                const float cdFs = 18.0F;
+                const Vector2 cdDim = MeasureTextEx(font, cdBuf, cdFs, 1.0F);
+                DrawTextEx(font, cdBuf,
+                           {r.x + (r.width - cdDim.x) * 0.5F + 1.0F,
+                            r.y + (r.height - cdDim.y) * 0.5F + 1.0F},
+                           cdFs, 1.0F, Fade(BLACK, 180));
+                DrawTextEx(font, cdBuf,
+                           {r.x + (r.width - cdDim.x) * 0.5F,
+                            r.y + (r.height - cdDim.y) * 0.5F},
+                           cdFs, 1.0F, {200, 220, 255, 255});
+            }
         }
     }
 
     for (int i = 0; i < dreadcast::CONSUMABLE_SLOT_COUNT; ++i) {
         const Rectangle r = makeConsumableSlotRect(screenW, screenH, i);
-        DrawRectangleRec(r, ui::theme::SLOT_FILL);
-        DrawRectangleLinesEx(r, 1.5F, ui::theme::SLOT_BORDER);
         const int idx = inv.consumableSlots[static_cast<size_t>(i)];
-        if (idx >= 0 && idx < static_cast<int>(inv.items.size())) {
-            const bool ghost = dragging_ && dragSourceConsumable_ == i;
+        const dreadcast::ItemData *pit =
+            (idx >= 0 && idx < static_cast<int>(inv.items.size()))
+                ? &inv.items[static_cast<size_t>(idx)]
+                : nullptr;
+        const bool ghost = dragging_ && dragSourceConsumable_ == i;
+        drawItemSlotSurface(r, pit, ghost);
+        DrawRectangleLinesEx(r, 1.5F, ui::theme::SLOT_BORDER);
+        if (pit != nullptr) {
             const Color tint = ghost ? Fade(RAYWHITE, 0.35F) : RAYWHITE;
-            const auto &it = inv.items[static_cast<size_t>(idx)];
+            const auto &it = *pit;
             InventoryUI::drawItemIcon(it, resources, r, tint);
+            if (it.name == "Vial of Cordial Manic" && playerHpRatio < 0.40F - 1.0e-4F) {
+                drawCordialManicBlockedOverlay(r);
+            }
             if (it.isStackable && it.stackCount >= 1) {
                 char cntBuf[16];
                 std::snprintf(cntBuf, sizeof(cntBuf), "%d", it.stackCount);
@@ -760,14 +819,33 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
 
     for (int i = 0; i < dreadcast::BAG_SLOT_COUNT; ++i) {
         const Rectangle r = makeBagSlotRect(screenW, screenH, i);
-        DrawRectangleRec(r, ui::theme::SLOT_FILL);
-        DrawRectangleLinesEx(r, 1.5F, ui::theme::SLOT_BORDER);
         const int idx = inv.bagSlots[static_cast<size_t>(i)];
-        if (idx >= 0 && idx < static_cast<int>(inv.items.size())) {
-            const bool ghost = dragging_ && dragSourceBag_ == i;
+        const dreadcast::ItemData *pit =
+            (idx >= 0 && idx < static_cast<int>(inv.items.size()))
+                ? &inv.items[static_cast<size_t>(idx)]
+                : nullptr;
+        const bool ghost = dragging_ && dragSourceBag_ == i;
+        drawItemSlotSurface(r, pit, ghost);
+        DrawRectangleLinesEx(r, 1.5F, ui::theme::SLOT_BORDER);
+        if (pit != nullptr) {
             const Color tint = ghost ? Fade(RAYWHITE, 0.35F) : RAYWHITE;
-            const auto &it = inv.items[static_cast<size_t>(idx)];
+            const auto &it = *pit;
             InventoryUI::drawItemIcon(it, resources, r, tint);
+            if (it.name == "Vial of Cordial Manic" && playerHpRatio < 0.40F - 1.0e-4F) {
+                drawCordialManicBlockedOverlay(r);
+            }
+            if (it.isStackable && it.stackCount >= 1) {
+                char cntBuf[16];
+                std::snprintf(cntBuf, sizeof(cntBuf), "%d", it.stackCount);
+                const float stackFs = 13.0F;
+                const Vector2 cd = MeasureTextEx(font, cntBuf, stackFs, 1.0F);
+                const float sp = 4.0F;
+                const float tx = r.x + r.width - cd.x - sp;
+                const float ty = r.y + r.height - cd.y - sp;
+                DrawTextEx(font, cntBuf, {tx + 1.0F, ty + 1.0F}, stackFs, 1.0F,
+                           Fade(BLACK, 200));
+                DrawTextEx(font, cntBuf, {tx, ty}, stackFs, 1.0F, RAYWHITE);
+            }
         }
     }
 
@@ -870,6 +948,18 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
                               static_cast<double>(it.maxHpBonus));
                 ext += bonusBuf;
             }
+            if (it.hpRegenBonus > 0.001F) {
+                char rgBuf[64];
+                std::snprintf(rgBuf, sizeof(rgBuf), " | +%.1f HP/s",
+                              static_cast<double>(it.hpRegenBonus));
+                ext += rgBuf;
+            }
+            if (it.damageReflectPercent > 0.001F) {
+                char rfBuf[64];
+                std::snprintf(rfBuf, sizeof(rfBuf), " | Reflect %.0f%%",
+                              static_cast<double>(it.damageReflectPercent * 100.0F));
+                ext += rfBuf;
+            }
             if (it.isConsumable) {
                 char consBuf[80];
                 std::snprintf(consBuf, sizeof(consBuf), " | Stack %d/%d", it.stackCount,
@@ -943,18 +1033,18 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
                        ui::theme::LABEL_TEXT);
             y += lh * 2.05F;
         };
-        lineGear("Common — Tarnished",
+        lineGear("Tarnished",
                  "Used, rusted, and discarded by the masses.",
-                 dreadcast::rarityColor(dreadcast::ItemRarity::Common));
-        lineGear("Uncommon — Blighted",
+                 dreadcast::rarityColor(dreadcast::ItemRarity::Tarnished));
+        lineGear("Blighted",
                  "Touched by the decay of Hell; starting to \"change.\"",
-                 dreadcast::rarityColor(dreadcast::ItemRarity::Uncommon));
-        lineGear("Rare — Cursed", "Possesses a malevolent will; it wants to be used.",
-                 dreadcast::rarityColor(dreadcast::ItemRarity::Rare));
-        lineGear("Epic — Dread", "Items that have caused legendary massacres.",
-                 dreadcast::rarityColor(dreadcast::ItemRarity::Epic));
-        lineGear("Legendary — Abyssal", "Forged from the core of the pit; reality-bending.",
-                 dreadcast::rarityColor(dreadcast::ItemRarity::Legendary));
+                 dreadcast::rarityColor(dreadcast::ItemRarity::Blighted));
+        lineGear("Cursed", "Possesses a malevolent will; it wants to be used.",
+                 dreadcast::rarityColor(dreadcast::ItemRarity::Cursed));
+        lineGear("Dread", "Items that have caused legendary massacres.",
+                 dreadcast::rarityColor(dreadcast::ItemRarity::Dread));
+        lineGear("Abyssal", "Forged from the core of the pit; reality-bending.",
+                 dreadcast::rarityColor(dreadcast::ItemRarity::Abyssal));
 
         y += 4.0F;
         DrawTextEx(font, "Vials (consumables)", {rp.x + 16.0F, y}, fs + 2.0F, 1.0F,
@@ -966,16 +1056,16 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
                        ui::theme::LABEL_TEXT);
             y += lh * 2.15F;
         };
-        lineVial("Tier 1 — Clouded [Vial] (Common)",
+        lineVial("Clouded (stack 5)",
                  "Murky, full of sediment; heals, but leaves a bitter aftertaste of madness.",
-                 dreadcast::rarityColor(dreadcast::ItemRarity::Common));
-        lineVial("Tier 2 — Lucid [Vial] (Uncommon)",
+                 dreadcast::rarityColor(dreadcast::ItemRarity::Clouded));
+        lineVial("Lucid (stack 3)",
                  "Filtered through the silks of a tormented soul; a steady, haunting glow.",
-                 dreadcast::rarityColor(dreadcast::ItemRarity::Uncommon));
-        lineVial("Tier 3 — Absolute [Vial] (Rare)",
+                 dreadcast::rarityColor(dreadcast::ItemRarity::Lucid));
+        lineVial("Absolute (stack 1)",
                  "Pure, undiluted essence; demands the flesh stay together.",
-                 dreadcast::rarityColor(dreadcast::ItemRarity::Rare));
-        lineVial("Special — unique mechanics",
+                 dreadcast::rarityColor(dreadcast::ItemRarity::Absolute));
+        lineVial("Special (stack 1)",
                  "Not always stronger — odd effects and strange rules.",
                  dreadcast::rarityColor(dreadcast::ItemRarity::Special));
     }

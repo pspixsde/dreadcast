@@ -2,6 +2,8 @@
 
 #include <raylib.h>
 
+#include <fstream>
+#include <sstream>
 #include <string>
 
 namespace dreadcast {
@@ -30,6 +32,49 @@ std::string resolveAssetPath(const std::string &relativePath) {
 }
 
 } // namespace
+
+bool GameSettings::saveToFile(const std::string &path) const {
+    std::ofstream out(path, std::ios::trunc);
+    if (!out.is_open()) {
+        return false;
+    }
+    out << "mouseSensitivity=" << static_cast<double>(mouseSensitivity) << '\n';
+    out << "showFpsCounter=" << (showFpsCounter ? 1 : 0) << '\n';
+    return out.good();
+}
+
+void GameSettings::loadFromFile(const std::string &path) {
+    std::ifstream in(path);
+    if (!in.is_open()) {
+        return;
+    }
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty() || line[0] == '#') {
+            continue;
+        }
+        const auto eq = line.find('=');
+        if (eq == std::string::npos) {
+            continue;
+        }
+        const std::string key = line.substr(0, eq);
+        const std::string val = line.substr(eq + 1);
+        std::istringstream vs(val);
+        if (key == "mouseSensitivity") {
+            double d = 0.0;
+            if (vs >> d) {
+                mouseSensitivity = static_cast<float>(d);
+            }
+        } else if (key == "showFpsCounter") {
+            int i = 0;
+            if (vs >> i) {
+                showFpsCounter = (i != 0);
+            }
+        }
+    }
+}
+
+ResourceManager::ResourceManager() { settings_.loadFromFile("settings.cfg"); }
 
 ResourceManager::~ResourceManager() { unloadAll(); }
 

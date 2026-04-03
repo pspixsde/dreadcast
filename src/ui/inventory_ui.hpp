@@ -63,8 +63,12 @@ class InventoryUI {
 
     InventoryAction update(InputManager &input, InventoryState &inv);
 
+    /// `playerHpRatio` = current/max for Cordial Manic unusable overlay (red X when &lt; 40%).
+    /// `runicShellCdRatio` = 0..1, fraction of Runic Shell cooldown remaining (0 = ready).
+    /// `runicShellCdSeconds` = remaining seconds (for display).
     void draw(const Font &font, dreadcast::ResourceManager &resources, int screenW, int screenH,
-              const InventoryState &inv);
+              const InventoryState &inv, float playerHpRatio = 1.0F,
+              float runicShellCdRatio = 0.0F, float runicShellCdSeconds = 0.0F);
 
   private:
     /// Draw a 7:5 item icon at fixed `ITEM_ICON_DRAW_*` size (inventory slots).

@@ -172,6 +172,90 @@ void GameplayScene::drawWorldContent(ResourceManager &resources) {
     }
 
     ecs::render_system(registry_, resources.uiFont(), resources);
+
+    if (registry_.valid(player_) && registry_.all_of<ecs::Transform>(player_)) {
+        const Vector2 pWorld = registry_.get<ecs::Transform>(player_).position;
+        const Vector2 pIso = worldToIso(pWorld);
+        const float t = static_cast<float>(GetTime());
+
+        if (registry_.all_of<ecs::HealOverTime>(player_)) {
+            const auto &hot = registry_.get<ecs::HealOverTime>(player_);
+            const float tRem = hot.duration > 0.001F
+                                   ? std::max(0.0F, 1.0F - hot.elapsed / hot.duration)
+                                   : 0.0F;
+            const float pulse = 0.6F + 0.4F * std::sinf(t * 3.0F);
+            const float baseR = 30.0F + pulse * 8.0F;
+            DrawCircleV(pIso, baseR, Fade({180, 40, 40, 255}, 0.08F * tRem));
+            DrawCircleLinesV(pIso, baseR, Fade({220, 70, 50, 255}, 0.3F * pulse * tRem));
+
+            for (int i = 0; i < 3; ++i) {
+                const float speed = 2.5F + static_cast<float>(i) * 1.3F;
+                const float orbitR = 22.0F + static_cast<float>(i) * 5.0F;
+                const float angle = t * speed + static_cast<float>(i) * 2.094F;
+                const Vector2 dot{pIso.x + std::cosf(angle) * orbitR,
+                                  pIso.y + std::sinf(angle) * orbitR * 0.5F};
+                DrawCircleV(dot, 2.5F, Fade({255, 100, 80, 255}, 0.6F * tRem));
+            }
+        }
+
+        if (registry_.all_of<ecs::ManicEffect>(player_)) {
+            const auto &me = registry_.get<ecs::ManicEffect>(player_);
+            const float tRem = me.duration > 0.001F
+                                   ? std::max(0.0F, 1.0F - me.elapsed / me.duration)
+                                   : 0.0F;
+            const float flicker = 0.5F + 0.5F * std::sinf(t * 12.0F);
+            const float auraR = 28.0F + flicker * 6.0F;
+            DrawCircleV(pIso, auraR, Fade({200, 160, 50, 255}, 0.06F * tRem));
+            for (int ring = 0; ring < 2; ++ring) {
+                const float rr = auraR + static_cast<float>(ring) * 8.0F;
+                const float a = 0.25F * (1.0F - static_cast<float>(ring) * 0.4F) * flicker * tRem;
+                DrawCircleLinesV(pIso, rr, Fade({255, 210, 80, 255}, a));
+            }
+
+            if (registry_.all_of<ecs::Velocity>(player_)) {
+                const auto &vel = registry_.get<ecs::Velocity>(player_);
+                const float speed = std::sqrt(vel.value.x * vel.value.x + vel.value.y * vel.value.y);
+                if (speed > 10.0F) {
+                    const Vector2 velDir{-vel.value.x / speed, -vel.value.y / speed};
+                    const Vector2 velIso = worldToIso(Vector2{velDir.x, velDir.y});
+                    const float vLen = std::sqrt(velIso.x * velIso.x + velIso.y * velIso.y);
+                    const Vector2 trailDir = vLen > 0.001F
+                                                 ? Vector2{velIso.x / vLen, velIso.y / vLen}
+                                                 : Vector2{0.0F, -1.0F};
+                    for (int s = 0; s < 4; ++s) {
+                        const float offset = static_cast<float>(s) * 7.0F + 8.0F;
+                        const float spread = (static_cast<float>(s % 2) - 0.5F) * 10.0F;
+                        const Vector2 perp{-trailDir.y, trailDir.x};
+                        const Vector2 a{pIso.x + trailDir.x * offset + perp.x * spread,
+                                        pIso.y + trailDir.y * offset + perp.y * spread};
+                        const Vector2 b{a.x + trailDir.x * 14.0F, a.y + trailDir.y * 14.0F};
+                        const float la = 0.25F * tRem * (1.0F - static_cast<float>(s) * 0.15F);
+                        DrawLineEx(a, b, 2.0F, Fade({255, 220, 100, 255}, la));
+                    }
+                }
+            }
+        }
+    }
+
+    if (runicShellFlashTimer_ > 0.001F && registry_.valid(player_) &&
+        registry_.all_of<ecs::Transform>(player_)) {
+        const Vector2 pWorld = registry_.get<ecs::Transform>(player_).position;
+        const Vector2 pIso = worldToIso(pWorld);
+        const float progress = 1.0F - runicShellFlashTimer_ / 0.6F;
+        const float ringR = config::RUNIC_SHELL_RADIUS * progress;
+        const float alpha = std::max(0.0F, 1.0F - progress);
+        for (int r = 0; r < 3; ++r) {
+            const float rr = ringR - static_cast<float>(r) * 6.0F;
+            if (rr > 0.0F) {
+                const float thick = 4.0F - static_cast<float>(r) * 1.0F;
+                const float a = alpha * (1.0F - static_cast<float>(r) * 0.25F);
+                DrawRing(pIso, rr - thick * 0.5F, rr + thick * 0.5F, 0.0F, 360.0F, 60,
+                         Fade({130, 180, 255, 255}, a));
+            }
+        }
+        DrawCircleV(pIso, ringR * 0.3F, Fade({200, 220, 255, 255}, alpha * 0.15F));
+    }
+
     drawLootPickupHighlight(resources);
 }
 
@@ -281,6 +365,9 @@ void GameplayScene::tickHealOverTime(float fixedDt) {
     if (!registry_.valid(player_) || !registry_.all_of<ecs::Health>(player_)) {
         return;
     }
+    if (registry_.all_of<ecs::ManicEffect>(player_)) {
+        return;
+    }
     if (!registry_.all_of<ecs::HealOverTime>(player_)) {
         return;
     }
@@ -312,18 +399,30 @@ void GameplayScene::tryUseConsumableSlot(int slotIndex) {
     if (!it.isConsumable) {
         return;
     }
-    if (it.name != "Vial of Pure Blood") {
+    if (it.name == "Vial of Pure Blood") {
+        if (registry_.valid(player_) && registry_.all_of<ecs::ManicEffect>(player_)) {
+            return;
+        }
+        const bool wasHot =
+            registry_.valid(player_) && registry_.all_of<ecs::HealOverTime>(player_);
+        it.stackCount -= 1;
+        if (it.stackCount <= 0) {
+            inventory_.consumableSlots[static_cast<size_t>(slotIndex)] = -1;
+            inventory_.removeItemAtIndex(idx);
+        }
+        applyVialHealOverTime(wasHot);
         return;
     }
-    if (registry_.valid(player_) && registry_.all_of<ecs::HealOverTime>(player_)) {
-        return;
+    if (it.name == "Vial of Cordial Manic") {
+        if (!tryApplyCordialManic()) {
+            return;
+        }
+        it.stackCount -= 1;
+        if (it.stackCount <= 0) {
+            inventory_.consumableSlots[static_cast<size_t>(slotIndex)] = -1;
+            inventory_.removeItemAtIndex(idx);
+        }
     }
-    it.stackCount -= 1;
-    if (it.stackCount <= 0) {
-        inventory_.consumableSlots[static_cast<size_t>(slotIndex)] = -1;
-        inventory_.removeItemAtIndex(idx);
-    }
-    applyVialHealOverTime();
 }
 
 void GameplayScene::tryUseConsumableBagSlot(int bagSlot) {
@@ -338,26 +437,142 @@ void GameplayScene::tryUseConsumableBagSlot(int bagSlot) {
     if (!it.isConsumable) {
         return;
     }
-    if (it.name != "Vial of Pure Blood") {
+    if (it.name == "Vial of Pure Blood") {
+        if (registry_.valid(player_) && registry_.all_of<ecs::ManicEffect>(player_)) {
+            return;
+        }
+        const bool wasHot =
+            registry_.valid(player_) && registry_.all_of<ecs::HealOverTime>(player_);
+        it.stackCount -= 1;
+        if (it.stackCount <= 0) {
+            inventory_.bagSlots[static_cast<size_t>(bagSlot)] = -1;
+            inventory_.removeItemAtIndex(idx);
+        }
+        applyVialHealOverTime(wasHot);
         return;
     }
-    if (registry_.valid(player_) && registry_.all_of<ecs::HealOverTime>(player_)) {
-        return;
+    if (it.name == "Vial of Cordial Manic") {
+        if (!tryApplyCordialManic()) {
+            return;
+        }
+        it.stackCount -= 1;
+        if (it.stackCount <= 0) {
+            inventory_.bagSlots[static_cast<size_t>(bagSlot)] = -1;
+            inventory_.removeItemAtIndex(idx);
+        }
     }
-    it.stackCount -= 1;
-    if (it.stackCount <= 0) {
-        inventory_.bagSlots[static_cast<size_t>(bagSlot)] = -1;
-        inventory_.removeItemAtIndex(idx);
-    }
-    applyVialHealOverTime();
 }
 
-void GameplayScene::applyVialHealOverTime() {
+void GameplayScene::applyVialHealOverTime(bool wasAlreadyActive) {
     if (!registry_.valid(player_)) {
         return;
     }
+    if (wasAlreadyActive) {
+        hotRefreshFlashTimer_ = 0.35F;
+    }
     registry_.emplace_or_replace<ecs::HealOverTime>(
         player_, ecs::HealOverTime{config::HOT_TOTAL_HEAL, config::HOT_DURATION, 0.0F, 0.0F});
+}
+
+bool GameplayScene::tryApplyCordialManic() {
+    if (!registry_.valid(player_) || !registry_.all_of<ecs::Health>(player_)) {
+        return false;
+    }
+    auto &hp = registry_.get<ecs::Health>(player_);
+    if (hp.max > 0.001F &&
+        hp.current + 1.0e-4F < config::MANIC_MIN_HP_FRACTION * hp.max) {
+        return false;
+    }
+    const float drainTotal = hp.max * config::MANIC_HP_DRAIN_PERCENT;
+    registry_.emplace_or_replace<ecs::ManicEffect>(
+        player_, ecs::ManicEffect{config::MANIC_DURATION, 0.0F, drainTotal, 0.0F});
+    if (registry_.all_of<ecs::HealOverTime>(player_)) {
+        registry_.remove<ecs::HealOverTime>(player_);
+    }
+    return true;
+}
+
+void GameplayScene::tickManicEffect(float fixedDt) {
+    if (!registry_.valid(player_) || !registry_.all_of<ecs::ManicEffect, ecs::Health>(player_)) {
+        return;
+    }
+    auto &me = registry_.get<ecs::ManicEffect>(player_);
+    auto &hp = registry_.get<ecs::Health>(player_);
+    me.elapsed += fixedDt;
+    const float rate = me.duration > 0.001F ? me.hpDrainTotal / me.duration : 0.0F;
+    float add = rate * fixedDt;
+    const float remaining = me.hpDrainTotal - me.hpDrained;
+    if (add > remaining) {
+        add = remaining;
+    }
+    if (add > 0.0F) {
+        me.hpDrained += add;
+        hp.current = std::max(0.0F, hp.current - add);
+    }
+    if (me.elapsed >= me.duration - 1.0e-4F ||
+        me.hpDrained >= me.hpDrainTotal - 1.0e-3F) {
+        registry_.remove<ecs::ManicEffect>(player_);
+    }
+}
+
+void GameplayScene::tickRunicShellCooldown(float fixedDt) {
+    if (!registry_.valid(player_) || !registry_.all_of<ecs::RunicShellCooldown>(player_)) {
+        return;
+    }
+    auto &cd = registry_.get<ecs::RunicShellCooldown>(player_);
+    cd.remaining -= fixedDt;
+    if (cd.remaining <= 0.0F) {
+        registry_.remove<ecs::RunicShellCooldown>(player_);
+    }
+}
+
+void GameplayScene::checkRunicShellTrigger() {
+    if (!registry_.valid(player_) || !registry_.all_of<ecs::Health, ecs::Transform>(player_)) {
+        return;
+    }
+    const int armorIdx = inventory_.equipped[static_cast<size_t>(EquipSlot::Armor)];
+    if (armorIdx < 0 || armorIdx >= static_cast<int>(inventory_.items.size())) {
+        return;
+    }
+    if (inventory_.items[static_cast<size_t>(armorIdx)].name != "Runic Shell") {
+        return;
+    }
+    if (registry_.all_of<ecs::RunicShellCooldown>(player_)) {
+        return;
+    }
+    const auto &hp = registry_.get<ecs::Health>(player_);
+    if (hp.max < 0.001F || hp.current > config::RUNIC_SHELL_HP_THRESHOLD * hp.max) {
+        return;
+    }
+
+    const auto &pt = registry_.get<ecs::Transform>(player_);
+    const float radiusSq = config::RUNIC_SHELL_RADIUS * config::RUNIC_SHELL_RADIUS;
+    const auto enemies = registry_.view<ecs::Enemy, ecs::Transform, ecs::Health>();
+    for (const auto e : enemies) {
+        const auto &et = registry_.get<ecs::Transform>(e);
+        const float dx = et.position.x - pt.position.x;
+        const float dy = et.position.y - pt.position.y;
+        if (dx * dx + dy * dy > radiusSq) {
+            continue;
+        }
+        auto &eh = registry_.get<ecs::Health>(e);
+        eh.current -= config::RUNIC_SHELL_DAMAGE;
+
+        const float dist = std::sqrt(dx * dx + dy * dy);
+        if (dist > 0.001F) {
+            auto &vel = registry_.get_or_emplace<ecs::Velocity>(e);
+            vel.value.x = (dx / dist) * config::RUNIC_SHELL_KNOCKBACK;
+            vel.value.y = (dy / dist) * config::RUNIC_SHELL_KNOCKBACK;
+            registry_.emplace_or_replace<ecs::KnockbackState>(
+                e, ecs::KnockbackState{config::KNOCKBACK_DURATION * 1.5F, 0.0F});
+        }
+    }
+
+    auto &hpMut = registry_.get<ecs::Health>(player_);
+    hpMut.current = std::min(hpMut.max, hpMut.current + config::RUNIC_SHELL_HEAL);
+    registry_.emplace_or_replace<ecs::RunicShellCooldown>(
+        player_, ecs::RunicShellCooldown{config::RUNIC_SHELL_COOLDOWN, config::RUNIC_SHELL_COOLDOWN});
+    runicShellFlashTimer_ = 0.6F;
 }
 
 void GameplayScene::spawnItemPickupAtPlayer(int itemIndex) {
@@ -406,6 +621,8 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
     noManaFlashTimer_ = std::max(0.0F, noManaFlashTimer_ - frameDt);
     inventoryFullFlashTimer_ = std::max(0.0F, inventoryFullFlashTimer_ - frameDt);
     damageFlashTimer_ = std::max(0.0F, damageFlashTimer_ - frameDt);
+    hotRefreshFlashTimer_ = std::max(0.0F, hotRefreshFlashTimer_ - frameDt);
+    runicShellFlashTimer_ = std::max(0.0F, runicShellFlashTimer_ - frameDt);
 
     if (gameOver_) {
         const Vector2 mouse = input.mousePosition();
@@ -429,13 +646,18 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
 
     if (input.isKeyPressed(KEY_TAB)) {
         if (!paused_) {
+            const bool wasOpen = inventoryUi_.isOpen();
             inventoryUi_.toggle();
+            if (wasOpen && !inventoryUi_.isOpen()) {
+                aimScreenPos_ = input.mousePosition();
+            }
         }
     }
 
     if (inventoryUi_.isOpen()) {
         if (input.isKeyPressed(KEY_ESCAPE)) {
             inventoryUi_.setOpen(false);
+            aimScreenPos_ = input.mousePosition();
         } else {
             const ui::InventoryAction invAction = inventoryUi_.update(input, inventory_);
             if (invAction.type == ui::InventoryAction::Drop) {
@@ -516,24 +738,36 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
             melee.swingIndex = 0;
             melee.hitAppliedThisSwing = false;
         }
-        ecs::enemy_ai_system(registry_, config::FIXED_DT);
+        ecs::enemy_ai_system(registry_, config::FIXED_DT, player_, &inventory_);
         ecs::movement_system(registry_, config::FIXED_DT);
         ecs::wall_resolve_collisions(registry_);
         ecs::unit_resolve_collisions(registry_);
         ecs::wall_destroy_projectiles(registry_);
         ecs::projectile_system(registry_, config::FIXED_DT);
-        ecs::collision::projectile_hits(registry_);
+        ecs::collision::projectile_hits(registry_, player_, &inventory_);
         ecs::collision::player_pickup_mana_shards(registry_, player_);
         ecs::death_system(registry_, player_, &enemiesSlain_);
+        tickManicEffect(config::FIXED_DT);
         tickHealOverTime(config::FIXED_DT);
+        tickRunicShellCooldown(config::FIXED_DT);
+        checkRunicShellTrigger();
 
-        // Passive regen based on the selected class.
-        if (registry_.valid(player_) && registry_.all_of<ecs::Health, ecs::Mana>(player_)) {
+        // Passive regen based on the selected class (+ equipment); blocked during ManicEffect.
+        if (registry_.valid(player_) && registry_.all_of<ecs::Health, ecs::Mana>(player_) &&
+            !registry_.all_of<ecs::ManicEffect>(player_)) {
             const int ci = std::clamp(selectedClass_, 0, CLASS_COUNT - 1);
             const auto &cls = AVAILABLE_CLASSES[static_cast<size_t>(ci)];
             auto &hp2 = registry_.get<ecs::Health>(player_);
             auto &mp = registry_.get<ecs::Mana>(player_);
-            hp2.current = std::min(hp2.max, hp2.current + cls.hpRegen * config::FIXED_DT);
+            hp2.current = std::min(
+                hp2.max, hp2.current + cls.hpRegen * config::FIXED_DT +
+                             inventory_.totalEquippedHpRegenBonus() * config::FIXED_DT);
+            mp.current = std::min(mp.max, mp.current + cls.manaRegen * config::FIXED_DT);
+        } else if (registry_.valid(player_) && registry_.all_of<ecs::Mana>(player_) &&
+                   registry_.all_of<ecs::ManicEffect>(player_)) {
+            auto &mp = registry_.get<ecs::Mana>(player_);
+            const int ci = std::clamp(selectedClass_, 0, CLASS_COUNT - 1);
+            const auto &cls = AVAILABLE_CLASSES[static_cast<size_t>(ci)];
             mp.current = std::min(mp.max, mp.current + cls.manaRegen * config::FIXED_DT);
         }
     }
@@ -558,7 +792,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
     if (!invOpen) {
         if (registry_.valid(player_) && registry_.all_of<ecs::Transform>(player_)) {
             const Vector2 ppos = registry_.get<ecs::Transform>(player_).position;
-            const Vector2 wm = worldMouseFromScreen(input.mousePosition());
+            const Vector2 wm = worldMouseFromScreen(aimScreenPos_);
             hoveredPickup_ = ecs::collision::find_item_pickup_hover_in_range(
                 registry_, ppos, wm, config::LOOT_PICKUP_RANGE);
             if (!registry_.valid(hoveredPickup_)) {
@@ -658,7 +892,20 @@ void GameplayScene::draw(ResourceManager &resources) {
     drawHud(resources);
     drawFlashMessages(resources);
 
-    inventoryUi_.draw(resources.uiFont(), resources, w, h, inventory_);
+    float hpRatioDraw = 1.0F;
+    if (registry_.valid(player_) && registry_.all_of<ecs::Health>(player_)) {
+        const auto &hp = registry_.get<ecs::Health>(player_);
+        hpRatioDraw = hp.max > 0.001F ? hp.current / hp.max : 0.0F;
+    }
+    float rscdRatio = 0.0F;
+    float rscdSeconds = 0.0F;
+    if (registry_.valid(player_) && registry_.all_of<ecs::RunicShellCooldown>(player_)) {
+        const auto &cd = registry_.get<ecs::RunicShellCooldown>(player_);
+        rscdRatio = cd.total > 0.001F ? cd.remaining / cd.total : 0.0F;
+        rscdSeconds = cd.remaining;
+    }
+    inventoryUi_.draw(resources.uiFont(), resources, w, h, inventory_, hpRatioDraw,
+                      rscdRatio, rscdSeconds);
 
     drawLootProximityPrompt(resources);
 
@@ -845,7 +1092,9 @@ void GameplayScene::drawHud(ResourceManager &resources) {
     const float hpBarTop = hudBottom - barMpH - barGap - barHpH;
     const float icon = 28.0F;
     const bool hotActive = registry_.all_of<ecs::HealOverTime>(player_);
-    const float iconLift = hotActive ? icon + 10.0F : 0.0F;
+    const bool manicActive = registry_.all_of<ecs::ManicEffect>(player_);
+    const int statusIconCount = (hotActive ? 1 : 0) + (manicActive ? 1 : 0);
+    const float iconLift = statusIconCount > 0 ? icon + 10.0F : 0.0F;
 
     const float hudPad = 8.0F;
     const float hudLeft = margin;
@@ -888,16 +1137,20 @@ void GameplayScene::drawHud(ResourceManager &resources) {
                {barX + (barW - hpDim.x) * 0.5F, hpBarTop + (barHpH - hpDim.y) * 0.5F}, hpTextSize,
                1.0F, RAYWHITE);
 
-    // Passive regen indicator (e.g., "+1.0").
-    if (cls.hpRegen > 0.001F) {
-        char regenBuf[32];
-        std::snprintf(regenBuf, sizeof(regenBuf), "+%.1f", static_cast<double>(cls.hpRegen));
-        const float regenSz = 13.0F;
-        const Vector2 regenDim = MeasureTextEx(font, regenBuf, regenSz, 1.0F);
-        DrawTextEx(font, regenBuf,
-                   {barX + barW - regenDim.x - 4.0F,
-                    hpBarTop + (barHpH - regenDim.y) * 0.5F},
-                   regenSz, 1.0F, ui::theme::LABEL_TEXT);
+    // Passive regen indicator (class + equipment); hidden during ManicEffect.
+    {
+        const float eqRg = inventory_.totalEquippedHpRegenBonus();
+        const float totalRg = cls.hpRegen + eqRg;
+        if (totalRg > 0.001F && !registry_.all_of<ecs::ManicEffect>(player_)) {
+            char regenBuf[32];
+            std::snprintf(regenBuf, sizeof(regenBuf), "+%.1f", static_cast<double>(totalRg));
+            const float regenSz = 13.0F;
+            const Vector2 regenDim = MeasureTextEx(font, regenBuf, regenSz, 1.0F);
+            DrawTextEx(font, regenBuf,
+                       {barX + barW - regenDim.x - 4.0F,
+                        hpBarTop + (barHpH - regenDim.y) * 0.5F},
+                       regenSz, 1.0F, ui::theme::LABEL_TEXT);
+        }
     }
 
     const float mpBarTop = hpBarTop + barHpH + barGap;
@@ -967,6 +1220,14 @@ void GameplayScene::drawHud(ResourceManager &resources) {
                     const float iy = slotY + ip + (maxH - dh) * 0.5F;
                     const Rectangle dst{ix, iy, dw, dh};
                     DrawTexturePro(tex, src, dst, {0.0F, 0.0F}, 0.0F, WHITE);
+                    if (it.name == "Vial of Cordial Manic" &&
+                        hpRatio < config::MANIC_MIN_HP_FRACTION - 1.0e-4F) {
+                        const float m = 5.0F;
+                        DrawLineEx({ix + m, iy + m}, {ix + dw - m, iy + dh - m}, 3.0F,
+                                   Fade(RED, 210));
+                        DrawLineEx({ix + m, iy + dh - m}, {ix + dw - m, iy + m}, 3.0F,
+                                   Fade(RED, 210));
+                    }
                 }
             }
 
@@ -978,68 +1239,88 @@ void GameplayScene::drawHud(ResourceManager &resources) {
         }
     }
 
+    auto drawStatusTimerSquare = [](float ix, float iy, float iconSz, float tRem, Color fill,
+                                    Color border, Color ringCol) {
+        DrawRectangle(static_cast<int>(ix), static_cast<int>(iy), static_cast<int>(iconSz),
+                      static_cast<int>(iconSz), fill);
+        DrawRectangleLines(static_cast<int>(ix), static_cast<int>(iy), static_cast<int>(iconSz),
+                           static_cast<int>(iconSz), border);
+        if (tRem <= 0.001F) {
+            return;
+        }
+        const float x0 = ix - 2.5F;
+        const float y0 = iy - 2.5F;
+        const float x1 = ix + iconSz + 2.5F;
+        const float y1 = iy + iconSz + 2.5F;
+        const float perimeter = (x1 - x0) * 2.0F + (y1 - y0) * 2.0F;
+        float skipDist = (1.0F - tRem) * perimeter;
+        float drawBudget = tRem * perimeter;
+        const float thickness = 3.5F;
+        const Color col = Fade(ringCol, 0.85F);
+
+        auto processSeg = [&](Vector2 a, Vector2 b) {
+            Vector2 d{b.x - a.x, b.y - a.y};
+            float len = std::sqrt(d.x * d.x + d.y * d.y);
+            if (len <= 0.001F) {
+                return;
+            }
+            if (skipDist > 0.0F) {
+                if (skipDist >= len) {
+                    skipDist -= len;
+                    return;
+                }
+                const float u = skipDist / len;
+                a = {a.x + d.x * u, a.y + d.y * u};
+                d = {b.x - a.x, b.y - a.y};
+                len = std::sqrt(d.x * d.x + d.y * d.y);
+                skipDist = 0.0F;
+                if (len <= 0.001F) {
+                    return;
+                }
+            }
+            if (drawBudget <= 0.0F) {
+                return;
+            }
+            if (drawBudget >= len) {
+                DrawLineEx(a, b, thickness, col);
+                drawBudget -= len;
+                return;
+            }
+            const float tPart = drawBudget / len;
+            DrawLineEx(a, {a.x + d.x * tPart, a.y + d.y * tPart}, thickness, col);
+            drawBudget = 0.0F;
+        };
+
+        const Vector2 topMid{(x0 + x1) * 0.5F, y0};
+        processSeg(topMid, {x1, y0});
+        processSeg({x1, y0}, {x1, y1});
+        processSeg({x1, y1}, {x0, y1});
+        processSeg({x0, y1}, {x0, y0});
+        processSeg({x0, y0}, topMid);
+    };
+
+    float statusX = barX;
+    const float statusY = hpBarTop - icon - 8.0F;
     if (hotActive) {
         const auto &hot = registry_.get<ecs::HealOverTime>(player_);
         const float tRem =
             hot.duration > 0.001F ? std::max(0.0F, 1.0F - hot.elapsed / hot.duration) : 0.0F;
-        const float ix = barX;
-        const float iy = hpBarTop - icon - 8.0F;
-        DrawRectangle(static_cast<int>(ix), static_cast<int>(iy), static_cast<int>(icon),
-                      static_cast<int>(icon), {120, 20, 30, 255});
-        DrawRectangleLines(static_cast<int>(ix), static_cast<int>(iy), static_cast<int>(icon),
-                           static_cast<int>(icon), {220, 80, 80, 255});
-        if (tRem > 0.001F) {
-            const float x0 = ix - 2.5F;
-            const float y0 = iy - 2.5F;
-            const float x1 = ix + icon + 2.5F;
-            const float y1 = iy + icon + 2.5F;
-            const float perimeter = (x1 - x0) * 2.0F + (y1 - y0) * 2.0F;
-            // Clockwise path from 12 o'clock; skip the "expired" prefix so the gap grows clockwise.
-            float skipDist = (1.0F - tRem) * perimeter;
-            float drawBudget = tRem * perimeter;
-            const float thickness = 3.5F;
-            const Color col = Fade({255, 200, 120, 255}, 0.85F);
-
-            auto processSeg = [&](Vector2 a, Vector2 b) {
-                Vector2 d{b.x - a.x, b.y - a.y};
-                float len = std::sqrt(d.x * d.x + d.y * d.y);
-                if (len <= 0.001F) {
-                    return;
-                }
-                if (skipDist > 0.0F) {
-                    if (skipDist >= len) {
-                        skipDist -= len;
-                        return;
-                    }
-                    const float u = skipDist / len;
-                    a = {a.x + d.x * u, a.y + d.y * u};
-                    d = {b.x - a.x, b.y - a.y};
-                    len = std::sqrt(d.x * d.x + d.y * d.y);
-                    skipDist = 0.0F;
-                    if (len <= 0.001F) {
-                        return;
-                    }
-                }
-                if (drawBudget <= 0.0F) {
-                    return;
-                }
-                if (drawBudget >= len) {
-                    DrawLineEx(a, b, thickness, col);
-                    drawBudget -= len;
-                    return;
-                }
-                const float t = drawBudget / len;
-                DrawLineEx(a, {a.x + d.x * t, a.y + d.y * t}, thickness, col);
-                drawBudget = 0.0F;
-            };
-
-            const Vector2 topMid{(x0 + x1) * 0.5F, y0};
-            processSeg(topMid, {x1, y0});
-            processSeg({x1, y0}, {x1, y1});
-            processSeg({x1, y1}, {x0, y1});
-            processSeg({x0, y1}, {x0, y0});
-            processSeg({x0, y0}, topMid);
+        drawStatusTimerSquare(statusX, statusY, icon, tRem, {120, 20, 30, 255}, {220, 80, 80, 255},
+                              {255, 200, 120, 255});
+        if (hotRefreshFlashTimer_ > 0.001F) {
+            const float flashA = std::min(1.0F, hotRefreshFlashTimer_ * 5.0F);
+            DrawRectangle(static_cast<int>(statusX), static_cast<int>(statusY),
+                          static_cast<int>(icon), static_cast<int>(icon),
+                          Fade(WHITE, 0.4F * flashA));
         }
+        statusX += icon + 6.0F;
+    }
+    if (manicActive) {
+        const auto &me = registry_.get<ecs::ManicEffect>(player_);
+        const float tRem =
+            me.duration > 0.001F ? std::max(0.0F, 1.0F - me.elapsed / me.duration) : 0.0F;
+        drawStatusTimerSquare(statusX, statusY, icon, tRem, {160, 110, 40, 255},
+                              {255, 210, 120, 255}, {255, 245, 180, 255});
     }
 
     (void)w;

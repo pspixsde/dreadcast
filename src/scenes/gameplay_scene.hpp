@@ -34,9 +34,13 @@ class GameplayScene final : public Scene {
     void spawnWalls(const MapData &map);
     void applyPlayerMaxHpFromEquipment();
     void tickHealOverTime(float fixedDt);
+    void tickManicEffect(float fixedDt);
+    void tickRunicShellCooldown(float fixedDt);
+    void checkRunicShellTrigger();
     void tryUseConsumableSlot(int slotIndex);
     void tryUseConsumableBagSlot(int bagSlot);
-    void applyVialHealOverTime();
+    void applyVialHealOverTime(bool wasAlreadyActive);
+    [[nodiscard]] bool tryApplyCordialManic();
     [[nodiscard]] Vector2 worldMouseFromScreen(const Vector2 &screenMouse) const;
 
     void drawHud(ResourceManager &resources);
@@ -78,6 +82,8 @@ class GameplayScene final : public Scene {
     float inventoryFullFlashTimer_{0.0F};
     float damageFlashTimer_{0.0F};
     float prevPlayerHp_{100.0F};
+    float hotRefreshFlashTimer_{0.0F};
+    float runicShellFlashTimer_{0.0F};
 
     int selectedClass_{0};
     int enemiesSlain_{0};

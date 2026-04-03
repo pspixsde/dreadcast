@@ -36,7 +36,9 @@ class EditorScene final : public Scene {
     [[nodiscard]] Vector2 worldMouseFromScreen(const Vector2 &screenMouse) const;
     [[nodiscard]] Selection pickSelection(const Vector2 &worldMouse) const;
     [[nodiscard]] Rectangle toolbarPanelRect() const;
-    [[nodiscard]] bool isMouseOverToolbar(Vector2 screenMouse) const;
+    /// Hit target for blocking world clicks (includes dropdown column past the panel edge).
+    [[nodiscard]] Rectangle editorUiHitRect() const;
+    [[nodiscard]] bool isMouseOverEditorUi(Vector2 screenMouse) const;
     [[nodiscard]] ResizeHandle wallHandleAt(const Vector2 &worldMouse, const WallData &w) const;
     void drawWorldGrid() const;
     void drawToolbar(const Font &font, Vector2 mouse);
@@ -73,13 +75,13 @@ class EditorScene final : public Scene {
     ui::Button saveButton_{};
     ui::Button loadButton_{};
     ui::Button backButton_{};
-    ui::Button enemyTypeButton_{};
-    ui::Button itemTypeButton_{};
+    bool enemyDropdownOpen_{false};
+    bool itemDropdownOpen_{false};
     ui::Button mapPrevButton_{};
     ui::Button mapNextButton_{};
     ui::Button mapNewButton_{};
     int selectedEnemyType_{0};
-    /// 0 = iron armor, 1 = vial of pure blood (see `ItemSpawnData::kind`).
+    /// Index into item kind table (see `handlePlacement` / `ItemSpawnData::kind`).
     int selectedItemKind_{0};
 
     std::vector<std::string> mapFiles_{};

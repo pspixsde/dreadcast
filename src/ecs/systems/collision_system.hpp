@@ -11,7 +11,8 @@ namespace ecs {
 
 namespace collision {
 
-void projectile_hits(entt::registry &registry);
+void projectile_hits(entt::registry &registry, entt::entity playerEntity,
+                     dreadcast::InventoryState *inventory);
 
 void player_pickup_mana_shards(entt::registry &registry, entt::entity player);
 

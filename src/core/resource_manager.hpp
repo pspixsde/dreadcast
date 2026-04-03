@@ -12,11 +12,16 @@ struct GameSettings {
     bool showFpsCounter{true};
     /// Multiplier on aim vector from player screen position (0.1–3.0 typical).
     float mouseSensitivity{1.0F};
+
+    [[nodiscard]] bool saveToFile(const std::string &path) const;
+    /// Loads from `path` if present; ignores missing file / parse errors.
+    void loadFromFile(const std::string &path);
 };
 
 /// Centralized texture, sound, and UI font loading.
 class ResourceManager {
   public:
+    ResourceManager();
     ~ResourceManager();
 
     Texture2D getTexture(const std::string &path);

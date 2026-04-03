@@ -29,7 +29,8 @@ Rectangle spriteWorldBounds(const Transform &t, const Sprite &s) {
 
 } // namespace
 
-void projectile_hits(entt::registry &registry) {
+void projectile_hits(entt::registry &registry, entt::entity playerEntity,
+                       dreadcast::InventoryState *inventory) {
     std::vector<entt::entity> projectiles;
     for (const auto e : registry.view<Projectile, Transform, Sprite>()) {
         projectiles.push_back(e);
@@ -53,25 +54,35 @@ void projectile_hits(entt::registry &registry) {
                 if (circleRectOverlap(center, std::max(radius, config::PROJECTILE_RADIUS), rect)) {
                     auto &hp = registry.get<Health>(target);
                     hp.current -= proj.damage;
+                    if (registry.all_of<Agitation>(target)) {
+                        registry.get<Agitation>(target).agitationRange += 100.0F;
+                    }
                     registry.destroy(projEntity);
                     break;
                 }
             }
         } else {
-            entt::entity playerEntity = entt::null;
-            for (const auto pe : registry.view<Player>()) {
-                playerEntity = pe;
-                break;
-            }
-            if (playerEntity != entt::null &&
+            if (registry.valid(playerEntity) &&
                 registry.all_of<Transform, Sprite, Health>(playerEntity)) {
                 const auto &tt = registry.get<Transform>(playerEntity);
                 const auto &ts = registry.get<Sprite>(playerEntity);
                 const Rectangle rect = spriteWorldBounds(tt, ts);
                 if (circleRectOverlap(center, std::max(radius, config::PROJECTILE_RADIUS), rect)) {
+                    if (registry.all_of<ManicEffect>(playerEntity)) {
+                        registry.destroy(projEntity);
+                        continue;
+                    }
                     auto &hp = registry.get<Health>(playerEntity);
-                    hp.current -= proj.damage;
+                    const float dealt = proj.damage;
+                    hp.current -= dealt;
                     registry.destroy(projEntity);
+                    const float rf =
+                        inventory ? inventory->totalEquippedDamageReflect() : 0.0F;
+                    if (rf > 0.001F && registry.valid(proj.source) &&
+                        registry.all_of<Health>(proj.source)) {
+                        auto &sh = registry.get<Health>(proj.source);
+                        sh.current -= dealt * rf;
+                    }
                 }
             }
         }

@@ -8,19 +8,33 @@ namespace dreadcast {
 
 enum class EquipSlot { Armor, Amulet, Ring, COUNT };
 
-/// Rarity tier (gear uses Tarnished…Abyssal naming; consumable vials use Clouded… tiers).
-enum class ItemRarity : uint8_t { Common = 0, Uncommon, Rare, Epic, Legendary, Special };
+/// Equippable rarities: Tarnished … Abyssal. Consumable rarities: Clouded … Special (distinct names).
+enum class ItemRarity : uint8_t {
+    Tarnished = 0,
+    Blighted,
+    Cursed,
+    Dread,
+    Abyssal,
+    Clouded,
+    Lucid,
+    Absolute,
+    Special
+};
 
 struct ItemData {
     std::string name;
     std::string iconPath{};
     EquipSlot slot{EquipSlot::Armor};
-    ItemRarity rarity{ItemRarity::Common};
+    ItemRarity rarity{ItemRarity::Tarnished};
     bool isConsumable{false};
     bool isStackable{false};
     int maxStack{1};
     int stackCount{1};
     float maxHpBonus{0.0F};
+    /// Passive HP/s while equipped (armor etc.).
+    float hpRegenBonus{0.0F};
+    /// Fraction of incoming damage reflected to attacker (instant, not projectile).
+    float damageReflectPercent{0.0F};
     std::string description{};
 
     [[nodiscard]] bool canStackWith(const ItemData &other) const {
@@ -76,6 +90,30 @@ struct InventoryState {
             const int idx = equipped[i];
             if (idx >= 0 && idx < static_cast<int>(items.size())) {
                 sum += items[static_cast<size_t>(idx)].maxHpBonus;
+            }
+        }
+        return sum;
+    }
+
+    /// Sum of `hpRegenBonus` from all equipped items.
+    [[nodiscard]] float totalEquippedHpRegenBonus() const {
+        float sum = 0.0F;
+        for (size_t i = 0; i < equipped.size(); ++i) {
+            const int idx = equipped[i];
+            if (idx >= 0 && idx < static_cast<int>(items.size())) {
+                sum += items[static_cast<size_t>(idx)].hpRegenBonus;
+            }
+        }
+        return sum;
+    }
+
+    /// Max damage reflect fraction from equipped items (single armor slot expected; sum if stacked).
+    [[nodiscard]] float totalEquippedDamageReflect() const {
+        float sum = 0.0F;
+        for (size_t i = 0; i < equipped.size(); ++i) {
+            const int idx = equipped[i];
+            if (idx >= 0 && idx < static_cast<int>(items.size())) {
+                sum += items[static_cast<size_t>(idx)].damageReflectPercent;
             }
         }
         return sum;

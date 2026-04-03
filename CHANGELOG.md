@@ -2,6 +2,52 @@
 
 All notable changes to **Dreadcast** will be documented in this file.
 
+## v0.9.1 — 2026-04-03
+
+### Added
+
+- **Runic Shell** armor (`runic_shell` map kind): **Cursed** rarity; **+25 Max HP**; when HP drops below **30%**, releases an energy shockwave dealing **30 damage** and knockback to nearby enemies, then heals **30 HP**. **30s** cooldown with timer overlay on the inventory icon. Expanding ring VFX on activation. Icon: `assets/textures/items/runic_shell_icon.png`.
+- **Vial visual effects:** **Vial of Pure Blood** (HOT active) — pulsing crimson glow ring and orbiting particles around the player. **Vial of Cordial Manic** — golden flickering energy aura with trailing speed lines while moving.
+- **`ecs::KnockbackState`** component: enemies skip AI and decelerate during knockback; melee strikes now set velocity directly for a visible, consistent push.
+- **`ecs::RunicShellCooldown`** component for tracking the triggered armor ability.
+- **Enemy AI — stuck detection:** Enemies track displacement over time; when stuck against a wall for **0.25s**, AI steers perpendicular to slide around the obstruction via wall-avoidance raycasts.
+- **Enemy rule — damage boosts aggro:** Any player damage (melee or projectile) to an enemy increases its **agitation range by 100** (permanent per hit).
+- **Equip slot icons:** Empty Armor, Amulet, and Ring slots display centered **512×512** PNG icons (black-on-transparent, tinted to match UI) instead of text labels. Icons: `assets/textures/ui/armor_slot.png`, `amulet_slot.png`, `ring_slot.png`.
+- **Bag stack count:** Stackable consumables in bag slots now show their stack count in the lower-right corner (same style as consumable slots).
+
+### Changed
+
+- **Melee knockback:** Base knockback force increased from **200** to **350**; knockback now **sets** enemy velocity (not additive) and applies a `KnockbackState` that freezes enemy AI for **0.25s** with friction decay, making the push visually clear and preventing enemies from immediately resuming movement.
+- **Imp speed:** `IMP_ADVANCE_SPEED` increased from **75** to **100**; `IMP_KITE_SPEED` increased from **120** to **145**.
+- **Editor item picker:** Dropdown now includes **Runic Shell** (5 item kinds total).
+
+### Fixed
+
+- **Item pickup cursor mismatch:** Loot hover detection now uses the virtual aim cursor position (`aimScreenPos_`) instead of the raw OS mouse, matching where the crosshair is visually drawn. Closing the inventory syncs `aimScreenPos_` to the current mouse position, preventing items on the ground from becoming un-hoverable or having shifted hit zones after inventory use.
+
+## v0.9.0 — 2026-04-03
+
+### Added
+
+- **Settings → Gameplay:** **Save** writes `settings.cfg` (mouse sensitivity + FPS toggle); **Reset** restores default `GameSettings`. Settings load from disk when the game starts (`ResourceManager` constructor).
+- **Barbed Tunic** armor (`barbed_tunic` map kind): **Blighted** rarity; **+0.3 HP/s** and **10%** incoming damage reflected instantly to the attacker (projectiles track source entity; hellhound melee reflects to self). Icon: `assets/textures/items/barbed_tunic_icon.png`.
+- **Vial of Cordial Manic** (`vial_cordial_manic`): **Lucid** rarity (stack **3**); **7s** effect — **2×** move speed, **invulnerability** vs enemies, **no HP regen** (class + gear + heal-over-time blocked), linear **40% max HP** self-drain; unusable below **40%** current HP (**red X** on HUD + inventory icon). HUD status icon with timer. Icon: `assets/textures/items/vial_cordial_manic_icon.png`.
+- **`ecs::ManicEffect`** player component; **`Projectile::source`** for reflect attribution.
+- **`GameCamera::syncFollowFromCamera()`** for editor grip / direct target edits.
+
+### Changed
+
+- **Rarity model:** Single set of names — equippable: **Tarnished, Blighted, Cursed, Dread, Abyssal**; consumable: **Clouded, Lucid, Absolute, Special**. No separate “Common/Uncommon” labels. Consumable stack caps: **Clouded 5**, **Lucid 3**, **Absolute 1**, **Special 1** (`maxStackForConsumableRarity`). Tooltip rarity line is the name only; inventory **(i)** panel lists tiers + blurbs (with stack hints for vials). Item descriptions trimmed to mechanics (no duplicate rarity flavor in item text).
+- **Inventory slots:** Rarity-colored **tint** fills slot behind centered **7:5** icons (equippable + consumable colors per plan).
+- **Vial of Pure Blood:** **Clouded**; using again while HOT is active **refreshes** the effect; brief **white flash** on the HOT HUD icon.
+- **Editor:** Wider **UI hit rect** blocks world placement when clicking dropdowns; **Enemy** and **Item** pickers are **dropdowns** (items: Iron Armor, Pure Blood, Cordial Manic, Barbed Tunic). **Middle-mouse** pan updates the camera target **directly** (no lerp drift).
+- **`ItemData`:** `hpRegenBonus`, `damageReflectPercent`; **`InventoryState::totalEquippedHpRegenBonus`**, **`totalEquippedDamageReflect`**.
+- **Passive HP regen HUD** shows class + equipment total (hidden during Cordial Manic).
+
+### Fixed
+
+- **Editor:** Toolbar-adjacent **type controls** no longer cause **click pass-through** to the world.
+
 ## v0.8.0 — 2026-04-01
 
 ### Added
@@ -225,10 +271,6 @@ All notable changes to **Dreadcast** will be documented in this file.
 - **Input:** `SetExitKey(KEY_NULL)` so **Esc** no longer closes the window (Raylib’s default). Esc is used for pause / closing the inventory; the window still closes with the **X** button or **Quit** on the main menu.
 - **Font:** Bundled `assets/fonts/Cinzel.ttf` (was missing, so Raylib fell back to the default bitmap font). `ResourceManager` resolves the font relative to the **current working directory** or **next to the executable** after the CMake `assets/` copy.
 
-### Removed
-
-- N/A
-
 ## v0.0.0 — 2026-03-22
 
 ### Added
@@ -243,14 +285,6 @@ All notable changes to **Dreadcast** will be documented in this file.
 - **Application:** `Game` (window, `InitAudioDevice`, `SetTargetFPS`, main loop, scene updates/draw, teardown); `main.cpp` entry point.
 - **Git:** repository initialized in the project directory.
 
-### Changed
-
-- N/A (initial release)
-
 ### Fixed
 
 - **Build:** `menu_scene.cpp` and `gameplay_scene.cpp` now include `core/input.hpp` so `InputManager` is a complete type when calling `isKeyPressed` (fixes incomplete-type errors with strict toolchains, e.g. Clang).
-
-### Removed
-
-- N/A (initial release)
