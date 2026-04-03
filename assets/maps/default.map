@@ -19,5 +19,7 @@ ENEMY 340.605 -102.077 hellhound
 ENEMY 513.975 -275.447 hellhound
 ITEM -243 7 iron_armor
 ITEM -225.5 -92.5 vial_pure_blood
-ITEM -223.995 -164.733 vial_pure_blood
+ITEM -275.342 -65.6278 vial_cordial_manic
+ITEM -275.342 -144.006 barbed_tunic
+ITEM -225.5 -182.5 runic_shell
 CASKET 1154.29 -52.8571

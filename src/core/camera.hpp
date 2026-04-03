@@ -16,6 +16,12 @@ class GameCamera {
 
     void setLerpSpeed(float s) { lerpSpeed_ = s; }
 
+    /// After mutating `camera().target` directly (e.g. editor grip), keep lerp target in sync.
+    void syncFollowFromCamera() {
+        target_.x = cam_.target.x;
+        target_.y = cam_.target.y;
+    }
+
   private:
     Camera2D cam_{};
     Vec2 target_{};

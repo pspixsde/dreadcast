@@ -2,6 +2,7 @@
 
 #include <string>
 
+#include <entt/entt.hpp>
 #include <raylib.h>
 
 namespace dreadcast::ecs {
@@ -59,6 +60,8 @@ struct Projectile {
     float distanceTraveled{0.0F};
     Vector2 direction{};
     bool fromPlayer{true};
+    /// Enemy shots: entity that fired (for damage reflect). `entt::null` if unknown.
+    entt::entity source{entt::null};
 };
 
 struct MeleeAttacker {
@@ -105,6 +108,8 @@ struct EnemyAI {
     float meleeCooldown{1.0F};
     float meleeTimer{0.0F};
     float chaseSpeed{0.0F};
+    Vector2 prevPosition{0.0F, 0.0F};
+    float stuckTimer{0.0F};
 };
 
 struct ManaShard {
@@ -145,6 +150,26 @@ struct HealOverTime {
     float duration{8.0F};
     float elapsed{0.0F};
     float healedSoFar{0.0F};
+};
+
+/// Vial of Cordial Manic: speed + invuln + HP drain, blocks external regen / HOT.
+struct ManicEffect {
+    float duration{7.0F};
+    float elapsed{0.0F};
+    float hpDrainTotal{0.0F};
+    float hpDrained{0.0F};
+};
+
+/// Active knockback: enemy skips AI and decelerates until elapsed >= duration.
+struct KnockbackState {
+    float duration{0.25F};
+    float elapsed{0.0F};
+};
+
+/// Runic Shell triggered-ability cooldown on the player.
+struct RunicShellCooldown {
+    float remaining{0.0F};
+    float total{30.0F};
 };
 
 /// Tag for the player-controlled entity.

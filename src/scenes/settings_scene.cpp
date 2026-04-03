@@ -97,6 +97,22 @@ void SettingsScene::update(SceneManager &scenes, InputManager &input,
                                        22.0F};
         updateMouseSensitivitySlider(mouse, mouseDown, click, resources, draggingMouseSensSlider_,
                                      sensTrack);
+        const float btnY = sensTrack.y + 56.0F;
+        const float btnW = 140.0F;
+        const float btnH = 40.0F;
+        const float btnGap = 16.0F;
+        const float btnTotal = btnW * 2.0F + btnGap;
+        const float btnX0 = static_cast<float>(w) * 0.5F - btnTotal * 0.5F;
+        gameplaySaveButton_.rect = {btnX0, btnY, btnW, btnH};
+        gameplaySaveButton_.label = "Save";
+        gameplayResetButton_.rect = {btnX0 + btnW + btnGap, btnY, btnW, btnH};
+        gameplayResetButton_.label = "Reset";
+        if (gameplaySaveButton_.wasClicked(mouse, click)) {
+            (void)resources.settings().saveToFile("settings.cfg");
+        }
+        if (gameplayResetButton_.wasClicked(mouse, click)) {
+            resources.settings() = GameSettings{};
+        }
     } else {
         draggingMouseSensSlider_ = false;
     }
@@ -167,6 +183,20 @@ void SettingsScene::draw(ResourceManager &resources) {
         const Rectangle sensTrack = {static_cast<float>(w) * 0.5F - 150.0F, 210.0F, 300.0F,
                                      22.0F};
         drawMouseSensitivitySlider(font, mouse, resources.settings().mouseSensitivity, sensTrack);
+        const float btnY = sensTrack.y + 56.0F;
+        const float btnW = 140.0F;
+        const float btnH = 40.0F;
+        const float btnGap = 16.0F;
+        const float btnTotal = btnW * 2.0F + btnGap;
+        const float btnX0 = static_cast<float>(w) * 0.5F - btnTotal * 0.5F;
+        gameplaySaveButton_.rect = {btnX0, btnY, btnW, btnH};
+        gameplaySaveButton_.label = "Save";
+        gameplayResetButton_.rect = {btnX0 + btnW + btnGap, btnY, btnW, btnH};
+        gameplayResetButton_.label = "Reset";
+        gameplaySaveButton_.draw(font, 18.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER,
+                                 RAYWHITE, ui::theme::BTN_BORDER);
+        gameplayResetButton_.draw(font, 18.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER,
+                                  RAYWHITE, ui::theme::BTN_BORDER);
     } else if (activeTab_ == Tab::Controls) {
         const float rowLabelX = static_cast<float>(w) * 0.5F - 280.0F;
         const float rowKeyX = static_cast<float>(w) * 0.5F + 40.0F;

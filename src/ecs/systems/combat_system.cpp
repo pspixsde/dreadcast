@@ -53,9 +53,9 @@ void combat_player_ranged(entt::registry &registry, const InputManager &input,
     registry.emplace<Velocity>(proj,
                                Velocity{{dir.x * config::PROJECTILE_SPEED, dir.y * config::PROJECTILE_SPEED}});
     registry.emplace<Sprite>(proj, Sprite{{255, 240, 120, 255}, 10.0F, 10.0F});
-    registry.emplace<Projectile>(
-        proj, Projectile{config::PROJECTILE_DAMAGE, config::PROJECTILE_SPEED,
-                         config::PROJECTILE_MAX_RANGE, 0.0F, dir, true});
+    registry.emplace<Projectile>(proj, Projectile{config::PROJECTILE_DAMAGE, config::PROJECTILE_SPEED,
+                                                  config::PROJECTILE_MAX_RANGE, 0.0F, dir, true,
+                                                  entt::null});
 }
 
 namespace {
@@ -97,9 +97,14 @@ void applyMeleeSwingHit(entt::registry &registry, entt::entity player, MeleeAtta
         auto &health = registry.get<Health>(e);
         health.current -= melee.damage * dmgScale;
 
+        if (registry.all_of<Agitation>(e)) {
+            registry.get<Agitation>(e).agitationRange += 100.0F;
+        }
+
         auto &vel = registry.get_or_emplace<Velocity>(e);
-        vel.value.x += nd.x * melee.knockback * kbScale;
-        vel.value.y += nd.y * melee.knockback * kbScale;
+        vel.value.x = nd.x * melee.knockback * kbScale;
+        vel.value.y = nd.y * melee.knockback * kbScale;
+        registry.emplace_or_replace<KnockbackState>(e, KnockbackState{config::KNOCKBACK_DURATION, 0.0F});
     }
 
     melee.hitAppliedThisSwing = true;

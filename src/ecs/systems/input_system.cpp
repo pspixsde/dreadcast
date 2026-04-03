@@ -46,8 +46,10 @@ void input_system(entt::registry &registry, const InputManager &input, const Cam
             const Vec2 worldDir = Vec2Normalize(dreadcast::isoToWorld(move));
             const Vec2 isoDir = dreadcast::worldToIso(worldDir);
             const float isoLen = Vec2Length(isoDir);
+            const float speedMul =
+                registry.all_of<ManicEffect>(entity) ? config::MANIC_SPEED_MULTIPLIER : 1.0F;
             const float scale =
-                (isoLen > 0.001F) ? (config::PLAYER_MOVE_SPEED / isoLen) : 0.0F;
+                (isoLen > 0.001F) ? (config::PLAYER_MOVE_SPEED * speedMul / isoLen) : 0.0F;
             vel.value.x = worldDir.x * scale;
             vel.value.y = worldDir.y * scale;
         }

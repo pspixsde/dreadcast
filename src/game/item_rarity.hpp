@@ -7,92 +7,70 @@
 
 namespace dreadcast {
 
-[[nodiscard]] inline const char *rarityTierName(ItemRarity r) {
+[[nodiscard]] inline const char *rarityName(ItemRarity r) {
     switch (r) {
-    case ItemRarity::Common:
-        return "Common";
-    case ItemRarity::Uncommon:
-        return "Uncommon";
-    case ItemRarity::Rare:
-        return "Rare";
-    case ItemRarity::Epic:
-        return "Epic";
-    case ItemRarity::Legendary:
-        return "Legendary";
+    case ItemRarity::Tarnished:
+        return "Tarnished";
+    case ItemRarity::Blighted:
+        return "Blighted";
+    case ItemRarity::Cursed:
+        return "Cursed";
+    case ItemRarity::Dread:
+        return "Dread";
+    case ItemRarity::Abyssal:
+        return "Abyssal";
+    case ItemRarity::Clouded:
+        return "Clouded";
+    case ItemRarity::Lucid:
+        return "Lucid";
+    case ItemRarity::Absolute:
+        return "Absolute";
     case ItemRarity::Special:
         return "Special";
     default:
-        return "Common";
+        return "Tarnished";
     }
 }
 
-/// Display color for rarity (borders, tooltip accent).
+/// Display color for rarity (borders, tooltip accent, slot tint).
 [[nodiscard]] inline Color rarityColor(ItemRarity r) {
     switch (r) {
-    case ItemRarity::Common:
+    case ItemRarity::Tarnished:
+    case ItemRarity::Clouded:
         return {165, 155, 140, 255};
-    case ItemRarity::Uncommon:
+    case ItemRarity::Blighted:
         return {110, 200, 125, 255};
-    case ItemRarity::Rare:
+    case ItemRarity::Cursed:
+    case ItemRarity::Lucid:
         return {110, 165, 235, 255};
-    case ItemRarity::Epic:
+    case ItemRarity::Dread:
         return {200, 115, 255, 255};
-    case ItemRarity::Legendary:
+    case ItemRarity::Abyssal:
+    case ItemRarity::Absolute:
         return {255, 200, 95, 255};
     case ItemRarity::Special:
-        return {255, 130, 190, 255};
+        return {255, 75, 75, 255};
     default:
         return {180, 180, 180, 255};
     }
 }
 
-/// Style name for gear (non-consumable): Tarnished, Blighted, …
-[[nodiscard]] inline std::string gearRarityStyleName(ItemRarity r) {
+/// Max stack per slot for consumable rarities (Clouded … Special).
+[[nodiscard]] inline int maxStackForConsumableRarity(ItemRarity r) {
     switch (r) {
-    case ItemRarity::Common:
-        return "Tarnished";
-    case ItemRarity::Uncommon:
-        return "Blighted";
-    case ItemRarity::Rare:
-        return "Cursed";
-    case ItemRarity::Epic:
-        return "Dread";
-    case ItemRarity::Legendary:
-        return "Abyssal";
+    case ItemRarity::Clouded:
+        return 5;
+    case ItemRarity::Lucid:
+        return 3;
+    case ItemRarity::Absolute:
     case ItemRarity::Special:
-        return "Anomalous";
+        return 1;
     default:
-        return "Tarnished";
+        return 1;
     }
 }
 
-/// Style name for vial-style consumables by tier.
-[[nodiscard]] inline std::string vialRarityStyleName(ItemRarity r) {
-    switch (r) {
-    case ItemRarity::Common:
-        return "Clouded [Vial]";
-    case ItemRarity::Uncommon:
-        return "Lucid [Vial]";
-    case ItemRarity::Rare:
-        return "Absolute [Vial]";
-    case ItemRarity::Epic:
-        return "Dread [Vial]";
-    case ItemRarity::Legendary:
-        return "Abyssal [Vial]";
-    case ItemRarity::Special:
-        return "Anomalous [Vial]";
-    default:
-        return "Clouded [Vial]";
-    }
-}
-
-[[nodiscard]] inline std::string rarityStyleName(const ItemData &it) {
-    return it.isConsumable ? vialRarityStyleName(it.rarity) : gearRarityStyleName(it.rarity);
-}
-
-/// Single line for tooltips, e.g. "Tarnished (Common)".
-[[nodiscard]] inline std::string rarityLine(const ItemData &it) {
-    return rarityStyleName(it) + " (" + rarityTierName(it.rarity) + ")";
-}
+/// Tooltip / UI single rarity line (name only).
+[[nodiscard]] inline std::string rarityLine(const ItemData &it) { return std::string(rarityName(it.rarity)); }
 
 } // namespace dreadcast
