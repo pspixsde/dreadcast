@@ -3,6 +3,9 @@
 #include <entt/entt.hpp>
 #include <raylib.h>
 
+#include <string>
+#include <vector>
+
 #include "config.hpp"
 #include "core/camera.hpp"
 #include "core/timer.hpp"
@@ -15,6 +18,14 @@
 #include <vector>
 
 namespace dreadcast {
+
+enum class StatusHudKind { HealOverTime, ManicEffect, LeadFever };
+
+struct ActiveStatusHud {
+    StatusHudKind kind{StatusHudKind::HealOverTime};
+    std::string iconPath{};
+    Color outline{WHITE};
+};
 
 class GameplayScene final : public Scene {
   public:
@@ -43,6 +54,19 @@ class GameplayScene final : public Scene {
     [[nodiscard]] bool tryApplyCordialManic();
     [[nodiscard]] Vector2 worldMouseFromScreen(const Vector2 &screenMouse) const;
 
+    void syncStatusHudOrder();
+    void pushStatusHud(StatusHudKind kind, std::string iconPath, Color outline);
+    void removeStatusHudKind(StatusHudKind kind);
+    void tryUseAbility(int abilityIndex);
+    void tickAbilityCooldowns(float fixedDt);
+    void tickLeadFeverEffect(float fixedDt);
+    void tickSlugAim(float fixedDt);
+    void tickSnareDash(float fixedDt);
+    void tickStunnedEnemies(float fixedDt);
+    void spawnSnareProjectile(const Vector2 &dirWorld);
+    void fireCalamitySlug(const Vector2 &dirWorld);
+    [[nodiscard]] Vector2 playerAimDirectionWorld() const;
+
     void drawHud(ResourceManager &resources);
     void drawPauseOverlay(ResourceManager &resources);
     void drawFlashMessages(ResourceManager &resources);
@@ -56,7 +80,7 @@ class GameplayScene final : public Scene {
     void drawWorldContent(ResourceManager &resources);
     void drawFogMaskTexture();
     void drawFogCompositePass();
-    void drawFogMaskDebugPreview();
+    void drawFogDebugOverlay(const Font &font);
 
     void spawnItemPickupAtPlayer(int itemIndex);
     void spawnItemPickupAtWorld(const Vector2 &worldPos, int itemIndex);
@@ -84,6 +108,11 @@ class GameplayScene final : public Scene {
     float prevPlayerHp_{100.0F};
     float hotRefreshFlashTimer_{0.0F};
     float runicShellFlashTimer_{0.0F};
+    float snareImpactFlash_{0.0F};
+    Vector2 snareImpactWorld_{0.0F, 0.0F};
+
+    float abilityCdRem_[3]{0.0F, 0.0F, 0.0F};
+    std::vector<ActiveStatusHud> statusHudOrder_{};
 
     int selectedClass_{0};
     int enemiesSlain_{0};
@@ -101,8 +130,16 @@ class GameplayScene final : public Scene {
     Shader fogCompositeShader_{};
     bool fogResourcesReady_{false};
     int fogOverlayLocStrength_{-1};
+    int fogOverlayLocEdgeSoft_{-1};
     std::vector<Vector2> fogVisWorld_{};
     std::vector<Vector2> fogVisFan_{};
+
+    /// F3 toggles. When true: RT previews + text (mask black = visible hole, white = fog).
+    bool fogDebugOverlay_{false};
+    bool fogDbgLegacyPath_{false};
+    bool fogDbgMaskSkipped_{false};
+    int fogDbgBoundarySamples_{0};
+    int fogDbgFanVerts_{0};
 };
 
 } // namespace dreadcast

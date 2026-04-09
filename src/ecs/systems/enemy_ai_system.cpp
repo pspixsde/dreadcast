@@ -157,6 +157,12 @@ void enemy_ai_system(entt::registry &registry, float fixedDt, entt::entity playe
             }
         }
 
+        if (registry.all_of<StunnedState>(e)) {
+            vel.value.x = 0.0F;
+            vel.value.y = 0.0F;
+            continue;
+        }
+
         const float dx = playerT.position.x - transform.position.x;
         const float dy = playerT.position.y - transform.position.y;
         const float distSq = dx * dx + dy * dy;

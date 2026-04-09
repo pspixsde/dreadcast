@@ -27,12 +27,123 @@ Rectangle spriteWorldBounds(const Transform &t, const Sprite &s) {
     return {t.position.x - s.width * 0.5F, t.position.y - s.height * 0.5F, s.width, s.height};
 }
 
+void applyEnemyKnockbackDir(entt::registry &registry, entt::entity target, Vector2 dir,
+                            float strength) {
+    const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y);
+    if (len <= 0.001F || strength <= 0.001F) {
+        return;
+    }
+    const Vector2 nd{dir.x / len, dir.y / len};
+    auto &vel = registry.get_or_emplace<Velocity>(target);
+    vel.value.x = nd.x * strength;
+    vel.value.y = nd.y * strength;
+    registry.emplace_or_replace<KnockbackState>(target,
+                                                KnockbackState{config::KNOCKBACK_DURATION, 0.0F});
+}
+
+bool pierceListHas(const PierceHitRecord *rec, entt::entity e) {
+    if (rec == nullptr) {
+        return false;
+    }
+    return std::find(rec->hit.begin(), rec->hit.end(), e) != rec->hit.end();
+}
+
+void snareResolveHit(entt::registry &registry, entt::entity snareEntity,
+                     entt::entity firstHitEnemy, const SnareProjectile &snare,
+                     Vector2 *snareImpactWorld, float *snareImpactFlashTimer) {
+    if (!registry.valid(firstHitEnemy) || !registry.all_of<Transform>(firstHitEnemy)) {
+        return;
+    }
+    const Vector2 anchor = registry.get<Transform>(firstHitEnemy).position;
+    const float r = snare.pullRadius;
+    const float rSq = r * r;
+
+    std::vector<entt::entity> group;
+    const auto enemies = registry.view<Enemy, Transform>();
+    for (const auto e : enemies) {
+        const auto &t = registry.get<Transform>(e);
+        const float dx = t.position.x - anchor.x;
+        const float dy = t.position.y - anchor.y;
+        if (dx * dx + dy * dy <= rSq) {
+            group.push_back(e);
+        }
+    }
+    if (group.empty()) {
+        group.push_back(firstHitEnemy);
+    }
+
+    Vector2 centroid{0.0F, 0.0F};
+    for (const auto e : group) {
+        const auto &t = registry.get<Transform>(e);
+        centroid.x += t.position.x;
+        centroid.y += t.position.y;
+    }
+    const float inv = 1.0F / static_cast<float>(group.size());
+    centroid.x *= inv;
+    centroid.y *= inv;
+
+    for (const auto e : group) {
+        if (!registry.valid(e) || !registry.all_of<Transform>(e)) {
+            continue;
+        }
+        auto &t = registry.get<Transform>(e);
+        t.position.x += (centroid.x - t.position.x) * 0.88F;
+        t.position.y += (centroid.y - t.position.y) * 0.88F;
+        registry.emplace_or_replace<StunnedState>(
+            e, StunnedState{snare.stunDuration, 0.0F});
+    }
+    if (snareImpactWorld != nullptr) {
+        *snareImpactWorld = anchor;
+    }
+    if (snareImpactFlashTimer != nullptr) {
+        *snareImpactFlashTimer = 0.55F;
+    }
+    if (registry.valid(snareEntity)) {
+        registry.destroy(snareEntity);
+    }
+}
+
 } // namespace
 
 void projectile_hits(entt::registry &registry, entt::entity playerEntity,
-                       dreadcast::InventoryState *inventory) {
+                       dreadcast::InventoryState *inventory, Vector2 *snareImpactWorld,
+                       float *snareImpactFlashTimer) {
+    // Deadlight Snare: first enemy hit triggers pull + stun.
+    std::vector<entt::entity> snares;
+    for (const auto e : registry.view<Projectile, SnareProjectile, Transform, Sprite>()) {
+        snares.push_back(e);
+    }
+    for (const auto projEntity : snares) {
+        if (!registry.valid(projEntity)) {
+            continue;
+        }
+        const auto &proj = registry.get<Projectile>(projEntity);
+        const auto &snare = registry.get<SnareProjectile>(projEntity);
+        const auto &pt = registry.get<Transform>(projEntity);
+        const auto &ps = registry.get<Sprite>(projEntity);
+        const Vector2 center = {pt.position.x, pt.position.y};
+        const float radius = std::max(ps.width, ps.height) * 0.5F;
+        if (!proj.fromPlayer) {
+            continue;
+        }
+        const auto targets = registry.view<Enemy, Transform, Sprite, Health>();
+        for (const auto target : targets) {
+            const auto &tt = registry.get<Transform>(target);
+            const auto &ts = registry.get<Sprite>(target);
+            const Rectangle rect = spriteWorldBounds(tt, ts);
+            if (circleRectOverlap(center, std::max(radius, config::PROJECTILE_RADIUS), rect)) {
+                snareResolveHit(registry, projEntity, target, snare, snareImpactWorld,
+                                snareImpactFlashTimer);
+                break;
+            }
+        }
+    }
+
     std::vector<entt::entity> projectiles;
     for (const auto e : registry.view<Projectile, Transform, Sprite>()) {
+        if (registry.all_of<SnareProjectile>(e)) {
+            continue;
+        }
         projectiles.push_back(e);
     }
     for (const auto projEntity : projectiles) {
@@ -44,6 +155,7 @@ void projectile_hits(entt::registry &registry, entt::entity playerEntity,
         const auto &ps = registry.get<Sprite>(projEntity);
         const Vector2 center = {pt.position.x, pt.position.y};
         const float radius = std::max(ps.width, ps.height) * 0.5F;
+        const bool isSlug = registry.all_of<SlugProjectile>(projEntity);
 
         if (proj.fromPlayer) {
             const auto targets = registry.view<Enemy, Transform, Sprite, Health>();
@@ -51,12 +163,40 @@ void projectile_hits(entt::registry &registry, entt::entity playerEntity,
                 const auto &tt = registry.get<Transform>(target);
                 const auto &ts = registry.get<Sprite>(target);
                 const Rectangle rect = spriteWorldBounds(tt, ts);
-                if (circleRectOverlap(center, std::max(radius, config::PROJECTILE_RADIUS), rect)) {
+                if (!circleRectOverlap(center, std::max(radius, config::PROJECTILE_RADIUS), rect)) {
+                    continue;
+                }
+                if (isSlug) {
+                    const PierceHitRecord *pierceRec = registry.try_get<PierceHitRecord>(projEntity);
+                    if (pierceListHas(pierceRec, target)) {
+                        continue;
+                    }
                     auto &hp = registry.get<Health>(target);
                     hp.current -= proj.damage;
                     if (registry.all_of<Agitation>(target)) {
                         registry.get<Agitation>(target).agitationRange += 100.0F;
                     }
+                    const float kb = registry.get<SlugProjectile>(projEntity).sideKnockback;
+                    const Vector2 d = proj.direction;
+                    const float dx = tt.position.x - pt.position.x;
+                    const float dy = tt.position.y - pt.position.y;
+                    const float cross = dx * d.y - dy * d.x;
+                    const Vector2 perp = cross >= 0.0F ? Vector2{-d.y, d.x} : Vector2{d.y, -d.x};
+                    applyEnemyKnockbackDir(registry, target, perp, kb);
+                    auto &rec = registry.get_or_emplace<PierceHitRecord>(projEntity);
+                    rec.hit.push_back(target);
+                    continue;
+                }
+
+                auto &hp = registry.get<Health>(target);
+                hp.current -= proj.damage;
+                if (registry.all_of<Agitation>(target)) {
+                    registry.get<Agitation>(target).agitationRange += 100.0F;
+                }
+                if (proj.knockbackOnHit > 0.001F) {
+                    applyEnemyKnockbackDir(registry, target, proj.direction, proj.knockbackOnHit);
+                }
+                if (!proj.pierce) {
                     registry.destroy(projEntity);
                     break;
                 }

@@ -22,6 +22,9 @@ void combat_player_ranged(entt::registry &registry, const InputManager &input,
     if (!registry.all_of<Transform, Mana, Sprite>(player)) {
         return;
     }
+    if (registry.all_of<SlugAimState>(player)) {
+        return;
+    }
 
     auto &mana = registry.get<Mana>(player);
     if (mana.current < config::MANA_COST_SHOT) {
@@ -46,6 +49,34 @@ void combat_player_ranged(entt::registry &registry, const InputManager &input,
     const float halfDiag =
         std::sqrt(ps.width * ps.width + ps.height * ps.height) * 0.5F;
     const float spawnDist = halfDiag + config::PROJECTILE_RADIUS + 2.0F;
+    const bool leadFever = registry.all_of<LeadFeverEffect>(player);
+
+    if (leadFever) {
+        const int n = config::LEAD_FEVER_PELLET_COUNT;
+        const float spread = config::LEAD_FEVER_SCATTER_ANGLE;
+        for (int i = 0; i < n; ++i) {
+            const float t = (n <= 1) ? 0.0F
+                                     : (static_cast<float>(i) / static_cast<float>(n - 1) - 0.5F) *
+                                           (2.0F * spread);
+            const float ca = std::cosf(t);
+            const float sa = std::sinf(t);
+            const Vector2 d{dir.x * ca - dir.y * sa, dir.x * sa + dir.y * ca};
+            const auto proj = registry.create();
+            registry.emplace<Transform>(
+                proj, Transform{{pt.position.x + d.x * spawnDist, pt.position.y + d.y * spawnDist},
+                                std::atan2f(d.y, d.x)});
+            registry.emplace<Velocity>(
+                proj, Velocity{{d.x * config::PROJECTILE_SPEED, d.y * config::PROJECTILE_SPEED}});
+            registry.emplace<Sprite>(proj, Sprite{{120, 220, 140, 255}, 9.0F, 9.0F});
+            registry.emplace<Projectile>(
+                proj,
+                Projectile{config::PROJECTILE_DAMAGE * config::LEAD_FEVER_DAMAGE_MULT,
+                           config::PROJECTILE_SPEED, config::PROJECTILE_MAX_RANGE, 0.0F, d, true,
+                           entt::null, false, config::LEAD_FEVER_KNOCKBACK});
+        }
+        return;
+    }
+
     const auto proj = registry.create();
     registry.emplace<Transform>(
         proj, Transform{{pt.position.x + dir.x * spawnDist, pt.position.y + dir.y * spawnDist},
@@ -54,8 +85,8 @@ void combat_player_ranged(entt::registry &registry, const InputManager &input,
                                Velocity{{dir.x * config::PROJECTILE_SPEED, dir.y * config::PROJECTILE_SPEED}});
     registry.emplace<Sprite>(proj, Sprite{{255, 240, 120, 255}, 10.0F, 10.0F});
     registry.emplace<Projectile>(proj, Projectile{config::PROJECTILE_DAMAGE, config::PROJECTILE_SPEED,
-                                                  config::PROJECTILE_MAX_RANGE, 0.0F, dir, true,
-                                                  entt::null});
+                                                    config::PROJECTILE_MAX_RANGE, 0.0F, dir, true,
+                                                    entt::null, false, 0.0F});
 }
 
 namespace {
@@ -115,6 +146,9 @@ void applyMeleeSwingHit(entt::registry &registry, entt::entity player, MeleeAtta
 void combat_player_melee(entt::registry &registry, const InputManager &input, entt::entity player,
                          float fixedDt) {
     if (!registry.valid(player) || !registry.all_of<Transform, MeleeAttacker>(player)) {
+        return;
+    }
+    if (registry.all_of<SlugAimState>(player)) {
         return;
     }
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include <entt/entt.hpp>
 #include <raylib.h>
@@ -62,6 +63,10 @@ struct Projectile {
     bool fromPlayer{true};
     /// Enemy shots: entity that fired (for damage reflect). `entt::null` if unknown.
     entt::entity source{entt::null};
+    /// If true, projectile is not destroyed when it hits an enemy (Calamity Slug).
+    bool pierce{false};
+    /// If > 0, player shots apply knockback along `direction` (Lead Fever pellets).
+    float knockbackOnHit{0.0F};
 };
 
 struct MeleeAttacker {
@@ -170,6 +175,49 @@ struct KnockbackState {
 struct RunicShellCooldown {
     float remaining{0.0F};
     float total{30.0F};
+};
+
+/// Enemy cannot act until elapsed &gt;= duration (AI skipped). Knockback still applies.
+struct StunnedState {
+    float duration{2.0F};
+    float elapsed{0.0F};
+};
+
+/// Undead Hunter ability 1: multi-pellet ranged with knockback.
+struct LeadFeverEffect {
+    float duration{6.0F};
+    float elapsed{0.0F};
+};
+
+/// Deadlight Snare net projectile: on first enemy hit, pull and stun in radius.
+struct SnareProjectile {
+    float pullRadius{100.0F};
+    float stunDuration{2.0F};
+};
+
+/// Calamity Slug: piercing shot with sideways knockback.
+struct SlugProjectile {
+    float sideKnockback{400.0F};
+};
+
+/// Tracks enemies already damaged by one piercing slug (one hit each).
+struct PierceHitRecord {
+    std::vector<entt::entity> hit{};
+};
+
+/// Player channeling Calamity Slug before firing.
+struct SlugAimState {
+    float aimDuration{1.0F};
+    float elapsed{0.0F};
+    Vector2 aimDirection{0.0F, 0.0F};
+};
+
+/// Player dashing backward after throwing snare.
+struct SnareDashState {
+    float speed{800.0F};
+    float distance{150.0F};
+    float traveled{0.0F};
+    Vector2 direction{0.0F, 0.0F};
 };
 
 /// Tag for the player-controlled entity.

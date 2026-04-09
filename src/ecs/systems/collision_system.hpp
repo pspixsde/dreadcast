@@ -11,8 +11,10 @@ namespace ecs {
 
 namespace collision {
 
+/// Optional `snareImpactWorld` / `snareImpactFlashTimer` set when Deadlight Snare resolves (VFX).
 void projectile_hits(entt::registry &registry, entt::entity playerEntity,
-                     dreadcast::InventoryState *inventory);
+                     dreadcast::InventoryState *inventory, Vector2 *snareImpactWorld = nullptr,
+                     float *snareImpactFlashTimer = nullptr);
 
 void player_pickup_mana_shards(entt::registry &registry, entt::entity player);
 
