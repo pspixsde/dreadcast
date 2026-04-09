@@ -215,6 +215,7 @@ void SettingsScene::draw(ResourceManager &resources) {
                             {"Pick up item", "E (near drop, cursor on item)"},
                             {"Interact", "F (near object, cursor on it)"},
                             {"Use consumable slots", "C / V"},
+                            {"Character abilities", "1 / 2 / 3 (Undead Hunter)"},
                             {"Item details (world)", "Hold Alt over a drop"},
                             {"Inventory", "Tab"},
                             {"Pause", "Esc"}};

@@ -2,6 +2,27 @@
 
 All notable changes to **Dreadcast** will be documented in this file.
 
+## v0.10.0 — Unreleased
+
+### Added
+
+- **Undead Hunter abilities (keys 1–3):** **Lead Fever** (scatter pellets + knockback, HUD status), **Deadlight Snare** (net, backward dash, pull + **Stunned**), **Calamity Slug** (1s aim, piercing 50 damage, sideways knockback). Lower-right HUD ability bar with cooldown overlay and hover tooltips.
+- **`ecs::StunnedState`**, **`LeadFeverEffect`**, **`SnareProjectile`**, **`SlugProjectile`**, **`PierceHitRecord`**, **`SlugAimState`**, **`SnareDashState`**; **`Projectile::pierce`**, **`knockbackOnHit`**.
+- **Stacking status HUD:** multiple vial/ability effects with **right = oldest**, **left = newest**; icons use **center-cropped** item art (or placeholder fill) plus timer ring.
+- **`LORE.md`** template for non-mechanical world/character notes.
+- **`src/game/ability.hpp`** — ability definitions for the Undead Hunter.
+
+### Changed
+
+- **Cordial Manic:** no longer removes **Pure Blood** HOT; **Pure Blood** can be drunk during Manic (no HP from HOT while Manic); **Runic Shell** shockwave still fires but **does not heal** under Manic.
+- **Inventory:** rarity **info** control polished (fill, double ring, hover); draw order fixed so **item tooltips render on top** of the info button and rarity panel.
+- **Settings → Controls:** documents abilities **1 / 2 / 3**.
+- **Fog of war:** composite overlay shader **blurs the fog mask** (5×5 tap) so the visibility boundary fades gradually (Dota-style soft edge). Tunable via **`FOG_EDGE_SOFTEN_PIXELS`** in `config.hpp` (**0** = previous hard edge).
+
+### Fixed
+
+- **Fog of war (RT + shader path):** Visibility “island” could disappear entirely (full-screen fog) while the CPU still built a valid polygon — the mask render target stayed white because **backface culling** and a single huge **`DrawTriangleFan`** batch did not reliably produce visible geometry when drawing into an FBO under **`BeginMode2D`**. Mask fill now uses **per-wedge `DrawTriangle`** with **winding chosen for Y-down space**, **culling disabled** for that pass, **scissor/depth** cleared defensively, **batch flush** before ending 2D mode, and **separate `src` rects** for scene vs mask in the composite blit. **F3** toggles an optional debug overlay (RT previews + stats).
+
 ## v0.9.1 — 2026-04-03
 
 ### Added

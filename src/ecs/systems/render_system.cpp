@@ -171,9 +171,24 @@ void drawEnemyOverlays(entt::registry &registry, const Font &font, Vector2 fogOr
         DrawRectangle(static_cast<int>(x), static_cast<int>(barY),
                       static_cast<int>(barW * ratio), static_cast<int>(barH), {200, 60, 60, 255});
 
+        if (registry.all_of<StunnedState>(entity)) {
+            const float stunT = static_cast<float>(GetTime());
+            const float spin = stunT * 4.0F;
+            const float ox = std::cosf(spin) * 3.0F;
+            const float oy = std::sinf(spin * 1.3F) * 2.0F;
+            const char *sym = "*";
+            const float stS = 16.0F;
+            const Vector2 sd = MeasureTextEx(font, sym, stS, 1.0F);
+            DrawTextEx(font, sym, {iso.x - sd.x * 0.5F + ox, barY - stS - 6.0F + oy}, stS, 1.0F,
+                       {230, 210, 120, 255});
+        }
+
         const float nameSize = 16.0F;
         const Vector2 nameDim = MeasureTextEx(font, tag.name, nameSize, 1.0F);
         Vector2 namePos = {iso.x - nameDim.x * 0.5F, barY - nameSize - 4.0F};
+        if (registry.all_of<StunnedState>(entity)) {
+            namePos.y -= 10.0F;
+        }
         DrawTextEx(font, tag.name, namePos, nameSize, 1.0F, {220, 200, 200, 255});
         if (ag != nullptr && ag->agitated) {
             const char excl = '!';

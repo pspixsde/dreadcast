@@ -4,8 +4,11 @@
 #include <cstdio>
 #include <cmath>
 #include <memory>
+#include <sstream>
+#include <string>
 
 #include <raylib.h>
+#include <rlgl.h>
 
 #include "ui/theme.hpp"
 
@@ -25,6 +28,7 @@
 #include "ecs/systems/projectile_system.hpp"
 #include "ecs/systems/render_system.hpp"
 #include "ecs/systems/wall_system.hpp"
+#include "game/ability.hpp"
 #include "game/character.hpp"
 #include "game/item_factory.hpp"
 #include "game/map_data.hpp"
@@ -36,12 +40,10 @@ namespace dreadcast {
 
 namespace {
 
-/// Set to `true` to show raw fog RT in the top-right (black = visible hole).
-constexpr bool kFogDebugDrawMaskPreview = false;
-
 // Single-texture overlay: samples fog mask (R=white fog). Outputs black with alpha so default
 // alpha-blend darkens the framebuffer like mix(scene, black, m*fogStrength) without needing a
 // second sampler (Raylib's batch only reliably binds texture0 for DrawTexturePro).
+// Optional 5x5 blur of the mask softens the visibility edge (Dota-like falloff).
 static const char *kFogOverlayFs = R"(
 #version 330
 in vec2 fragTexCoord;
@@ -50,8 +52,22 @@ out vec4 finalColor;
 uniform sampler2D texture0;
 uniform vec4 colDiffuse;
 uniform float fogStrength;
+uniform float fogEdgeSoftPx;
 void main() {
-    float m = texture(texture0, fragTexCoord).r;
+    float m;
+    if (fogEdgeSoftPx < 0.5) {
+        m = texture(texture0, fragTexCoord).r;
+    } else {
+        vec2 ts = 1.0 / vec2(textureSize(texture0, 0));
+        vec2 delta = (fogEdgeSoftPx * 0.25) * ts;
+        m = 0.0;
+        for (int j = -2; j <= 2; ++j) {
+            for (int i = -2; i <= 2; ++i) {
+                m += texture(texture0, fragTexCoord + vec2(float(i), float(j)) * delta).r;
+            }
+        }
+        m *= 0.04;
+    }
     float a = clamp(m * fogStrength, 0.0, 1.0);
     finalColor = vec4(0.0, 0.0, 0.0, a) * colDiffuse * fragColor;
 }
@@ -61,6 +77,27 @@ void spawnWallBlock(entt::registry &reg, float cx, float cy, float halfW, float 
     const auto e = reg.create();
     reg.emplace<ecs::Transform>(e, ecs::Transform{{cx, cy}, 0.0F});
     reg.emplace<ecs::Wall>(e, ecs::Wall{halfW, halfH});
+}
+
+/// Filled convex visibility polygon: center at fan[0], boundary fan[1..n] in CCW order around the
+/// center (same as DrawTriangleFan). Uses per-triangle DrawTriangle calls so we never rely on one
+/// huge RL_QUADS batch (more reliable across drivers than a single DrawTriangleFan).
+static void drawFogVisibilityFilled(const Vector2 *fan, int nBoundary, Color color) {
+    if (nBoundary < 3) {
+        return;
+    }
+    const Vector2 &c = fan[0];
+    for (int i = 0; i < nBoundary; ++i) {
+        const Vector2 &a = fan[1 + i];
+        const Vector2 &b = fan[1 + ((i + 1) % nBoundary)];
+        // 2D cross (a-c) x (b-c); sign picks a front-facing winding for the current Y-down space.
+        const float cross = (a.x - c.x) * (b.y - c.y) - (a.y - c.y) * (b.x - c.x);
+        if (cross < 0.0F) {
+            DrawTriangle(c, b, a, color);
+        } else {
+            DrawTriangle(c, a, b, color);
+        }
+    }
 }
 
 void clampRectToScreen(Rectangle &r, int screenW, int screenH) {
@@ -125,13 +162,16 @@ void GameplayScene::initFogResources() {
         return;
     }
     fogOverlayLocStrength_ = GetShaderLocation(fogCompositeShader_, "fogStrength");
-    if (fogOverlayLocStrength_ < 0) {
+    fogOverlayLocEdgeSoft_ = GetShaderLocation(fogCompositeShader_, "fogEdgeSoftPx");
+    if (fogOverlayLocStrength_ < 0 || fogOverlayLocEdgeSoft_ < 0) {
         UnloadShader(fogCompositeShader_);
         UnloadRenderTexture(fogSceneTarget_);
         UnloadRenderTexture(fogMaskTarget_);
         fogCompositeShader_ = {};
         fogSceneTarget_ = {};
         fogMaskTarget_ = {};
+        fogOverlayLocStrength_ = -1;
+        fogOverlayLocEdgeSoft_ = -1;
         return;
     }
     fogResourcesReady_ = true;
@@ -150,6 +190,8 @@ void GameplayScene::unloadFogResources() {
     fogSceneTarget_ = {};
     fogMaskTarget_ = {};
     fogCompositeShader_ = {};
+    fogOverlayLocStrength_ = -1;
+    fogOverlayLocEdgeSoft_ = -1;
     fogResourcesReady_ = false;
 }
 
@@ -198,6 +240,17 @@ void GameplayScene::drawWorldContent(ResourceManager &resources) {
             }
         }
 
+        if (registry_.all_of<ecs::LeadFeverEffect>(player_)) {
+            const auto &lf = registry_.get<ecs::LeadFeverEffect>(player_);
+            const float tRem = lf.duration > 0.001F
+                                   ? std::max(0.0F, 1.0F - lf.elapsed / lf.duration)
+                                   : 0.0F;
+            const float pulse = 0.55F + 0.45F * std::sinf(t * 5.0F);
+            const float gr = 24.0F + pulse * 6.0F;
+            DrawCircleV(pIso, gr, Fade({60, 200, 120, 255}, 0.07F * tRem));
+            DrawCircleLinesV(pIso, gr, Fade({120, 255, 160, 255}, 0.22F * pulse * tRem));
+        }
+
         if (registry_.all_of<ecs::ManicEffect>(player_)) {
             const auto &me = registry_.get<ecs::ManicEffect>(player_);
             const float tRem = me.duration > 0.001F
@@ -235,6 +288,57 @@ void GameplayScene::drawWorldContent(ResourceManager &resources) {
                 }
             }
         }
+
+        if (registry_.all_of<ecs::SnareDashState>(player_) && registry_.all_of<ecs::Velocity>(player_)) {
+            const auto &vel = registry_.get<ecs::Velocity>(player_);
+            const float speed = std::sqrt(vel.value.x * vel.value.x + vel.value.y * vel.value.y);
+            if (speed > 40.0F) {
+                const Vector2 velDir{-vel.value.x / speed, -vel.value.y / speed};
+                const Vector2 velIso = worldToIso(Vector2{velDir.x, velDir.y});
+                const float vLen = std::sqrt(velIso.x * velIso.x + velIso.y * velIso.y);
+                const Vector2 trailDir = vLen > 0.001F ? Vector2{velIso.x / vLen, velIso.y / vLen}
+                                                       : Vector2{0.0F, -1.0F};
+                for (int s = 0; s < 3; ++s) {
+                    const float offset = static_cast<float>(s) * 6.0F + 6.0F;
+                    const Vector2 a{pIso.x + trailDir.x * offset, pIso.y + trailDir.y * offset};
+                    const Vector2 b{a.x + trailDir.x * 10.0F, a.y + trailDir.y * 10.0F};
+                    DrawLineEx(a, b, 2.0F, Fade({160, 150, 230, 255}, 0.35F));
+                }
+            }
+        }
+    }
+
+    if (snareImpactFlash_ > 0.001F) {
+        const Vector2 isoHit = worldToIso(snareImpactWorld_);
+        const float pr = std::min(1.0F, snareImpactFlash_ / 0.55F);
+        for (int k = 0; k < 6; ++k) {
+            const float ang = static_cast<float>(k) * 1.0471976F + static_cast<float>(GetTime()) * 3.0F;
+            const float rr = 18.0F + static_cast<float>(k) * 5.0F;
+            const Vector2 a{isoHit.x + std::cosf(ang) * rr, isoHit.y + std::sinf(ang) * rr * 0.5F};
+            DrawCircleV(a, 3.0F, Fade({180, 160, 255, 255}, 0.5F * pr));
+        }
+        DrawCircleLinesV(isoHit, 40.0F * pr, Fade({200, 180, 255, 255}, 0.35F * pr));
+    }
+
+    if (registry_.valid(player_) && registry_.all_of<ecs::SlugAimState, ecs::Transform>(player_)) {
+        const auto &pt = registry_.get<ecs::Transform>(player_);
+        const auto &aim = registry_.get<ecs::SlugAimState>(player_);
+        const Vector2 pIso = worldToIso(pt.position);
+        const Vector2 d = aim.aimDirection;
+        const float len = std::sqrt(d.x * d.x + d.y * d.y);
+        const Vector2 nd = len > 0.001F ? Vector2{d.x / len, d.y / len} : Vector2{1.0F, 0.0F};
+        const Vector2 wEnd{pt.position.x + nd.x * 120.0F, pt.position.y + nd.y * 120.0F};
+        const Vector2 eIso = worldToIso(wEnd);
+        const float pulse = 0.5F + 0.5F * std::sinf(static_cast<float>(GetTime()) * 10.0F);
+        DrawLineEx(pIso, eIso, 2.0F, Fade({255, 220, 120, 255}, 0.35F + 0.25F * pulse));
+    }
+
+    for (const auto pe :
+         registry_.view<ecs::Projectile, ecs::SlugProjectile, ecs::Transform, ecs::Sprite>()) {
+        const auto &pt = registry_.get<ecs::Transform>(pe);
+        const Vector2 iso = worldToIso(pt.position);
+        const float pulse = 0.5F + 0.5F * std::sinf(static_cast<float>(GetTime()) * 14.0F);
+        DrawCircleV(iso, 6.0F, Fade({255, 200, 80, 255}, 0.25F * pulse));
     }
 
     if (runicShellFlashTimer_ > 0.001F && registry_.valid(player_) &&
@@ -268,6 +372,11 @@ void GameplayScene::spawnWalls(const MapData &map) {
 void GameplayScene::spawnWorld() {
     registry_.clear();
     inventory_ = InventoryState{};
+    statusHudOrder_.clear();
+    for (float &cd : abilityCdRem_) {
+        cd = 0.0F;
+    }
+    snareImpactFlash_ = 0.0F;
     MapData map = defaultMapData();
     MapData loaded;
     if (loaded.loadFromFile("assets/maps/default.map")) {
@@ -400,9 +509,6 @@ void GameplayScene::tryUseConsumableSlot(int slotIndex) {
         return;
     }
     if (it.name == "Vial of Pure Blood") {
-        if (registry_.valid(player_) && registry_.all_of<ecs::ManicEffect>(player_)) {
-            return;
-        }
         const bool wasHot =
             registry_.valid(player_) && registry_.all_of<ecs::HealOverTime>(player_);
         it.stackCount -= 1;
@@ -438,9 +544,6 @@ void GameplayScene::tryUseConsumableBagSlot(int bagSlot) {
         return;
     }
     if (it.name == "Vial of Pure Blood") {
-        if (registry_.valid(player_) && registry_.all_of<ecs::ManicEffect>(player_)) {
-            return;
-        }
         const bool wasHot =
             registry_.valid(player_) && registry_.all_of<ecs::HealOverTime>(player_);
         it.stackCount -= 1;
@@ -472,6 +575,8 @@ void GameplayScene::applyVialHealOverTime(bool wasAlreadyActive) {
     }
     registry_.emplace_or_replace<ecs::HealOverTime>(
         player_, ecs::HealOverTime{config::HOT_TOTAL_HEAL, config::HOT_DURATION, 0.0F, 0.0F});
+    pushStatusHud(StatusHudKind::HealOverTime, "assets/textures/items/vial_pure_blood_icon.png",
+                  {220, 80, 80, 255});
 }
 
 bool GameplayScene::tryApplyCordialManic() {
@@ -486,9 +591,8 @@ bool GameplayScene::tryApplyCordialManic() {
     const float drainTotal = hp.max * config::MANIC_HP_DRAIN_PERCENT;
     registry_.emplace_or_replace<ecs::ManicEffect>(
         player_, ecs::ManicEffect{config::MANIC_DURATION, 0.0F, drainTotal, 0.0F});
-    if (registry_.all_of<ecs::HealOverTime>(player_)) {
-        registry_.remove<ecs::HealOverTime>(player_);
-    }
+    pushStatusHud(StatusHudKind::ManicEffect, "assets/textures/items/vial_cordial_manic_icon.png",
+                  {255, 210, 120, 255});
     return true;
 }
 
@@ -569,7 +673,9 @@ void GameplayScene::checkRunicShellTrigger() {
     }
 
     auto &hpMut = registry_.get<ecs::Health>(player_);
-    hpMut.current = std::min(hpMut.max, hpMut.current + config::RUNIC_SHELL_HEAL);
+    if (!registry_.all_of<ecs::ManicEffect>(player_)) {
+        hpMut.current = std::min(hpMut.max, hpMut.current + config::RUNIC_SHELL_HEAL);
+    }
     registry_.emplace_or_replace<ecs::RunicShellCooldown>(
         player_, ecs::RunicShellCooldown{config::RUNIC_SHELL_COOLDOWN, config::RUNIC_SHELL_COOLDOWN});
     runicShellFlashTimer_ = 0.6F;
@@ -618,11 +724,16 @@ void GameplayScene::spawnItemPickupAtWorld(const Vector2 &worldPos, int itemInde
 
 void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceManager &resources,
                            float frameDt) {
+    if (input.isKeyPressed(KEY_F3)) {
+        fogDebugOverlay_ = !fogDebugOverlay_;
+    }
+
     noManaFlashTimer_ = std::max(0.0F, noManaFlashTimer_ - frameDt);
     inventoryFullFlashTimer_ = std::max(0.0F, inventoryFullFlashTimer_ - frameDt);
     damageFlashTimer_ = std::max(0.0F, damageFlashTimer_ - frameDt);
     hotRefreshFlashTimer_ = std::max(0.0F, hotRefreshFlashTimer_ - frameDt);
     runicShellFlashTimer_ = std::max(0.0F, runicShellFlashTimer_ - frameDt);
+    snareImpactFlash_ = std::max(0.0F, snareImpactFlash_ - frameDt);
 
     if (gameOver_) {
         const Vector2 mouse = input.mousePosition();
@@ -729,6 +840,11 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
 
     const int steps = fixedTimer_.consumeSteps(frameDt);
     for (int i = 0; i < steps; ++i) {
+        tickStunnedEnemies(config::FIXED_DT);
+        tickAbilityCooldowns(config::FIXED_DT);
+        tickLeadFeverEffect(config::FIXED_DT);
+        tickSnareDash(config::FIXED_DT);
+        tickSlugAim(config::FIXED_DT);
         if (!invOpen) {
             ecs::combat_player_melee(registry_, input, player_, config::FIXED_DT);
         } else if (registry_.valid(player_) && registry_.all_of<ecs::MeleeAttacker>(player_)) {
@@ -744,7 +860,8 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         ecs::unit_resolve_collisions(registry_);
         ecs::wall_destroy_projectiles(registry_);
         ecs::projectile_system(registry_, config::FIXED_DT);
-        ecs::collision::projectile_hits(registry_, player_, &inventory_);
+        ecs::collision::projectile_hits(registry_, player_, &inventory_, &snareImpactWorld_,
+                                        &snareImpactFlash_);
         ecs::collision::player_pickup_mana_shards(registry_, player_);
         ecs::death_system(registry_, player_, &enemiesSlain_);
         tickManicEffect(config::FIXED_DT);
@@ -786,6 +903,15 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         }
         if (input.isKeyPressed(KEY_V)) {
             tryUseConsumableSlot(1);
+        }
+        if (input.isKeyPressed(KEY_ONE)) {
+            tryUseAbility(0);
+        }
+        if (input.isKeyPressed(KEY_TWO)) {
+            tryUseAbility(1);
+        }
+        if (input.isKeyPressed(KEY_THREE)) {
+            tryUseAbility(2);
         }
     }
 
@@ -868,6 +994,7 @@ void GameplayScene::draw(ResourceManager &resources) {
     const int h = config::WINDOW_HEIGHT;
 
     if (fogResourcesReady_) {
+        fogDbgLegacyPath_ = false;
         BeginTextureMode(fogSceneTarget_);
         ClearBackground(ui::theme::CLEAR_BG);
         BeginMode2D(camera_.camera());
@@ -877,10 +1004,11 @@ void GameplayScene::draw(ResourceManager &resources) {
 
         drawFogMaskTexture();
         drawFogCompositePass();
-        if (kFogDebugDrawMaskPreview) {
-            drawFogMaskDebugPreview();
-        }
     } else {
+        fogDbgLegacyPath_ = true;
+        fogDbgMaskSkipped_ = true;
+        fogDbgBoundarySamples_ = 0;
+        fogDbgFanVerts_ = 0;
         DrawRectangle(0, 0, w, h, ui::theme::CLEAR_BG);
         BeginMode2D(camera_.camera());
         drawWorldContent(resources);
@@ -915,10 +1043,15 @@ void GameplayScene::draw(ResourceManager &resources) {
     if (gameOver_) {
         drawGameOverScreen(resources);
     }
+
+    if (fogDebugOverlay_) {
+        drawFogDebugOverlay(resources.uiFont());
+    }
 }
 
 void GameplayScene::drawFogMaskTexture() {
     if (!IsTextureValid(fogMaskTarget_.texture)) {
+        fogDbgMaskSkipped_ = true;
         return;
     }
 
@@ -928,6 +1061,9 @@ void GameplayScene::drawFogMaskTexture() {
         BeginTextureMode(fogMaskTarget_);
         ClearBackground(BLACK);
         EndTextureMode();
+        fogDbgMaskSkipped_ = false;
+        fogDbgBoundarySamples_ = 0;
+        fogDbgFanVerts_ = 0;
         return;
     }
 
@@ -937,6 +1073,7 @@ void GameplayScene::drawFogMaskTexture() {
     buildVisibilityPolygonWorld(playerWorld, registry_, config::FOG_OF_WAR_RADIUS, fogVisWorld_);
 
     const int n = static_cast<int>(fogVisWorld_.size());
+    fogDbgBoundarySamples_ = n;
     const Vector2 centerIso = worldToIso(playerWorld);
 
     // Fan in world ray order. Vertices must be in the same space as drawWorldContent (isometric
@@ -948,29 +1085,26 @@ void GameplayScene::drawFogMaskTexture() {
     for (int i = 0; i < n; ++i) {
         fogVisFan_.push_back(worldToIso(fogVisWorld_[static_cast<size_t>(i)]));
     }
-    if (static_cast<int>(fogVisFan_.size()) >= 3) {
-        fogVisFan_.push_back(fogVisFan_[1]);
-    }
-
     BeginTextureMode(fogMaskTarget_);
     ClearBackground(WHITE);
+    // Defensive: UI / other code can leave scissor on; mask would clip to nothing.
+    rlDisableScissorTest();
+    rlDisableDepthTest();
     BeginMode2D(cam);
 
-    if (static_cast<int>(fogVisFan_.size()) >= 4) {
-        DrawTriangleFan(fogVisFan_.data(), static_cast<int>(fogVisFan_.size()), BLACK);
-        constexpr float kRadialSealThick = 2.25F;
-        constexpr float kRimSealThick = 2.5F;
-        const int fanLast = static_cast<int>(fogVisFan_.size()) - 1;
-        for (int i = 1; i < fanLast; ++i) {
-            DrawLineEx(centerIso, fogVisFan_[static_cast<size_t>(i)], kRadialSealThick, BLACK);
-        }
-        for (int i = 1; i < fanLast; ++i) {
-            DrawLineEx(fogVisFan_[static_cast<size_t>(i)], fogVisFan_[static_cast<size_t>(i + 1)],
-                       kRimSealThick, BLACK);
-        }
+    // rlgl enables GL_CULL_FACE at init; triangulation below fixes winding per triangle.
+    rlDisableBackfaceCulling();
+    if (n >= 3) {
+        drawFogVisibilityFilled(fogVisFan_.data(), n, BLACK);
     } else {
         DrawCircleV(centerIso, config::FOG_OF_WAR_RADIUS, BLACK);
     }
+    rlDrawRenderBatchActive();
+    rlEnableBackfaceCulling();
+    // Leave depth test off (matches rlgl default for 2D); do not enable here.
+
+    fogDbgFanVerts_ = static_cast<int>(fogVisFan_.size());
+    fogDbgMaskSkipped_ = false;
 
     EndMode2D();
     EndTextureMode();
@@ -979,34 +1113,91 @@ void GameplayScene::drawFogMaskTexture() {
 void GameplayScene::drawFogCompositePass() {
     const float strength =
         static_cast<float>(config::FOG_DARKNESS_ALPHA) / 255.0F;
-    const Rectangle src = {0.0F, 0.0F, static_cast<float>(fogSceneTarget_.texture.width),
-                           -static_cast<float>(fogSceneTarget_.texture.height)};
+    const float edgeSoft = config::FOG_EDGE_SOFTEN_PIXELS;
     const Rectangle dst = {0.0F, 0.0F, static_cast<float>(config::WINDOW_WIDTH),
                            static_cast<float>(config::WINDOW_HEIGHT)};
+    const Rectangle srcScene = {0.0F, 0.0F, static_cast<float>(fogSceneTarget_.texture.width),
+                                -static_cast<float>(fogSceneTarget_.texture.height)};
+    const Rectangle srcMask = {0.0F, 0.0F, static_cast<float>(fogMaskTarget_.texture.width),
+                               -static_cast<float>(fogMaskTarget_.texture.height)};
     // Pass 1: world (default shader) — only texture0 is used; guaranteed binding.
-    DrawTexturePro(fogSceneTarget_.texture, src, dst, Vector2{0.0F, 0.0F}, 0.0F, WHITE);
+    DrawTexturePro(fogSceneTarget_.texture, srcScene, dst, Vector2{0.0F, 0.0F}, 0.0F, WHITE);
     // Pass 2: fog mask as alpha-only overlay — same DrawTexture path, single sampler.
     SetShaderValue(fogCompositeShader_, fogOverlayLocStrength_, &strength, SHADER_UNIFORM_FLOAT);
+    SetShaderValue(fogCompositeShader_, fogOverlayLocEdgeSoft_, &edgeSoft, SHADER_UNIFORM_FLOAT);
     BeginShaderMode(fogCompositeShader_);
-    DrawTexturePro(fogMaskTarget_.texture, src, dst, Vector2{0.0F, 0.0F}, 0.0F, WHITE);
+    DrawTexturePro(fogMaskTarget_.texture, srcMask, dst, Vector2{0.0F, 0.0F}, 0.0F, WHITE);
     EndShaderMode();
 }
 
-void GameplayScene::drawFogMaskDebugPreview() {
-    if (!fogResourcesReady_) {
-        return;
+void GameplayScene::drawFogDebugOverlay(const Font &font) {
+    constexpr float textSz = 16.0F;
+    constexpr float lineH = 20.0F;
+    constexpr float previewW = 220.0F;
+    constexpr float previewH = 124.0F;
+    constexpr float margin = 10.0F;
+
+    const float tx = margin;
+    float ty = margin;
+    char buf[320];
+
+    DrawRectangle(0, 0, 440, 210, Color{0, 0, 0, 170});
+
+    snprintf(buf, sizeof(buf), "[Fog debug] F3 toggles this panel");
+    DrawTextEx(font, buf, {tx, ty}, textSz, 1.0F, RAYWHITE);
+    ty += lineH;
+
+    snprintf(buf, sizeof(buf), "Path: %s | fogResourcesReady=%d",
+             fogDbgLegacyPath_ ? "LEGACY" : "RT+shader", fogResourcesReady_ ? 1 : 0);
+    DrawTextEx(font, buf, {tx, ty}, textSz, 1.0F, YELLOW);
+    ty += lineH;
+
+    snprintf(buf, sizeof(buf), "Mask draw skipped: %d | boundaryPts=%d fanVerts=%d",
+             fogDbgMaskSkipped_ ? 1 : 0, fogDbgBoundarySamples_, fogDbgFanVerts_);
+    DrawTextEx(font, buf, {tx, ty}, textSz, 1.0F, SKYBLUE);
+    ty += lineH;
+
+    const float strength =
+        static_cast<float>(config::FOG_DARKNESS_ALPHA) / 255.0F;
+    snprintf(buf, sizeof(buf),
+             "Composite strength=%.3f (alpha %u) | edgeSoftPx=%.1f | locs S=%d E=%d", strength,
+             static_cast<unsigned>(config::FOG_DARKNESS_ALPHA), config::FOG_EDGE_SOFTEN_PIXELS,
+             fogOverlayLocStrength_, fogOverlayLocEdgeSoft_);
+    DrawTextEx(font, buf, {tx, ty}, textSz, 1.0F, LIGHTGRAY);
+    ty += lineH;
+
+    DrawTextEx(font, "Mask: BLACK=visible hole, WHITE=fog (before composite)", {tx, ty}, 14.0F,
+               1.0F, Color{200, 200, 200, 255});
+    ty += lineH;
+
+    if (fogResourcesReady_ && IsTextureValid(fogSceneTarget_.texture) &&
+        IsTextureValid(fogMaskTarget_.texture)) {
+        const float px =
+            static_cast<float>(config::WINDOW_WIDTH) - previewW - margin;
+        float py = margin;
+
+        const Rectangle srcScene = {
+            0.0F, 0.0F, static_cast<float>(fogSceneTarget_.texture.width),
+            -static_cast<float>(fogSceneTarget_.texture.height)};
+        const Rectangle dstScene = {px, py, previewW, previewH};
+        DrawTextEx(font, "fogSceneTarget (world RT)", {px, py - 18.0F}, 14.0F, 1.0F, LIME);
+        DrawTexturePro(fogSceneTarget_.texture, srcScene, dstScene, Vector2{0.0F, 0.0F}, 0.0F,
+                       WHITE);
+        DrawRectangleLines(static_cast<int>(px), static_cast<int>(py), static_cast<int>(previewW),
+                           static_cast<int>(previewH), LIME);
+
+        py += previewH + 22.0F;
+        const Rectangle srcMask = {0.0F, 0.0F, static_cast<float>(fogMaskTarget_.texture.width),
+                                   -static_cast<float>(fogMaskTarget_.texture.height)};
+        const Rectangle dstMask = {px, py, previewW, previewH};
+        DrawTextEx(font, "fogMaskTarget (alpha mask)", {px, py - 18.0F}, 14.0F, 1.0F, ORANGE);
+        DrawTexturePro(fogMaskTarget_.texture, srcMask, dstMask, Vector2{0.0F, 0.0F}, 0.0F, WHITE);
+        DrawRectangleLines(static_cast<int>(px), static_cast<int>(py), static_cast<int>(previewW),
+                           static_cast<int>(previewH), ORANGE);
+    } else {
+        DrawTextEx(font, "RT previews N/A (fog init failed or invalid textures)", {tx, ty}, textSz,
+                   1.0F, RED);
     }
-    constexpr float previewW = 320.0F;
-    constexpr float previewH = 180.0F;
-    constexpr float margin = 12.0F;
-    const float x = static_cast<float>(config::WINDOW_WIDTH) - previewW - margin;
-    const float y = margin;
-    const Rectangle src = {0.0F, 0.0F, static_cast<float>(fogMaskTarget_.texture.width),
-                           -static_cast<float>(fogMaskTarget_.texture.height)};
-    const Rectangle dst = {x, y, previewW, previewH};
-    DrawTexturePro(fogMaskTarget_.texture, src, dst, Vector2{0.0F, 0.0F}, 0.0F, WHITE);
-    DrawRectangleLines(static_cast<int>(x), static_cast<int>(y), static_cast<int>(previewW),
-                       static_cast<int>(previewH), LIME);
 }
 
 void GameplayScene::drawCursor(ResourceManager &resources) {
@@ -1068,6 +1259,217 @@ void GameplayScene::drawDamageVignette() {
                            mid, edge);
 }
 
+void GameplayScene::syncStatusHudOrder() {
+    if (!registry_.valid(player_)) {
+        statusHudOrder_.clear();
+        return;
+    }
+    statusHudOrder_.erase(
+        std::remove_if(statusHudOrder_.begin(), statusHudOrder_.end(),
+                       [&](const ActiveStatusHud &h) {
+                           switch (h.kind) {
+                           case StatusHudKind::HealOverTime:
+                               return !registry_.all_of<ecs::HealOverTime>(player_);
+                           case StatusHudKind::ManicEffect:
+                               return !registry_.all_of<ecs::ManicEffect>(player_);
+                           case StatusHudKind::LeadFever:
+                               return !registry_.all_of<ecs::LeadFeverEffect>(player_);
+                           }
+                           return true;
+                       }),
+        statusHudOrder_.end());
+}
+
+void GameplayScene::removeStatusHudKind(StatusHudKind kind) {
+    statusHudOrder_.erase(std::remove_if(statusHudOrder_.begin(), statusHudOrder_.end(),
+                                       [&](const ActiveStatusHud &h) { return h.kind == kind; }),
+                         statusHudOrder_.end());
+}
+
+void GameplayScene::pushStatusHud(StatusHudKind kind, std::string iconPath, Color outline) {
+    removeStatusHudKind(kind);
+    statusHudOrder_.push_back(
+        ActiveStatusHud{kind, std::move(iconPath), outline});
+}
+
+Vector2 GameplayScene::playerAimDirectionWorld() const {
+    if (!registry_.valid(player_) || !registry_.all_of<ecs::Transform>(player_)) {
+        return {1.0F, 0.0F};
+    }
+    const float r = registry_.get<ecs::Transform>(player_).rotation;
+    return {std::cosf(r), std::sinf(r)};
+}
+
+void GameplayScene::tickAbilityCooldowns(float fixedDt) {
+    for (float &cd : abilityCdRem_) {
+        cd = std::max(0.0F, cd - fixedDt);
+    }
+}
+
+void GameplayScene::tickLeadFeverEffect(float fixedDt) {
+    if (!registry_.valid(player_) || !registry_.all_of<ecs::LeadFeverEffect>(player_)) {
+        return;
+    }
+    auto &lf = registry_.get<ecs::LeadFeverEffect>(player_);
+    lf.elapsed += fixedDt;
+    if (lf.elapsed >= lf.duration - 1.0e-4F) {
+        registry_.remove<ecs::LeadFeverEffect>(player_);
+    }
+}
+
+void GameplayScene::tickSnareDash(float fixedDt) {
+    if (!registry_.valid(player_) || !registry_.all_of<ecs::SnareDashState, ecs::Velocity>(player_)) {
+        return;
+    }
+    auto &dash = registry_.get<ecs::SnareDashState>(player_);
+    auto &vel = registry_.get<ecs::Velocity>(player_);
+    vel.value.x = dash.direction.x * dash.speed;
+    vel.value.y = dash.direction.y * dash.speed;
+    const float step = dash.speed * fixedDt;
+    dash.traveled += step;
+    if (dash.traveled >= dash.distance - 1.0e-3F) {
+        registry_.remove<ecs::SnareDashState>(player_);
+        vel.value.x = 0.0F;
+        vel.value.y = 0.0F;
+    }
+}
+
+void GameplayScene::tickSlugAim(float fixedDt) {
+    if (!registry_.valid(player_) || !registry_.all_of<ecs::SlugAimState>(player_)) {
+        return;
+    }
+    auto &aim = registry_.get<ecs::SlugAimState>(player_);
+    aim.elapsed += fixedDt;
+    aim.aimDirection = playerAimDirectionWorld();
+    if (aim.elapsed >= aim.aimDuration - 1.0e-4F) {
+        const Vector2 d = aim.aimDirection;
+        registry_.remove<ecs::SlugAimState>(player_);
+        fireCalamitySlug(d);
+    }
+}
+
+void GameplayScene::tickStunnedEnemies(float fixedDt) {
+    std::vector<entt::entity> toClear;
+    for (const auto e : registry_.view<ecs::StunnedState>()) {
+        auto &st = registry_.get<ecs::StunnedState>(e);
+        st.elapsed += fixedDt;
+        if (st.elapsed >= st.duration - 1.0e-4F) {
+            toClear.push_back(e);
+        }
+    }
+    for (const auto e : toClear) {
+        if (registry_.valid(e)) {
+            registry_.remove<ecs::StunnedState>(e);
+        }
+    }
+}
+
+void GameplayScene::spawnSnareProjectile(const Vector2 &dirWorld) {
+    if (!registry_.valid(player_) || !registry_.all_of<ecs::Transform, ecs::Sprite>(player_)) {
+        return;
+    }
+    const auto &pt = registry_.get<ecs::Transform>(player_);
+    const auto &ps = registry_.get<ecs::Sprite>(player_);
+    const float dx = dirWorld.x;
+    const float dy = dirWorld.y;
+    const float len = std::sqrt(dx * dx + dy * dy);
+    const Vector2 d = len > 0.001F ? Vector2{dx / len, dy / len} : Vector2{1.0F, 0.0F};
+    const float halfDiag =
+        std::sqrt(ps.width * ps.width + ps.height * ps.height) * 0.5F;
+    const float spawnDist = halfDiag + config::PROJECTILE_RADIUS + 2.0F;
+    const auto proj = registry_.create();
+    registry_.emplace<ecs::Transform>(
+        proj, ecs::Transform{{pt.position.x + d.x * spawnDist, pt.position.y + d.y * spawnDist},
+                             std::atan2f(d.y, d.x)});
+    registry_.emplace<ecs::Velocity>(
+        proj, ecs::Velocity{{d.x * config::SNARE_THROW_SPEED, d.y * config::SNARE_THROW_SPEED}});
+    registry_.emplace<ecs::Sprite>(proj, ecs::Sprite{{90, 85, 140, 255}, 14.0F, 14.0F});
+    registry_.emplace<ecs::Projectile>(
+        proj, ecs::Projectile{0.0F, config::SNARE_THROW_SPEED, config::SNARE_THROW_RANGE, 0.0F, d,
+                              true, entt::null, false, 0.0F});
+    registry_.emplace<ecs::SnareProjectile>(
+        proj, ecs::SnareProjectile{config::SNARE_PULL_RADIUS, config::SNARE_STUN_DURATION});
+}
+
+void GameplayScene::fireCalamitySlug(const Vector2 &dirWorld) {
+    if (!registry_.valid(player_) || !registry_.all_of<ecs::Transform, ecs::Sprite>(player_)) {
+        return;
+    }
+    const auto &pt = registry_.get<ecs::Transform>(player_);
+    const auto &ps = registry_.get<ecs::Sprite>(player_);
+    const float dx = dirWorld.x;
+    const float dy = dirWorld.y;
+    const float len = std::sqrt(dx * dx + dy * dy);
+    const Vector2 d = len > 0.001F ? Vector2{dx / len, dy / len} : Vector2{1.0F, 0.0F};
+    const float halfDiag =
+        std::sqrt(ps.width * ps.width + ps.height * ps.height) * 0.5F;
+    const float spawnDist = halfDiag + config::SLUG_SIZE * 0.5F + 4.0F;
+    const auto proj = registry_.create();
+    registry_.emplace<ecs::Transform>(
+        proj, ecs::Transform{{pt.position.x + d.x * spawnDist, pt.position.y + d.y * spawnDist},
+                             std::atan2f(d.y, d.x)});
+    registry_.emplace<ecs::Velocity>(
+        proj, ecs::Velocity{{d.x * config::SLUG_SPEED, d.y * config::SLUG_SPEED}});
+    registry_.emplace<ecs::Sprite>(proj, ecs::Sprite{{255, 200, 80, 255}, config::SLUG_SIZE,
+                                                     config::SLUG_SIZE});
+    registry_.emplace<ecs::Projectile>(
+        proj, ecs::Projectile{config::SLUG_DAMAGE, config::SLUG_SPEED, config::SLUG_MAX_RANGE, 0.0F,
+                              d, true, entt::null, true, 0.0F});
+    registry_.emplace<ecs::SlugProjectile>(
+        proj, ecs::SlugProjectile{config::SLUG_KNOCKBACK_SIDE});
+    registry_.emplace<ecs::PierceHitRecord>(proj, ecs::PierceHitRecord{});
+}
+
+void GameplayScene::tryUseAbility(int abilityIndex) {
+    if (abilityIndex < 0 || abilityIndex > 2) {
+        return;
+    }
+    if (!registry_.valid(player_) || !registry_.all_of<ecs::Mana>(player_)) {
+        return;
+    }
+    if (registry_.all_of<ecs::SlugAimState>(player_) ||
+        registry_.all_of<ecs::SnareDashState>(player_)) {
+        return;
+    }
+    const int ci = std::clamp(selectedClass_, 0, CLASS_COUNT - 1);
+    if (ci != 0) {
+        return;
+    }
+    const AbilityDef &def = UNDEAD_HUNTER_ABILITIES.abilities[static_cast<size_t>(abilityIndex)];
+    if (abilityCdRem_[static_cast<size_t>(abilityIndex)] > 0.001F) {
+        return;
+    }
+    auto &mana = registry_.get<ecs::Mana>(player_);
+    if (mana.current + 1.0e-4F < def.manaCost) {
+        noManaFlashTimer_ = 1.2F;
+        return;
+    }
+    mana.current -= def.manaCost;
+    abilityCdRem_[static_cast<size_t>(abilityIndex)] = def.cooldown;
+
+    if (abilityIndex == 0) {
+        registry_.emplace_or_replace<ecs::LeadFeverEffect>(
+            player_, ecs::LeadFeverEffect{config::LEAD_FEVER_DURATION, 0.0F});
+        const std::string icon = def.iconPath != nullptr ? std::string(def.iconPath) : std::string{};
+        pushStatusHud(StatusHudKind::LeadFever, icon, {140, 220, 160, 255});
+        return;
+    }
+    if (abilityIndex == 1) {
+        const Vector2 forward = playerAimDirectionWorld();
+        spawnSnareProjectile(forward);
+        const float len = std::sqrt(forward.x * forward.x + forward.y * forward.y);
+        const Vector2 f = len > 0.001F ? Vector2{forward.x / len, forward.y / len}
+                                       : Vector2{1.0F, 0.0F};
+        registry_.emplace_or_replace<ecs::SnareDashState>(
+            player_, ecs::SnareDashState{config::SNARE_DASH_SPEED, config::SNARE_DASH_DISTANCE, 0.0F,
+                                         {-f.x, -f.y}});
+        return;
+    }
+    const Vector2 aimDir = playerAimDirectionWorld();
+    registry_.emplace_or_replace<ecs::SlugAimState>(
+        player_, ecs::SlugAimState{config::SLUG_AIM_DURATION, 0.0F, aimDir});
+}
+
 void GameplayScene::drawHud(ResourceManager &resources) {
     const Font &font = resources.uiFont();
     const int w = config::WINDOW_WIDTH;
@@ -1076,6 +1478,7 @@ void GameplayScene::drawHud(ResourceManager &resources) {
     if (!registry_.valid(player_) || !registry_.all_of<ecs::Health, ecs::Mana>(player_)) {
         return;
     }
+    syncStatusHudOrder();
     const auto &hp = registry_.get<ecs::Health>(player_);
     const auto &mp = registry_.get<ecs::Mana>(player_);
 
@@ -1091,9 +1494,7 @@ void GameplayScene::drawHud(ResourceManager &resources) {
     const float hudBottom = hudBottomAll - consumableRowH;
     const float hpBarTop = hudBottom - barMpH - barGap - barHpH;
     const float icon = 28.0F;
-    const bool hotActive = registry_.all_of<ecs::HealOverTime>(player_);
-    const bool manicActive = registry_.all_of<ecs::ManicEffect>(player_);
-    const int statusIconCount = (hotActive ? 1 : 0) + (manicActive ? 1 : 0);
+    const int statusIconCount = static_cast<int>(statusHudOrder_.size());
     const float iconLift = statusIconCount > 0 ? icon + 10.0F : 0.0F;
 
     const float hudPad = 8.0F;
@@ -1239,12 +1640,7 @@ void GameplayScene::drawHud(ResourceManager &resources) {
         }
     }
 
-    auto drawStatusTimerSquare = [](float ix, float iy, float iconSz, float tRem, Color fill,
-                                    Color border, Color ringCol) {
-        DrawRectangle(static_cast<int>(ix), static_cast<int>(iy), static_cast<int>(iconSz),
-                      static_cast<int>(iconSz), fill);
-        DrawRectangleLines(static_cast<int>(ix), static_cast<int>(iy), static_cast<int>(iconSz),
-                           static_cast<int>(iconSz), border);
+    auto drawStatusTimerRingOnly = [](float ix, float iy, float iconSz, float tRem, Color ringCol) {
         if (tRem <= 0.001F) {
             return;
         }
@@ -1299,31 +1695,161 @@ void GameplayScene::drawHud(ResourceManager &resources) {
         processSeg({x0, y0}, topMid);
     };
 
-    float statusX = barX;
     const float statusY = hpBarTop - icon - 8.0F;
-    if (hotActive) {
-        const auto &hot = registry_.get<ecs::HealOverTime>(player_);
-        const float tRem =
-            hot.duration > 0.001F ? std::max(0.0F, 1.0F - hot.elapsed / hot.duration) : 0.0F;
-        drawStatusTimerSquare(statusX, statusY, icon, tRem, {120, 20, 30, 255}, {220, 80, 80, 255},
-                              {255, 200, 120, 255});
-        if (hotRefreshFlashTimer_ > 0.001F) {
-            const float flashA = std::min(1.0F, hotRefreshFlashTimer_ * 5.0F);
-            DrawRectangle(static_cast<int>(statusX), static_cast<int>(statusY),
-                          static_cast<int>(icon), static_cast<int>(icon),
-                          Fade(WHITE, 0.4F * flashA));
+    const size_t nHud = statusHudOrder_.size();
+    for (size_t j = 0; j < nHud; ++j) {
+        const ActiveStatusHud &hud = statusHudOrder_[nHud - 1 - j];
+        const float ix = barX + static_cast<float>(j) * (icon + 6.0F);
+        const float iy = statusY;
+        float tRem = 1.0F;
+        Color ringCol{255, 220, 180, 255};
+        Color fillFallback{60, 50, 55, 255};
+
+        if (hud.kind == StatusHudKind::HealOverTime && registry_.all_of<ecs::HealOverTime>(player_)) {
+            const auto &hot = registry_.get<ecs::HealOverTime>(player_);
+            tRem = hot.duration > 0.001F ? std::max(0.0F, 1.0F - hot.elapsed / hot.duration) : 0.0F;
+            ringCol = {255, 200, 120, 255};
+            fillFallback = {120, 20, 30, 255};
+        } else if (hud.kind == StatusHudKind::ManicEffect &&
+                   registry_.all_of<ecs::ManicEffect>(player_)) {
+            const auto &me = registry_.get<ecs::ManicEffect>(player_);
+            tRem = me.duration > 0.001F ? std::max(0.0F, 1.0F - me.elapsed / me.duration) : 0.0F;
+            ringCol = {255, 245, 180, 255};
+            fillFallback = {160, 110, 40, 255};
+        } else if (hud.kind == StatusHudKind::LeadFever &&
+                   registry_.all_of<ecs::LeadFeverEffect>(player_)) {
+            const auto &lf = registry_.get<ecs::LeadFeverEffect>(player_);
+            tRem = lf.duration > 0.001F ? std::max(0.0F, 1.0F - lf.elapsed / lf.duration) : 0.0F;
+            ringCol = {180, 255, 200, 255};
+            fillFallback = {30, 80, 50, 255};
         }
-        statusX += icon + 6.0F;
-    }
-    if (manicActive) {
-        const auto &me = registry_.get<ecs::ManicEffect>(player_);
-        const float tRem =
-            me.duration > 0.001F ? std::max(0.0F, 1.0F - me.elapsed / me.duration) : 0.0F;
-        drawStatusTimerSquare(statusX, statusY, icon, tRem, {160, 110, 40, 255},
-                              {255, 210, 120, 255}, {255, 245, 180, 255});
+
+        if (!hud.iconPath.empty()) {
+            const Texture2D tex = resources.getTexture(hud.iconPath);
+            if (tex.id != 0 && tex.width > 0 && tex.height > 0) {
+                const float tw = static_cast<float>(tex.width);
+                const float th = static_cast<float>(tex.height);
+                const float side = std::min(tw, th);
+                const Rectangle src{(tw - side) * 0.5F, (th - side) * 0.5F, side, side};
+                const Rectangle dst{ix, iy, icon, icon};
+                DrawTexturePro(tex, src, dst, {0.0F, 0.0F}, 0.0F, WHITE);
+            } else {
+                DrawRectangle(static_cast<int>(ix), static_cast<int>(iy), static_cast<int>(icon),
+                              static_cast<int>(icon), fillFallback);
+            }
+        } else {
+            DrawRectangle(static_cast<int>(ix), static_cast<int>(iy), static_cast<int>(icon),
+                          static_cast<int>(icon), fillFallback);
+        }
+        DrawRectangleLines(static_cast<int>(ix), static_cast<int>(iy), static_cast<int>(icon),
+                           static_cast<int>(icon), hud.outline);
+        drawStatusTimerRingOnly(ix, iy, icon, tRem, ringCol);
+        if (hud.kind == StatusHudKind::HealOverTime && hotRefreshFlashTimer_ > 0.001F) {
+            const float flashA = std::min(1.0F, hotRefreshFlashTimer_ * 5.0F);
+            DrawRectangle(static_cast<int>(ix), static_cast<int>(iy), static_cast<int>(icon),
+                          static_cast<int>(icon), Fade(WHITE, 0.4F * flashA));
+        }
     }
 
-    (void)w;
+    // Ability bar (lower-right): Undead Hunter only for now.
+    if (ci == 0) {
+        constexpr float abSize = 52.0F;
+        constexpr float abGap = 8.0F;
+        const float abRowW = 3.0F * abSize + 2.0F * abGap;
+        const float abRight = static_cast<float>(w) - margin;
+        const float abX0 = abRight - abRowW;
+        const float abY = hudBottom + 8.0F;
+        const float abHudTop = abY - 6.0F;
+        const float abHudH = abSize + consumableRowH * 0.5F + 20.0F;
+        DrawRectangle(static_cast<int>(abX0 - 6.0F), static_cast<int>(abHudTop),
+                      static_cast<int>(abRowW + 12.0F), static_cast<int>(abHudH), ui::theme::HUD_BACKING);
+
+        const Vector2 mouse = GetMousePosition();
+        const char *keyLbl[3] = {"1", "2", "3"};
+        for (int ai = 0; ai < 3; ++ai) {
+            const float ax = abX0 + static_cast<float>(ai) * (abSize + abGap);
+            const Rectangle abR{ax, abY, abSize, abSize};
+            const AbilityDef &ad = UNDEAD_HUNTER_ABILITIES.abilities[static_cast<size_t>(ai)];
+            DrawRectangleRec(abR, ui::theme::SLOT_FILL);
+            DrawRectangleLinesEx(abR, 2.0F, ui::theme::SLOT_BORDER);
+            if (ad.iconPath != nullptr && ad.iconPath[0] != '\0') {
+                const Texture2D at = resources.getTexture(ad.iconPath);
+                if (at.id != 0) {
+                    const Rectangle src{0.0F, 0.0F, static_cast<float>(at.width),
+                                        static_cast<float>(at.height)};
+                    DrawTexturePro(at, src, abR, {0.0F, 0.0F}, 0.0F, WHITE);
+                } else {
+                    const Color ph{static_cast<unsigned char>(70 + ai * 40), 90, 120, 255};
+                    DrawRectangleRec(abR, ph);
+                }
+            } else {
+                const Color ph{static_cast<unsigned char>(70 + ai * 35),
+                               static_cast<unsigned char>(100 + ai * 20), 130, 255};
+                DrawRectangleRec(abR, ph);
+            }
+            DrawTextEx(font, keyLbl[ai], {ax + 4.0F, abY + 2.0F}, 13.0F, 1.0F, RAYWHITE);
+
+            const float cdTot = ad.cooldown;
+            const float cdRem = abilityCdRem_[static_cast<size_t>(ai)];
+            if (cdTot > 0.001F && cdRem > 0.001F) {
+                const float ratio = std::min(1.0F, cdRem / cdTot);
+                DrawRectangleRec(abR, Fade(BLACK, 0.45F * ratio));
+                char cdBuf[16];
+                std::snprintf(cdBuf, sizeof(cdBuf), "%ds",
+                              static_cast<int>(std::ceil(static_cast<double>(cdRem))));
+                const float cdFs = 18.0F;
+                const Vector2 cdDim = MeasureTextEx(font, cdBuf, cdFs, 1.0F);
+                DrawTextEx(font, cdBuf,
+                           {abR.x + (abR.width - cdDim.x) * 0.5F + 1.0F,
+                            abR.y + (abR.height - cdDim.y) * 0.5F + 1.0F},
+                           cdFs, 1.0F, Fade(BLACK, 180));
+                DrawTextEx(font, cdBuf,
+                           {abR.x + (abR.width - cdDim.x) * 0.5F,
+                            abR.y + (abR.height - cdDim.y) * 0.5F},
+                           cdFs, 1.0F, {200, 220, 255, 255});
+            }
+
+            if (CheckCollisionPointRec(mouse, abR)) {
+                const std::string title = ad.name;
+                const std::string body = ad.description;
+                const float tipSz = 13.0F;
+                const Vector2 titleDim = MeasureTextEx(font, title.c_str(), tipSz + 2.0F, 1.0F);
+                float descH = 0.0F;
+                float descW = 0.0F;
+                if (!body.empty()) {
+                    std::istringstream iss(body);
+                    std::string line;
+                    while (std::getline(iss, line)) {
+                        const Vector2 d = MeasureTextEx(font, line.c_str(), tipSz, 1.0F);
+                        descH += d.y + 4.0F;
+                        descW = std::max(descW, d.x);
+                    }
+                    descH = std::max(0.0F, descH - 4.0F);
+                }
+                const float pad = 8.0F;
+                const float gap = 6.0F;
+                const float tw = std::max(titleDim.x, descW) + pad * 2.0F;
+                const float th = titleDim.y + gap + descH + pad * 2.0F;
+                Rectangle tip{mouse.x + 14.0F, mouse.y - th - 14.0F, tw, th};
+                clampRectToScreen(tip, w, h);
+                DrawRectangleRec(tip, Fade(ui::theme::PANEL_FILL, 235));
+                DrawRectangleLinesEx(tip, 1.5F, ui::theme::PANEL_BORDER);
+                float yc = tip.y + pad;
+                DrawTextEx(font, title.c_str(), {tip.x + pad, yc}, tipSz + 2.0F, 1.0F, RAYWHITE);
+                yc += titleDim.y + gap;
+                if (!body.empty()) {
+                    std::istringstream iss2(body);
+                    std::string line2;
+                    while (std::getline(iss2, line2)) {
+                        DrawTextEx(font, line2.c_str(), {tip.x + pad, yc}, tipSz, 1.0F,
+                                   ui::theme::LABEL_TEXT);
+                        const Vector2 d = MeasureTextEx(font, line2.c_str(), tipSz, 1.0F);
+                        yc += d.y + 4.0F;
+                    }
+                }
+            }
+        }
+    }
 }
 
 void GameplayScene::drawFlashMessages(ResourceManager &resources) {

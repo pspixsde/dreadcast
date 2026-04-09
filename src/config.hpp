@@ -100,6 +100,38 @@ inline constexpr float RUNIC_SHELL_COOLDOWN = 30.0F;
 
 inline constexpr float FOG_OF_WAR_RADIUS = 500.0F;
 inline constexpr unsigned char FOG_DARKNESS_ALPHA = 145;
+/// Screen-space half-width of the fog transition at the visibility boundary (mask blur). 0 = hard
+/// edge; ~12–18 reads closer to Dota-style soft fog.
+inline constexpr float FOG_EDGE_SOFTEN_PIXELS = 17.0F;
+
+// Lead Fever (ability 1)
+inline constexpr float LEAD_FEVER_DURATION = 6.0F;
+inline constexpr float LEAD_FEVER_MANA_COST = 25.0F;
+inline constexpr float LEAD_FEVER_COOLDOWN = 20.0F;
+inline constexpr int LEAD_FEVER_PELLET_COUNT = 4;
+inline constexpr float LEAD_FEVER_DAMAGE_MULT = 0.5F;
+inline constexpr float LEAD_FEVER_KNOCKBACK = 250.0F;
+inline constexpr float LEAD_FEVER_SCATTER_ANGLE = 0.35F;
+
+// Deadlight Snare (ability 2)
+inline constexpr float SNARE_MANA_COST = 20.0F;
+inline constexpr float SNARE_COOLDOWN = 20.0F;
+inline constexpr float SNARE_THROW_SPEED = 500.0F;
+inline constexpr float SNARE_THROW_RANGE = 350.0F;
+inline constexpr float SNARE_PULL_RADIUS = 100.0F;
+inline constexpr float SNARE_STUN_DURATION = 2.0F;
+inline constexpr float SNARE_DASH_DISTANCE = 150.0F;
+inline constexpr float SNARE_DASH_SPEED = 800.0F;
+
+// Calamity Slug (ability 3)
+inline constexpr float SLUG_MANA_COST = 30.0F;
+inline constexpr float SLUG_COOLDOWN = 25.0F;
+inline constexpr float SLUG_AIM_DURATION = 1.0F;
+inline constexpr float SLUG_DAMAGE = 50.0F;
+inline constexpr float SLUG_SPEED = PROJECTILE_SPEED * 2.0F;
+inline constexpr float SLUG_SIZE = 20.0F;
+inline constexpr float SLUG_KNOCKBACK_SIDE = 400.0F;
+inline constexpr float SLUG_MAX_RANGE = 1200.0F;
 /// Angular samples for world-space vision polygon (ray cast per direction).
 inline constexpr int FOG_VISIBILITY_SAMPLES = 360;
 
