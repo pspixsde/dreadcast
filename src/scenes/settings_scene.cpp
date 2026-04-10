@@ -93,11 +93,31 @@ void SettingsScene::update(SceneManager &scenes, InputManager &input,
     }
 
     if (activeTab_ == Tab::Gameplay) {
-        const Rectangle sensTrack = {static_cast<float>(w) * 0.5F - 150.0F, 210.0F, 300.0F,
+        const Rectangle sensTrack = {static_cast<float>(w) * 0.5F - 150.0F, 200.0F, 300.0F,
                                        22.0F};
         updateMouseSensitivitySlider(mouse, mouseDown, click, resources, draggingMouseSensSlider_,
                                      sensTrack);
-        const float btnY = sensTrack.y + 56.0F;
+        const float labelSz = 22.0F;
+        const float rowX = static_cast<float>(w) * 0.5F - 220.0F;
+        float rowY = sensTrack.y + 52.0F;
+        const char *manaLbl = "Show ability mana cost";
+        const Vector2 manaDim = MeasureTextEx(resources.uiFont(), manaLbl, labelSz, 1.0F);
+        manaCostToggleButton_.rect = {rowX + manaDim.x + 160.0F, rowY - 3.0F, 80.0F, 34.0F};
+        manaCostToggleButton_.label =
+            resources.settings().showAbilityManaCost ? "On" : "Off";
+        if (manaCostToggleButton_.wasClicked(mouse, click)) {
+            resources.settings().showAbilityManaCost = !resources.settings().showAbilityManaCost;
+        }
+        rowY += 46.0F;
+        const char *dmgLbl = "Show damage/heal numbers";
+        const Vector2 dmgDim = MeasureTextEx(resources.uiFont(), dmgLbl, labelSz, 1.0F);
+        damageNumbersToggleButton_.rect = {rowX + dmgDim.x + 160.0F, rowY - 3.0F, 80.0F, 34.0F};
+        damageNumbersToggleButton_.label =
+            resources.settings().showDamageNumbers ? "On" : "Off";
+        if (damageNumbersToggleButton_.wasClicked(mouse, click)) {
+            resources.settings().showDamageNumbers = !resources.settings().showDamageNumbers;
+        }
+        const float btnY = rowY + 40.0F;
         const float btnW = 140.0F;
         const float btnH = 40.0F;
         const float btnGap = 16.0F;
@@ -180,10 +200,30 @@ void SettingsScene::draw(ResourceManager &resources) {
                          ui::theme::BTN_HOVER, RAYWHITE, ui::theme::BTN_BORDER);
 
     if (activeTab_ == Tab::Gameplay) {
-        const Rectangle sensTrack = {static_cast<float>(w) * 0.5F - 150.0F, 210.0F, 300.0F,
+        const Rectangle sensTrack = {static_cast<float>(w) * 0.5F - 150.0F, 200.0F, 300.0F,
                                      22.0F};
         drawMouseSensitivitySlider(font, mouse, resources.settings().mouseSensitivity, sensTrack);
-        const float btnY = sensTrack.y + 56.0F;
+        const float labelSz = 22.0F;
+        const float rowX = static_cast<float>(w) * 0.5F - 220.0F;
+        float rowY = sensTrack.y + 52.0F;
+        const char *manaLbl = "Show ability mana cost";
+        const Vector2 manaDim = MeasureTextEx(font, manaLbl, labelSz, 1.0F);
+        DrawTextEx(font, manaLbl, {rowX, rowY}, labelSz, 1.0F, ui::theme::LABEL_TEXT);
+        manaCostToggleButton_.rect = {rowX + manaDim.x + 160.0F, rowY - 3.0F, 80.0F, 34.0F};
+        manaCostToggleButton_.label =
+            resources.settings().showAbilityManaCost ? "On" : "Off";
+        manaCostToggleButton_.draw(font, 18.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER,
+                                   RAYWHITE, ui::theme::BTN_BORDER);
+        rowY += 46.0F;
+        const char *dmgLbl = "Show damage/heal numbers";
+        const Vector2 dmgDim = MeasureTextEx(font, dmgLbl, labelSz, 1.0F);
+        DrawTextEx(font, dmgLbl, {rowX, rowY}, labelSz, 1.0F, ui::theme::LABEL_TEXT);
+        damageNumbersToggleButton_.rect = {rowX + dmgDim.x + 160.0F, rowY - 3.0F, 80.0F, 34.0F};
+        damageNumbersToggleButton_.label =
+            resources.settings().showDamageNumbers ? "On" : "Off";
+        damageNumbersToggleButton_.draw(font, 18.0F, mouse, ui::theme::BTN_FILL,
+                                        ui::theme::BTN_HOVER, RAYWHITE, ui::theme::BTN_BORDER);
+        const float btnY = rowY + 40.0F;
         const float btnW = 140.0F;
         const float btnH = 40.0F;
         const float btnGap = 16.0F;

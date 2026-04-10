@@ -2,7 +2,27 @@
 
 All notable changes to **Dreadcast** will be documented in this file.
 
-## v0.10.0 — Unreleased
+## v0.10.1 — 2026-04-10
+
+### Added
+
+- **Ability HUD:** Draft icons **`assets/textures/drafts/1.png`**, **`2.png`**, **`3.png`** for Undead Hunter abilities; **104×104** slots **upper-center**, vertical center aligned with the **mana bar**; key **1 / 2 / 3** in small **black squares** slightly above/outside each icon; **mana cost** in **blue** at lower-right of each icon (toggleable).
+- **Consumable HUD (C / V):** **5:4** slots, **half** ability height, **left** of abilities, slightly **lower**; same keybind badge style; **stack count** lower-right inside the slot.
+- **Equipment HUD:** Three **7:5**-fitted icons below the mana bar (armor / amulet / ring) with **Runic Shell** cooldown overlay when applicable.
+- **Floating damage/heal numbers** at entities (world→screen), toggleable; **Settings → Gameplay:** **Show ability mana cost** (default **on**), **Show damage/heal numbers** (default **off**); persisted in **`settings.cfg`**.
+- **`GameSettings`:** **`showAbilityManaCost`**, **`showDamageNumbers`**.
+
+### Changed
+
+- **Pure Blood HOT + Cordial Manic:** HOT **timer keeps running** during Manic; **no healing** while Manic (Cordial still blocks regen/HOT HP as before).
+- **Inventory rarity (i) panel:** Wider (**560px**); each tier is **name — description** on **one line** with shortened blurbs.
+- **`InventoryUI::drawItemIcon`** is **public** for reuse (gameplay equipment row uses local scaled draw to fit slots).
+
+### Fixed
+
+- **Gameplay HUD:** Ability/consumable hover uses **raw mouse** (`GetMousePosition`) for hit-testing and tooltips; **default cursor** over those HUD elements (aim cursor unchanged elsewhere).
+
+## v0.10.0 — 2026-04-09
 
 ### Added
 

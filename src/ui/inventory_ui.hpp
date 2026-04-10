@@ -70,11 +70,11 @@ class InventoryUI {
               const InventoryState &inv, float playerHpRatio = 1.0F,
               float runicShellCdRatio = 0.0F, float runicShellCdSeconds = 0.0F);
 
-  private:
-    /// Draw a 7:5 item icon at fixed `ITEM_ICON_DRAW_*` size (inventory slots).
+    /// Draw a 7:5 item icon at fixed `ITEM_ICON_DRAW_*` size (centered in `slotRect`).
     static void drawItemIcon(const dreadcast::ItemData &it, dreadcast::ResourceManager &resources,
                              Rectangle slotRect, Color tint = WHITE);
 
+  private:
     bool open_{false};
 
     static constexpr const char *kSlotLabels[] = {"Armor", "Amulet", "Ring"};

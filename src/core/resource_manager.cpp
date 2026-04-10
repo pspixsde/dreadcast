@@ -40,6 +40,8 @@ bool GameSettings::saveToFile(const std::string &path) const {
     }
     out << "mouseSensitivity=" << static_cast<double>(mouseSensitivity) << '\n';
     out << "showFpsCounter=" << (showFpsCounter ? 1 : 0) << '\n';
+    out << "showAbilityManaCost=" << (showAbilityManaCost ? 1 : 0) << '\n';
+    out << "showDamageNumbers=" << (showDamageNumbers ? 1 : 0) << '\n';
     return out.good();
 }
 
@@ -69,6 +71,16 @@ void GameSettings::loadFromFile(const std::string &path) {
             int i = 0;
             if (vs >> i) {
                 showFpsCounter = (i != 0);
+            }
+        } else if (key == "showAbilityManaCost") {
+            int i = 0;
+            if (vs >> i) {
+                showAbilityManaCost = (i != 0);
+            }
+        } else if (key == "showDamageNumbers") {
+            int i = 0;
+            if (vs >> i) {
+                showDamageNumbers = (i != 0);
             }
         }
     }

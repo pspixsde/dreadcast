@@ -93,7 +93,7 @@ Rectangle makeInventoryPanelRect(int screenW, int screenH) {
 
 Rectangle makeRarityPanelRect(int screenW, int screenH) {
     const Rectangle inv = makeInventoryPanelRect(screenW, screenH);
-    const float w = 400.0F;
+    const float w = 560.0F;
     const float h = 500.0F;
     return {inv.x + (inv.width - w) * 0.5F, inv.y + (inv.height - h) * 0.5F, w, h};
 }
@@ -935,51 +935,44 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
 
         float y = rp.y + 48.0F;
         const float fs = 14.0F;
-        const float lh = 18.0F;
+        const float lh = 20.0F;
         DrawTextEx(font, "Gear (armor, rings, amulets)", {rp.x + 16.0F, y}, fs + 2.0F, 1.0F,
                    ui::theme::SUBTITLE_TEXT);
         y += lh + 2.0F;
-        auto lineGear = [&](const char *a, const char *b, Color c) {
-            DrawTextEx(font, a, {rp.x + 20.0F, y}, fs, 1.0F, c);
-            DrawTextEx(font, b, {rp.x + 20.0F, y + lh * 0.9F}, fs - 1.0F, 1.0F,
+        auto lineRarityInline = [&](const char *namePart, const char *descPart, Color nameCol) {
+            const float x0 = rp.x + 20.0F;
+            DrawTextEx(font, namePart, {x0, y}, fs, 1.0F, nameCol);
+            const Vector2 nameDim = MeasureTextEx(font, namePart, fs, 1.0F);
+            const char *dash = " - ";
+            DrawTextEx(font, dash, {x0 + nameDim.x, y}, fs, 1.0F, ui::theme::LABEL_TEXT);
+            const Vector2 dashDim = MeasureTextEx(font, dash, fs, 1.0F);
+            DrawTextEx(font, descPart, {x0 + nameDim.x + dashDim.x, y}, fs, 1.0F,
                        ui::theme::LABEL_TEXT);
-            y += lh * 2.05F;
+            y += lh * 1.35F;
         };
-        lineGear("Tarnished",
-                 "Used, rusted, and discarded by the masses.",
-                 dreadcast::rarityColor(dreadcast::ItemRarity::Tarnished));
-        lineGear("Blighted",
-                 "Touched by the decay of Hell; starting to \"change.\"",
-                 dreadcast::rarityColor(dreadcast::ItemRarity::Blighted));
-        lineGear("Cursed", "Possesses a malevolent will; it wants to be used.",
-                 dreadcast::rarityColor(dreadcast::ItemRarity::Cursed));
-        lineGear("Dread", "Items that have caused legendary massacres.",
-                 dreadcast::rarityColor(dreadcast::ItemRarity::Dread));
-        lineGear("Abyssal", "Forged from the core of the pit; reality-bending.",
-                 dreadcast::rarityColor(dreadcast::ItemRarity::Abyssal));
+        lineRarityInline("Tarnished", "Rusted, discarded by the masses.",
+                         dreadcast::rarityColor(dreadcast::ItemRarity::Tarnished));
+        lineRarityInline("Blighted", "Touched by Hell's decay.",
+                         dreadcast::rarityColor(dreadcast::ItemRarity::Blighted));
+        lineRarityInline("Cursed", "Possesses a malevolent will.",
+                         dreadcast::rarityColor(dreadcast::ItemRarity::Cursed));
+        lineRarityInline("Dread", "Tied to legendary massacres.",
+                         dreadcast::rarityColor(dreadcast::ItemRarity::Dread));
+        lineRarityInline("Abyssal", "Forged from the pit's core; reality-bending.",
+                         dreadcast::rarityColor(dreadcast::ItemRarity::Abyssal));
 
         y += 4.0F;
         DrawTextEx(font, "Vials (consumables)", {rp.x + 16.0F, y}, fs + 2.0F, 1.0F,
                    ui::theme::SUBTITLE_TEXT);
         y += lh + 2.0F;
-        auto lineVial = [&](const char *a, const char *b, Color c) {
-            DrawTextEx(font, a, {rp.x + 20.0F, y}, fs, 1.0F, c);
-            DrawTextEx(font, b, {rp.x + 20.0F, y + lh * 0.9F}, fs - 1.0F, 1.0F,
-                       ui::theme::LABEL_TEXT);
-            y += lh * 2.15F;
-        };
-        lineVial("Clouded (stack 5)",
-                 "Murky, full of sediment; heals, but leaves a bitter aftertaste of madness.",
-                 dreadcast::rarityColor(dreadcast::ItemRarity::Clouded));
-        lineVial("Lucid (stack 3)",
-                 "Filtered through the silks of a tormented soul; a steady, haunting glow.",
-                 dreadcast::rarityColor(dreadcast::ItemRarity::Lucid));
-        lineVial("Absolute (stack 1)",
-                 "Pure, undiluted essence; demands the flesh stay together.",
-                 dreadcast::rarityColor(dreadcast::ItemRarity::Absolute));
-        lineVial("Special (stack 1)",
-                 "Not always stronger — odd effects and strange rules.",
-                 dreadcast::rarityColor(dreadcast::ItemRarity::Special));
+        lineRarityInline("Clouded (stack 5)", "Murky sediment; basic healing.",
+                         dreadcast::rarityColor(dreadcast::ItemRarity::Clouded));
+        lineRarityInline("Lucid (stack 3)", "Filtered through a tormented soul.",
+                         dreadcast::rarityColor(dreadcast::ItemRarity::Lucid));
+        lineRarityInline("Absolute (stack 1)", "Pure, undiluted essence.",
+                         dreadcast::rarityColor(dreadcast::ItemRarity::Absolute));
+        lineRarityInline("Special (stack 1)", "Odd effects and strange rules.",
+                         dreadcast::rarityColor(dreadcast::ItemRarity::Special));
     }
 
     int tipIdx = -1;

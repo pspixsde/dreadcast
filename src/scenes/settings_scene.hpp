@@ -22,6 +22,8 @@ class SettingsScene final : public Scene {
     ui::Button controlsTabButton_{};
     ui::Button videoTabButton_{};
     ui::Button fpsCounterToggleButton_{};
+    ui::Button manaCostToggleButton_{};
+    ui::Button damageNumbersToggleButton_{};
     ui::Button gameplaySaveButton_{};
     ui::Button gameplayResetButton_{};
 
