@@ -12,6 +12,10 @@ struct GameSettings {
     bool showFpsCounter{true};
     /// Multiplier on aim vector from player screen position (0.1–3.0 typical).
     float mouseSensitivity{1.0F};
+    /// HUD: mana cost on ability icons (Gameplay settings).
+    bool showAbilityManaCost{true};
+    /// Floating damage/heal numbers near entities.
+    bool showDamageNumbers{false};
 
     [[nodiscard]] bool saveToFile(const std::string &path) const;
     /// Loads from `path` if present; ignores missing file / parse errors.

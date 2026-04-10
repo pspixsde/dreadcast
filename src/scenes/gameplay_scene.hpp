@@ -4,6 +4,7 @@
 #include <raylib.h>
 
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "config.hpp"
@@ -15,9 +16,16 @@
 #include "ui/button.hpp"
 #include "ui/inventory_ui.hpp"
 
-#include <vector>
-
 namespace dreadcast {
+
+struct FloatingNumber {
+    Vector2 worldPos{};
+    float amount{0.0F};
+    bool isHeal{false};
+    float lifetime{0.85F};
+    float elapsed{0.0F};
+    float driftX{0.0F};
+};
 
 enum class StatusHudKind { HealOverTime, ManicEffect, LeadFever };
 
@@ -74,6 +82,8 @@ class GameplayScene final : public Scene {
     void drawLootPickupHighlight(ResourceManager &resources);
     void drawGameOverScreen(ResourceManager &resources);
     void drawDamageVignette();
+    void drawFloatingCombatNumbers(ResourceManager &resources);
+    void tickFloatingNumbers(float frameDt);
     void drawFogOfWarLegacy();
     void initFogResources();
     void unloadFogResources();
@@ -113,6 +123,10 @@ class GameplayScene final : public Scene {
 
     float abilityCdRem_[3]{0.0F, 0.0F, 0.0F};
     std::vector<ActiveStatusHud> statusHudOrder_{};
+
+    bool hoveringHudElement_{false};
+    std::vector<FloatingNumber> floatingNumbers_{};
+    std::unordered_map<entt::entity, float> hpBeforeFixedStep_{};
 
     int selectedClass_{0};
     int enemiesSlain_{0};
