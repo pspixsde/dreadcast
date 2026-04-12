@@ -15,18 +15,28 @@ namespace dreadcast::ui {
 
 namespace {
 
-// Slot dimensions (width:height = 7:5). Equip largest, consumable medium, bag smallest.
-constexpr float kInvPanelW = 760.0F;
-constexpr float kInvPanelH = 480.0F;
+// Slot dimensions (width:height = 7:5). Equip, consumables, and bag cells share one footprint.
+constexpr float kInvPaddingX = 40.0F;
 constexpr float kEquipSlotW = 120.0F;
 constexpr float kEquipSlotH = 86.0F;
-constexpr float kConsumableSlotW = 108.0F;
-constexpr float kConsumableSlotH = 77.0F;
-constexpr float kBagSlotW = 98.0F;
-constexpr float kBagSlotH = 70.0F;
+constexpr float kConsumableSlotW = kEquipSlotW;
+constexpr float kConsumableSlotH = kEquipSlotH;
+constexpr float kBagSlotW = kEquipSlotW;
+constexpr float kBagSlotH = kEquipSlotH;
 constexpr float kSlotGap = 10.0F;
 /// Width used to center armor (row 1) and the amulet+ring pair (row 2).
 constexpr float kEquipColumnInnerW = 280.0F;
+/// Three bag columns + gaps (same cell size as equip).
+constexpr float kBagGridW = 3.0F * kBagSlotW + 2.0F * kSlotGap;
+/// Horizontal space between the equip/consumable column and the carried grid.
+constexpr float kColumnGap = 120.0F;
+constexpr float kInvPanelW =
+    kInvPaddingX + kEquipColumnInnerW + kColumnGap + kBagGridW + kInvPaddingX;
+constexpr float kInvPanelH = 500.0F;
+/// Left edge of the carried grid (relative to panel origin).
+constexpr float kBagGridLeft = kInvPaddingX + kEquipColumnInnerW + kColumnGap;
+/// Top of slot rows (aligned: armor row = bag row 0).
+constexpr float kSlotGridTopY = 80.0F;
 
 Rectangle makeEquipSlotRect(int screenW, int screenH, int equipIndex) {
     (void)screenW;
@@ -34,8 +44,8 @@ Rectangle makeEquipSlotRect(int screenW, int screenH, int equipIndex) {
     const float panelH = kInvPanelH;
     const float px = (static_cast<float>(screenW) - panelW) * 0.5F;
     const float py = (static_cast<float>(screenH) - panelH) * 0.5F;
-    const float colLeft = px + 24.0F;
-    const float y0 = py + 80.0F;
+    const float colLeft = px + kInvPaddingX;
+    const float y0 = py + kSlotGridTopY;
     const float row1Y = y0 + kEquipSlotH + kSlotGap;
     const float pairW = kEquipSlotW * 2.0F + kSlotGap;
 
@@ -62,11 +72,13 @@ Rectangle makeConsumableSlotRect(int screenW, int screenH, int consumableIndex) 
     const float panelH = kInvPanelH;
     const float px = (static_cast<float>(screenW) - panelW) * 0.5F;
     const float py = (static_cast<float>(screenH) - panelH) * 0.5F;
-    const float y0 = py + 80.0F;
+    const float colLeft = px + kInvPaddingX;
+    const float y0 = py + kSlotGridTopY;
     const float equipBlockH = 2.0F * kEquipSlotH + kSlotGap;
     const float afterEquip = y0 + equipBlockH + 24.0F;
-    const float x = px + 24.0F + static_cast<float>(consumableIndex) *
-                                      (kConsumableSlotW + kSlotGap);
+    const float consBlockW = 2.0F * kConsumableSlotW + kSlotGap;
+    const float x0 = colLeft + (kEquipColumnInnerW - consBlockW) * 0.5F;
+    const float x = x0 + static_cast<float>(consumableIndex) * (kConsumableSlotW + kSlotGap);
     return {x, afterEquip, kConsumableSlotW, kConsumableSlotH};
 }
 
@@ -75,11 +87,11 @@ Rectangle makeBagSlotRect(int screenW, int screenH, int bagIndex) {
     const float panelH = kInvPanelH;
     const float px = (static_cast<float>(screenW) - panelW) * 0.5F;
     const float py = (static_cast<float>(screenH) - panelH) * 0.5F;
-    const float col0 = px + 340.0F;
+    const float col0 = px + kBagGridLeft;
     const int row = bagIndex / 3;
     const int col = bagIndex % 3;
     return {col0 + static_cast<float>(col) * (kBagSlotW + kSlotGap),
-            py + 100.0F + static_cast<float>(row) * (kBagSlotH + kSlotGap), kBagSlotW,
+            py + kSlotGridTopY + static_cast<float>(row) * (kBagSlotH + kSlotGap), kBagSlotW,
             kBagSlotH};
 }
 
@@ -93,8 +105,8 @@ Rectangle makeInventoryPanelRect(int screenW, int screenH) {
 
 Rectangle makeRarityPanelRect(int screenW, int screenH) {
     const Rectangle inv = makeInventoryPanelRect(screenW, screenH);
-    const float w = 560.0F;
-    const float h = 500.0F;
+    const float w = std::min(620.0F, inv.width - 48.0F);
+    const float h = std::min(500.0F, inv.height - 32.0F);
     return {inv.x + (inv.width - w) * 0.5F, inv.y + (inv.height - h) * 0.5F, w, h};
 }
 
@@ -372,6 +384,10 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
     }
 
     if (contextOpen_) {
+        if (rightPress) {
+            contextOpen_ = false;
+            // Fall through to right-click handler below to open a menu on another slot.
+        } else {
         const bool itemValid = contextItemIndex_ >= 0 &&
                                contextItemIndex_ < static_cast<int>(inv.items.size());
         const bool itemIsConsumable =
@@ -470,6 +486,7 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
             dragging_ = false;
         }
         return action;
+        }
     }
 
     if (rightPress && !dragging_) {
@@ -725,15 +742,15 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
                RAYWHITE);
 
     const float labelSize = 18.0F;
-    DrawTextEx(font, "Equipped", {px + 24.0F, py + 56.0F}, labelSize, 1.0F,
+    DrawTextEx(font, "Equipped", {px + kInvPaddingX, py + 56.0F}, labelSize, 1.0F,
                ui::theme::LABEL_TEXT);
 
-    const float y0 = py + 80.0F;
+    const float y0 = py + kSlotGridTopY;
     const float equipBlockH = 2.0F * kEquipSlotH + kSlotGap;
     const float consLabelY = y0 + equipBlockH + 4.0F;
-    DrawTextEx(font, "Consumables", {px + 24.0F, consLabelY}, labelSize, 1.0F,
+    DrawTextEx(font, "Consumables", {px + kInvPaddingX, consLabelY}, labelSize, 1.0F,
                ui::theme::LABEL_TEXT);
-    DrawTextEx(font, "Carried", {px + 340.0F, py + 56.0F}, labelSize, 1.0F,
+    DrawTextEx(font, "Carried", {px + kBagGridLeft, py + 56.0F}, labelSize, 1.0F,
                ui::theme::LABEL_TEXT);
 
     static const char *kSlotIconPaths[] = {
@@ -805,11 +822,13 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
             if (it.isStackable && it.stackCount >= 1) {
                 char cntBuf[16];
                 std::snprintf(cntBuf, sizeof(cntBuf), "%d", it.stackCount);
-                const float stackFs = 13.0F;
+                const float stackFs = 17.0F;
                 const Vector2 cd = MeasureTextEx(font, cntBuf, stackFs, 1.0F);
-                const float sp = 4.0F;
-                const float tx = r.x + r.width - cd.x - sp;
-                const float ty = r.y + r.height - cd.y - sp;
+                const float sp = 2.0F;
+                const float ix = r.x + (r.width - ITEM_ICON_DRAW_W) * 0.5F;
+                const float iy = r.y + (r.height - ITEM_ICON_DRAW_H) * 0.5F;
+                const float tx = ix + ITEM_ICON_DRAW_W - cd.x - sp;
+                const float ty = iy + ITEM_ICON_DRAW_H - cd.y - sp;
                 DrawTextEx(font, cntBuf, {tx + 1.0F, ty + 1.0F}, stackFs, 1.0F,
                            Fade(BLACK, 200));
                 DrawTextEx(font, cntBuf, {tx, ty}, stackFs, 1.0F, RAYWHITE);
@@ -837,11 +856,13 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
             if (it.isStackable && it.stackCount >= 1) {
                 char cntBuf[16];
                 std::snprintf(cntBuf, sizeof(cntBuf), "%d", it.stackCount);
-                const float stackFs = 13.0F;
+                const float stackFs = 17.0F;
                 const Vector2 cd = MeasureTextEx(font, cntBuf, stackFs, 1.0F);
-                const float sp = 4.0F;
-                const float tx = r.x + r.width - cd.x - sp;
-                const float ty = r.y + r.height - cd.y - sp;
+                const float sp = 2.0F;
+                const float ix = r.x + (r.width - ITEM_ICON_DRAW_W) * 0.5F;
+                const float iy = r.y + (r.height - ITEM_ICON_DRAW_H) * 0.5F;
+                const float tx = ix + ITEM_ICON_DRAW_W - cd.x - sp;
+                const float ty = iy + ITEM_ICON_DRAW_H - cd.y - sp;
                 DrawTextEx(font, cntBuf, {tx + 1.0F, ty + 1.0F}, stackFs, 1.0F,
                            Fade(BLACK, 200));
                 DrawTextEx(font, cntBuf, {tx, ty}, stackFs, 1.0F, RAYWHITE);
@@ -960,6 +981,8 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
                          dreadcast::rarityColor(dreadcast::ItemRarity::Dread));
         lineRarityInline("Abyssal", "Forged from the pit's core; reality-bending.",
                          dreadcast::rarityColor(dreadcast::ItemRarity::Abyssal));
+        lineRarityInline("Special (gear)", "Odd rules; unique mechanics on armor, rings, amulets.",
+                         dreadcast::rarityColor(dreadcast::ItemRarity::Special));
 
         y += 4.0F;
         DrawTextEx(font, "Vials (consumables)", {rp.x + 16.0F, y}, fs + 2.0F, 1.0F,
@@ -971,7 +994,7 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
                          dreadcast::rarityColor(dreadcast::ItemRarity::Lucid));
         lineRarityInline("Absolute (stack 1)", "Pure, undiluted essence.",
                          dreadcast::rarityColor(dreadcast::ItemRarity::Absolute));
-        lineRarityInline("Special (stack 1)", "Odd effects and strange rules.",
+        lineRarityInline("Special (vial, stack 1)", "Odd effects and strange rules.",
                          dreadcast::rarityColor(dreadcast::ItemRarity::Special));
     }
 
@@ -1014,6 +1037,12 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
                               static_cast<double>(it.maxHpBonus));
                 ext += bonusBuf;
             }
+            if (it.maxManaBonus > 0.001F) {
+                char mbBuf[64];
+                std::snprintf(mbBuf, sizeof(mbBuf), " | +%.0f Max Mana",
+                              static_cast<double>(it.maxManaBonus));
+                ext += mbBuf;
+            }
             if (it.hpRegenBonus > 0.001F) {
                 char rgBuf[64];
                 std::snprintf(rgBuf, sizeof(rgBuf), " | +%.1f HP/s",
@@ -1054,7 +1083,7 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
                            std::max(it.description.empty() ? 0.0F : descW, extDim.x)) +
                        pad * 2.0F;
         const float th = hContent + pad * 2.0F;
-        Rectangle tip{mouse.x + 14.0F, mouse.y - th - 14.0F, tw, th};
+        Rectangle tip{mouse.x, mouse.y - th, tw, th};
         clampRectToScreen(tip, screenW, screenH);
         DrawRectangleRec(tip, Fade(ui::theme::PANEL_FILL, 235));
         DrawRectangleLinesEx(tip, 1.5F,

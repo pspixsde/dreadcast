@@ -6,6 +6,8 @@
 #include <entt/entt.hpp>
 #include <raylib.h>
 
+#include "config.hpp"
+
 namespace dreadcast::ecs {
 
 struct Transform {
@@ -70,9 +72,9 @@ struct Projectile {
 };
 
 struct MeleeAttacker {
-    float damage{20.0F};
-    float knockback{200.0F};
-    float range{60.0F};
+    float damage{dreadcast::config::MELEE_DAMAGE};
+    float knockback{dreadcast::config::MELEE_KNOCKBACK};
+    float range{dreadcast::config::MELEE_RANGE};
     bool rmbHeldPrev{false};
 
     enum class Phase { Idle, Swing, BetweenSwings, Recovery } phase{Phase::Idle};
@@ -90,7 +92,7 @@ struct MeleeAttacker {
     static constexpr float kRecoveryDuration = 0.38F;
     static constexpr float kSingleSwingCooldown = 0.22F;
 
-    static constexpr float kKnockbackScale[3] = {0.6F, 0.8F, 1.5F};
+    static constexpr float kKnockbackScale[3] = {0.7F, 0.9F, 1.6F};
     static constexpr float kDamageScale[3] = {1.0F, 1.0F, 1.35F};
     static constexpr float kArcHalfDeg[3] = {35.0F, 45.0F, 60.0F};
 
@@ -132,6 +134,12 @@ struct Wall {
     float halfH{32.0F};
 };
 
+/// Walk-through lava hazard (`Transform::position` is center).
+struct Lava {
+    float halfW{32.0F};
+    float halfH{32.0F};
+};
+
 /// Enemy becomes active when player enters `agitationRange`; calms after `calmDownDelay` without
 /// a fresh sighting, or immediately when giving up at last known position behind cover.
 struct Agitation {
@@ -155,6 +163,14 @@ struct HealOverTime {
     float duration{8.0F};
     float elapsed{0.0F};
     float healedSoFar{0.0F};
+};
+
+/// Vial of Raw Spirit: mana restored over time (one active instance; re-applying replaces).
+struct ManaRegenOverTime {
+    float totalMana{50.0F};
+    float duration{6.0F};
+    float elapsed{0.0F};
+    float regenedSoFar{0.0F};
 };
 
 /// Vial of Cordial Manic: speed + invuln + HP drain, blocks external regen / HOT.

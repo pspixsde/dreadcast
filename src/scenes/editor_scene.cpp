@@ -10,6 +10,7 @@
 
 #include "config.hpp"
 #include "core/input.hpp"
+#include "game/item_factory.hpp"
 #include "core/iso_utils.hpp"
 #include "core/resource_manager.hpp"
 #include "scenes/menu_scene.hpp"
@@ -34,11 +35,11 @@ float distSq(Vector2 a, Vector2 b) {
 } // namespace
 
 Rectangle EditorScene::toolbarPanelRect() const {
-    return {4.0F, 4.0F, 210.0F, 580.0F};
+    return {4.0F, 4.0F, 260.0F, 452.0F};
 }
 
 Rectangle EditorScene::editorUiHitRect() const {
-    return {4.0F, 4.0F, 280.0F, 620.0F};
+    return {4.0F, 4.0F, 300.0F, 480.0F};
 }
 
 bool EditorScene::isMouseOverEditorUi(Vector2 screenMouse) const {
@@ -98,6 +99,28 @@ EditorScene::ResizeHandle EditorScene::wallHandleAt(const Vector2 &worldMouse,
     return ResizeHandle::None;
 }
 
+EditorScene::ResizeHandle EditorScene::lavaHandleAt(const Vector2 &worldMouse,
+                                                     const LavaData &w) const {
+    const Vector2 left{w.cx - w.halfW, w.cy};
+    const Vector2 right{w.cx + w.halfW, w.cy};
+    const Vector2 top{w.cx, w.cy - w.halfH};
+    const Vector2 bottom{w.cx, w.cy + w.halfH};
+    const float r2 = kWallHandlePickWorld * kWallHandlePickWorld;
+    if (distSq(worldMouse, left) <= r2) {
+        return ResizeHandle::Left;
+    }
+    if (distSq(worldMouse, right) <= r2) {
+        return ResizeHandle::Right;
+    }
+    if (distSq(worldMouse, top) <= r2) {
+        return ResizeHandle::Top;
+    }
+    if (distSq(worldMouse, bottom) <= r2) {
+        return ResizeHandle::Bottom;
+    }
+    return ResizeHandle::None;
+}
+
 void EditorScene::onEnter() {
     camera_.init(config::WINDOW_WIDTH, config::WINDOW_HEIGHT);
     camera_.setLerpSpeed(20.0F);
@@ -106,25 +129,17 @@ void EditorScene::onEnter() {
     map_ = defaultMapData();
     loadMap();
 
-    toolButtons_.clear();
-    const char *labels[] = {"Select", "Wall", "Enemy", "Casket", "Player", "Item"};
-    for (int i = 0; i < 6; ++i) {
-        ui::Button b{};
-        b.rect = {16.0F, 70.0F + i * 44.0F, 118.0F, 34.0F};
-        b.label = labels[i];
-        toolButtons_.push_back(b);
-    }
-    mapPrevButton_.rect = {16.0F, 344.0F, 56.0F, 30.0F};
+    mapPrevButton_.rect = {16.0F, 58.0F, 56.0F, 28.0F};
     mapPrevButton_.label = "<";
-    mapNextButton_.rect = {80.0F, 344.0F, 56.0F, 30.0F};
+    mapNextButton_.rect = {80.0F, 58.0F, 56.0F, 28.0F};
     mapNextButton_.label = ">";
-    mapNewButton_.rect = {16.0F, 382.0F, 120.0F, 30.0F};
+    mapNewButton_.rect = {16.0F, 92.0F, 120.0F, 28.0F};
     mapNewButton_.label = "New map";
-    saveButton_.rect = {16.0F, 422.0F, 118.0F, 34.0F};
+    saveButton_.rect = {16.0F, 128.0F, 220.0F, 30.0F};
     saveButton_.label = "Save";
-    loadButton_.rect = {16.0F, 466.0F, 118.0F, 34.0F};
+    loadButton_.rect = {16.0F, 164.0F, 220.0F, 30.0F};
     loadButton_.label = "Load";
-    backButton_.rect = {16.0F, 510.0F, 118.0F, 34.0F};
+    backButton_.rect = {16.0F, 200.0F, 220.0F, 30.0F};
     backButton_.label = "Back";
 }
 
@@ -170,6 +185,15 @@ EditorScene::Selection EditorScene::pickSelection(const Vector2 &worldMouse) con
             return s;
         }
     }
+    for (int i = 0; i < static_cast<int>(map_.lavas.size()); ++i) {
+        const LavaData &w = map_.lavas[static_cast<size_t>(i)];
+        if (worldMouse.x >= w.cx - w.halfW && worldMouse.x <= w.cx + w.halfW &&
+            worldMouse.y >= w.cy - w.halfH && worldMouse.y <= w.cy + w.halfH) {
+            s.type = SelectedType::Lava;
+            s.index = i;
+            return s;
+        }
+    }
     return s;
 }
 
@@ -179,6 +203,11 @@ void EditorScene::handlePlacement(const Vector2 &worldMouse) {
         map_.walls.push_back({worldMouse.x, worldMouse.y, kDefaultWallHalf, kDefaultWallHalf});
         selected_.type = SelectedType::Wall;
         selected_.index = static_cast<int>(map_.walls.size()) - 1;
+        break;
+    case Tool::PlaceLava:
+        map_.lavas.push_back({worldMouse.x, worldMouse.y, kDefaultWallHalf, kDefaultWallHalf});
+        selected_.type = SelectedType::Lava;
+        selected_.index = static_cast<int>(map_.lavas.size()) - 1;
         break;
     case Tool::PlaceEnemy:
         map_.enemies.push_back(
@@ -198,8 +227,10 @@ void EditorScene::handlePlacement(const Vector2 &worldMouse) {
         selected_.index = -1;
         break;
     case Tool::PlaceItem: {
-        static const char *kItemKinds[] = {"iron_armor", "vial_pure_blood", "vial_cordial_manic",
-                                           "barbed_tunic", "runic_shell"};
+        static const char *kItemKinds[] = {"iron_armor",         "vial_pure_blood",
+                                           "vial_cordial_manic", "barbed_tunic",
+                                           "runic_shell",        "vial_raw_spirit",
+                                           "hollow_ring"};
         const int nk = static_cast<int>(sizeof(kItemKinds) / sizeof(kItemKinds[0]));
         const int ki = std::clamp(selectedItemKind_, 0, nk - 1);
         map_.itemSpawns.push_back({worldMouse.x, worldMouse.y, kItemKinds[static_cast<size_t>(ki)]});
@@ -218,6 +249,13 @@ void EditorScene::applySelectionMove(const Vector2 &worldMouse) {
     case SelectedType::Wall:
         if (selected_.index >= 0 && selected_.index < static_cast<int>(map_.walls.size())) {
             auto &w = map_.walls[static_cast<size_t>(selected_.index)];
+            w.cx = target.x;
+            w.cy = target.y;
+        }
+        break;
+    case SelectedType::Lava:
+        if (selected_.index >= 0 && selected_.index < static_cast<int>(map_.lavas.size())) {
+            auto &w = map_.lavas[static_cast<size_t>(selected_.index)];
             w.cx = target.x;
             w.cy = target.y;
         }
@@ -252,6 +290,9 @@ void EditorScene::deleteSelection() {
     if (selected_.type == SelectedType::Wall && selected_.index >= 0 &&
         selected_.index < static_cast<int>(map_.walls.size())) {
         map_.walls.erase(map_.walls.begin() + selected_.index);
+    } else if (selected_.type == SelectedType::Lava && selected_.index >= 0 &&
+               selected_.index < static_cast<int>(map_.lavas.size())) {
+        map_.lavas.erase(map_.lavas.begin() + selected_.index);
     } else if (selected_.type == SelectedType::Enemy && selected_.index >= 0 &&
                selected_.index < static_cast<int>(map_.enemies.size())) {
         map_.enemies.erase(map_.enemies.begin() + selected_.index);
@@ -272,6 +313,13 @@ void EditorScene::duplicateSelection() {
         copy.cy += 36.0F;
         map_.walls.push_back(copy);
         selected_.index = static_cast<int>(map_.walls.size()) - 1;
+    } else if (selected_.type == SelectedType::Lava && selected_.index >= 0 &&
+               selected_.index < static_cast<int>(map_.lavas.size())) {
+        LavaData copy = map_.lavas[static_cast<size_t>(selected_.index)];
+        copy.cx += 36.0F;
+        copy.cy += 36.0F;
+        map_.lavas.push_back(copy);
+        selected_.index = static_cast<int>(map_.lavas.size()) - 1;
     } else if (selected_.type == SelectedType::Enemy && selected_.index >= 0 &&
                selected_.index < static_cast<int>(map_.enemies.size())) {
         EnemySpawnData copy = map_.enemies[static_cast<size_t>(selected_.index)];
@@ -296,6 +344,10 @@ void EditorScene::copySelectionToClipboard() {
         selected_.index < static_cast<int>(map_.walls.size())) {
         clipboardWall_ = map_.walls[static_cast<size_t>(selected_.index)];
         clipboardKind_ = ClipboardKind::Wall;
+    } else if (selected_.type == SelectedType::Lava && selected_.index >= 0 &&
+               selected_.index < static_cast<int>(map_.lavas.size())) {
+        clipboardLava_ = map_.lavas[static_cast<size_t>(selected_.index)];
+        clipboardKind_ = ClipboardKind::Lava;
     } else if (selected_.type == SelectedType::Enemy && selected_.index >= 0 &&
                selected_.index < static_cast<int>(map_.enemies.size())) {
         clipboardEnemy_ = map_.enemies[static_cast<size_t>(selected_.index)];
@@ -320,6 +372,15 @@ void EditorScene::pasteFromClipboard(const Vector2 &worldMouse) {
         map_.walls.push_back(w);
         selected_.type = SelectedType::Wall;
         selected_.index = static_cast<int>(map_.walls.size()) - 1;
+        break;
+    }
+    case ClipboardKind::Lava: {
+        LavaData w = clipboardLava_;
+        w.cx = worldMouse.x;
+        w.cy = worldMouse.y;
+        map_.lavas.push_back(w);
+        selected_.type = SelectedType::Lava;
+        selected_.index = static_cast<int>(map_.lavas.size()) - 1;
         break;
     }
     case ClipboardKind::Enemy: {
@@ -367,6 +428,7 @@ bool EditorScene::loadMap() {
     map_ = loaded;
     selected_ = {};
     resizingWall_ = ResizeHandle::None;
+    resizingLava_ = ResizeHandle::None;
     draggingSelection_ = false;
     return true;
 }
@@ -391,6 +453,7 @@ void EditorScene::newMap() {
     map_ = defaultMapData();
     selected_ = {};
     resizingWall_ = ResizeHandle::None;
+    resizingLava_ = ResizeHandle::None;
     statusText_ = "New map (unsaved layout)";
     statusTimer_ = 2.0F;
 }
@@ -432,6 +495,38 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
         return;
     }
 
+    if (resizingLava_ != ResizeHandle::None) {
+        if (selected_.type == SelectedType::Lava && selected_.index >= 0 &&
+            selected_.index < static_cast<int>(map_.lavas.size())) {
+            auto &w = map_.lavas[static_cast<size_t>(selected_.index)];
+            const float fixedRight = lavaResizeStart_.cx + lavaResizeStart_.halfW;
+            const float fixedLeft = lavaResizeStart_.cx - lavaResizeStart_.halfW;
+            const float fixedTop = lavaResizeStart_.cy - lavaResizeStart_.halfH;
+            const float fixedBottom = lavaResizeStart_.cy + lavaResizeStart_.halfH;
+            if (resizingLava_ == ResizeHandle::Right) {
+                const float newRight = fixedRight + (worldMouse.x - lavaResizeMouseStart_.x);
+                w.cx = (fixedLeft + newRight) * 0.5F;
+                w.halfW = std::max(10.0F, (newRight - fixedLeft) * 0.5F);
+            } else if (resizingLava_ == ResizeHandle::Left) {
+                const float newLeft = fixedLeft + (worldMouse.x - lavaResizeMouseStart_.x);
+                w.cx = (newLeft + fixedRight) * 0.5F;
+                w.halfW = std::max(10.0F, (fixedRight - newLeft) * 0.5F);
+            } else if (resizingLava_ == ResizeHandle::Bottom) {
+                const float newBottom = fixedBottom + (worldMouse.y - lavaResizeMouseStart_.y);
+                w.cy = (fixedTop + newBottom) * 0.5F;
+                w.halfH = std::max(10.0F, (newBottom - fixedTop) * 0.5F);
+            } else if (resizingLava_ == ResizeHandle::Top) {
+                const float newTop = fixedTop + (worldMouse.y - lavaResizeMouseStart_.y);
+                w.cy = (newTop + fixedBottom) * 0.5F;
+                w.halfH = std::max(10.0F, (fixedBottom - newTop) * 0.5F);
+            }
+        }
+        if (leftReleased) {
+            resizingLava_ = ResizeHandle::None;
+        }
+        return;
+    }
+
     if (activeTool_ != Tool::Select) {
         if (leftPressed) {
             handlePlacement(worldMouse);
@@ -440,6 +535,18 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
     }
 
     if (leftPressed) {
+        if (selected_.type == SelectedType::Lava && selected_.index >= 0 &&
+            selected_.index < static_cast<int>(map_.lavas.size())) {
+            auto &w = map_.lavas[static_cast<size_t>(selected_.index)];
+            const ResizeHandle h = lavaHandleAt(worldMouse, w);
+            if (h != ResizeHandle::None) {
+                resizingLava_ = h;
+                lavaResizeStart_ = w;
+                lavaResizeMouseStart_ = worldMouse;
+                draggingSelection_ = false;
+                return;
+            }
+        }
         if (selected_.type == SelectedType::Wall && selected_.index >= 0 &&
             selected_.index < static_cast<int>(map_.walls.size())) {
             auto &w = map_.walls[static_cast<size_t>(selected_.index)];
@@ -457,12 +564,20 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
         if (selected_.type == SelectedType::Item && selected_.index >= 0 &&
             selected_.index < static_cast<int>(map_.itemSpawns.size())) {
             const std::string &k = map_.itemSpawns[static_cast<size_t>(selected_.index)].kind;
-            if (k == "vial_pure_blood") {
+            if (k == "iron_armor") {
+                selectedItemKind_ = 0;
+            } else if (k == "vial_pure_blood") {
                 selectedItemKind_ = 1;
             } else if (k == "vial_cordial_manic") {
                 selectedItemKind_ = 2;
             } else if (k == "barbed_tunic") {
                 selectedItemKind_ = 3;
+            } else if (k == "runic_shell") {
+                selectedItemKind_ = 4;
+            } else if (k == "vial_raw_spirit") {
+                selectedItemKind_ = 5;
+            } else if (k == "hollow_ring") {
+                selectedItemKind_ = 6;
             } else {
                 selectedItemKind_ = 0;
             }
@@ -471,6 +586,9 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
             Vector2 center = worldMouse;
             if (selected_.type == SelectedType::Wall) {
                 const auto &w = map_.walls[static_cast<size_t>(selected_.index)];
+                center = {w.cx, w.cy};
+            } else if (selected_.type == SelectedType::Lava) {
+                const auto &w = map_.lavas[static_cast<size_t>(selected_.index)];
                 center = {w.cx, w.cy};
             } else if (selected_.type == SelectedType::Enemy) {
                 const auto &e = map_.enemies[static_cast<size_t>(selected_.index)];
@@ -511,6 +629,23 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
             w.halfH = std::max(10.0F, w.halfH - d);
         }
     }
+    if (selected_.type == SelectedType::Lava && selected_.index >= 0 &&
+        selected_.index < static_cast<int>(map_.lavas.size()) && resizingLava_ == ResizeHandle::None) {
+        auto &w = map_.lavas[static_cast<size_t>(selected_.index)];
+        const float d = IsKeyDown(KEY_LEFT_SHIFT) ? 2.0F : 1.0F;
+        if (input.isKeyHeld(KEY_LEFT)) {
+            w.halfW = std::max(10.0F, w.halfW - d);
+        }
+        if (input.isKeyHeld(KEY_RIGHT)) {
+            w.halfW += d;
+        }
+        if (input.isKeyHeld(KEY_UP)) {
+            w.halfH += d;
+        }
+        if (input.isKeyHeld(KEY_DOWN)) {
+            w.halfH = std::max(10.0F, w.halfH - d);
+        }
+    }
 }
 
 void EditorScene::drawWallResizeHandles(const Font & /*font*/, const WallData &w) const {
@@ -522,6 +657,15 @@ void EditorScene::drawWallResizeHandles(const Font & /*font*/, const WallData &w
     }
 }
 
+void EditorScene::drawLavaResizeHandles(const Font & /*font*/, const LavaData &w) const {
+    const Vector2 pts[4] = {worldToIso({w.cx - w.halfW, w.cy}), worldToIso({w.cx + w.halfW, w.cy}),
+                            worldToIso({w.cx, w.cy - w.halfH}), worldToIso({w.cx, w.cy + w.halfH})};
+    for (const Vector2 &p : pts) {
+        DrawCircleV(p, 6.0F, {255, 180, 90, 255});
+        DrawCircleLinesV(p, 6.0F, {120, 50, 30, 255});
+    }
+}
+
 void EditorScene::update(SceneManager &scenes, InputManager &input, ResourceManager &resources,
                          float frameDt) {
     statusTimer_ = std::max(0.0F, statusTimer_ - frameDt);
@@ -530,12 +674,6 @@ void EditorScene::update(SceneManager &scenes, InputManager &input, ResourceMana
     const bool overUi = isMouseOverEditorUi(mouse);
     bool uiConsumedClick = false;
 
-    for (int i = 0; i < static_cast<int>(toolButtons_.size()); ++i) {
-        if (toolButtons_[static_cast<size_t>(i)].wasClicked(mouse, click)) {
-            activeTool_ = static_cast<Tool>(i);
-            uiConsumedClick = true;
-        }
-    }
     if (mapPrevButton_.wasClicked(mouse, click)) {
         ensureValidMapIndex();
         const int n = static_cast<int>(mapFiles_.size());
@@ -575,68 +713,84 @@ void EditorScene::update(SceneManager &scenes, InputManager &input, ResourceMana
         scenes.replace(std::make_unique<MenuScene>());
         return;
     }
-    const bool showEnemyType =
-        activeTool_ == Tool::PlaceEnemy ||
-        (activeTool_ == Tool::Select && selected_.type == SelectedType::Enemy);
-    constexpr float ddw = 188.0F;
-    constexpr float ddh = 28.0F;
-    const Rectangle enemyDdHeader{16.0F, 154.0F, ddw, ddh};
-    if (showEnemyType) {
-        if (click && CheckCollisionPointRec(mouse, enemyDdHeader)) {
-            enemyDropdownOpen_ = !enemyDropdownOpen_;
-            itemDropdownOpen_ = false;
-            uiConsumedClick = true;
+    const Rectangle panel = toolbarPanelRect();
+    constexpr float tabYOffset = 238.0F;
+    constexpr float tabH = 28.0F;
+    constexpr float tabGap = 4.0F;
+    const float tabX0 = panel.x + 8.0F;
+    const float tabW = (panel.width - 16.0F - 2.0F * tabGap) / 3.0F;
+    const float tabY = panel.y + tabYOffset;
+    if (click) {
+        for (int t = 0; t < 3; ++t) {
+            const Rectangle tr{tabX0 + static_cast<float>(t) * (tabW + tabGap), tabY, tabW, tabH};
+            if (CheckCollisionPointRec(mouse, tr)) {
+                activeTab_ = static_cast<EditorTab>(t);
+                uiConsumedClick = true;
+                break;
+            }
         }
-        if (enemyDropdownOpen_) {
-            const int nOpt = 2;
-            for (int oi = 0; oi < nOpt; ++oi) {
-                const Rectangle row{enemyDdHeader.x,
-                                    enemyDdHeader.y + enemyDdHeader.height + static_cast<float>(oi) *
-                                                                                  (ddh + 2.0F),
-                                    ddw, ddh};
-                if (click && CheckCollisionPointRec(mouse, row)) {
-                    selectedEnemyType_ = oi;
-                    enemyDropdownOpen_ = false;
+    }
+
+    constexpr float contentYOffset = 272.0F;
+    constexpr float rowH = 28.0F;
+    constexpr float rowGap = 2.0F;
+    const float contentY = panel.y + contentYOffset;
+    const Rectangle contentClip{panel.x + 6.0F, contentY, panel.width - 12.0F,
+                                  panel.y + panel.height - 8.0F - contentY};
+    if (click && CheckCollisionPointRec(mouse, contentClip)) {
+        if (activeTab_ == EditorTab::Elements) {
+            static constexpr const char *kElemLbl[] = {"Select", "Wall", "Lava", "Casket",
+                                                       "Player spawn"};
+            static constexpr Tool kElemTool[] = {Tool::Select, Tool::PlaceWall, Tool::PlaceLava,
+                                                   Tool::PlaceCasket, Tool::SetPlayerSpawn};
+            constexpr int nElem = static_cast<int>(sizeof(kElemLbl) / sizeof(kElemLbl[0]));
+            for (int i = 0; i < nElem; ++i) {
+                const Rectangle row{contentClip.x + 2.0F,
+                                    contentClip.y + static_cast<float>(i) * (rowH + rowGap), contentClip.width - 4.0F,
+                                    rowH};
+                if (CheckCollisionPointRec(mouse, row)) {
+                    activeTool_ = kElemTool[static_cast<size_t>(i)];
+                    uiConsumedClick = true;
+                    break;
+                }
+            }
+        } else if (activeTab_ == EditorTab::Items) {
+            constexpr int nItem = 7;
+            for (int i = 0; i < nItem; ++i) {
+                const Rectangle row{contentClip.x + 2.0F,
+                                    contentClip.y + static_cast<float>(i) * (rowH + rowGap), contentClip.width - 4.0F,
+                                    rowH};
+                if (CheckCollisionPointRec(mouse, row)) {
+                    selectedItemKind_ = i;
+                    activeTool_ = Tool::PlaceItem;
+                    uiConsumedClick = true;
+                    break;
+                }
+            }
+        } else if (activeTab_ == EditorTab::Units) {
+            struct UnitRow {
+                const char *label;
+                Tool tool;
+                int enemyType; // -1 = n/a
+            };
+            static constexpr UnitRow kRows[] = {{"Imp", Tool::PlaceEnemy, 0},
+                                                {"Hellhound", Tool::PlaceEnemy, 1},
+                                                {"Player spawn", Tool::SetPlayerSpawn, -1}};
+            constexpr int nU = static_cast<int>(sizeof(kRows) / sizeof(kRows[0]));
+            for (int i = 0; i < nU; ++i) {
+                const Rectangle row{contentClip.x + 2.0F,
+                                    contentClip.y + static_cast<float>(i) * (rowH + rowGap), contentClip.width - 4.0F,
+                                    rowH};
+                if (CheckCollisionPointRec(mouse, row)) {
+                    activeTool_ = kRows[static_cast<size_t>(i)].tool;
+                    if (kRows[static_cast<size_t>(i)].enemyType >= 0) {
+                        selectedEnemyType_ = kRows[static_cast<size_t>(i)].enemyType;
+                    }
                     uiConsumedClick = true;
                     break;
                 }
             }
         }
-    } else {
-        enemyDropdownOpen_ = false;
-    }
-
-    const bool showItemType = activeTool_ == Tool::PlaceItem ||
-                              (activeTool_ == Tool::Select && selected_.type == SelectedType::Item);
-    const Rectangle itemDdHeader{16.0F, 286.0F, ddw, ddh};
-    if (showItemType) {
-        if (click && CheckCollisionPointRec(mouse, itemDdHeader)) {
-            itemDropdownOpen_ = !itemDropdownOpen_;
-            enemyDropdownOpen_ = false;
-            uiConsumedClick = true;
-        }
-        if (itemDropdownOpen_) {
-            constexpr int nItemOpt = 5;
-            for (int oi = 0; oi < nItemOpt; ++oi) {
-                const Rectangle row{itemDdHeader.x,
-                                    itemDdHeader.y + itemDdHeader.height + static_cast<float>(oi) *
-                                                                                (ddh + 2.0F),
-                                    ddw, ddh};
-                if (click && CheckCollisionPointRec(mouse, row)) {
-                    selectedItemKind_ = oi;
-                    itemDropdownOpen_ = false;
-                    uiConsumedClick = true;
-                    break;
-                }
-            }
-        }
-    } else {
-        itemDropdownOpen_ = false;
-    }
-
-    if (click && !overUi) {
-        enemyDropdownOpen_ = false;
-        itemDropdownOpen_ = false;
     }
 
     Vector2 camMove{0.0F, 0.0F};
@@ -794,6 +948,30 @@ void EditorScene::drawEditorWorld(const Font &font) {
         }
     }
 
+    for (int i = 0; i < static_cast<int>(map_.lavas.size()); ++i) {
+        const LavaData &w = map_.lavas[static_cast<size_t>(i)];
+        const Vector2 p1 = worldToIso({w.cx - w.halfW, w.cy - w.halfH});
+        const Vector2 p2 = worldToIso({w.cx + w.halfW, w.cy - w.halfH});
+        const Vector2 p3 = worldToIso({w.cx + w.halfW, w.cy + w.halfH});
+        const Vector2 p4 = worldToIso({w.cx - w.halfW, w.cy + w.halfH});
+        const bool sel = selected_.type == SelectedType::Lava && selected_.index == i;
+        const Color fill = sel ? Color{220, 90, 40, 220} : Color{180, 60, 20, 180};
+        const Color edge = sel ? Color{255, 200, 120, 255} : Color{255, 100, 40, 255};
+        DrawTriangle(p1, p2, p3, fill);
+        DrawTriangle(p1, p3, p4, fill);
+        DrawLineV(p1, p2, edge);
+        DrawLineV(p2, p3, edge);
+        DrawLineV(p3, p4, edge);
+        DrawLineV(p4, p1, edge);
+        if (sel) {
+            char dimBuf[64];
+            std::snprintf(dimBuf, sizeof(dimBuf), "Lava %.0fx%.0f", static_cast<double>(w.halfW * 2.0F),
+                          static_cast<double>(w.halfH * 2.0F));
+            DrawTextEx(font, dimBuf, {p1.x, p1.y - 18.0F}, 14.0F, 1.0F, ui::theme::LABEL_TEXT);
+            drawLavaResizeHandles(font, w);
+        }
+    }
+
     for (int i = 0; i < static_cast<int>(map_.enemies.size()); ++i) {
         const EnemySpawnData &e = map_.enemies[static_cast<size_t>(i)];
         const Vector2 iso = worldToIso({e.x, e.y});
@@ -812,15 +990,9 @@ void EditorScene::drawEditorWorld(const Font &font) {
         const bool sel = selected_.type == SelectedType::Item && selected_.index == i;
         const float r = sel ? 12.0F : 9.0F;
         DrawCircleV(iso, r, sel ? Color{255, 220, 130, 255} : Color{190, 130, 240, 255});
-        const char *tag = "Armor";
-        if (it.kind == "vial_pure_blood") {
-            tag = "Vial";
-        } else if (it.kind == "vial_cordial_manic") {
-            tag = "Manic";
-        } else if (it.kind == "barbed_tunic") {
-            tag = "Tunic";
-        }
-        DrawTextEx(font, tag, {iso.x + 8.0F, iso.y - 18.0F}, 14.0F, 1.0F, RAYWHITE);
+        const ItemData spawned = makeItemFromMapKind(it.kind);
+        const char *label = spawned.name.empty() ? "Item" : spawned.name.c_str();
+        DrawTextEx(font, label, {iso.x + 8.0F, iso.y - 18.0F}, 14.0F, 1.0F, RAYWHITE);
     }
 
     const Vector2 pIso = worldToIso(map_.playerSpawn);
@@ -840,13 +1012,8 @@ void EditorScene::drawToolbar(const Font &font, Vector2 mouse) {
     const Rectangle panel = toolbarPanelRect();
     DrawRectangleRec(panel, Fade(ui::theme::PANEL_FILL, 248));
     DrawRectangleLinesEx(panel, 2.0F, ui::theme::PANEL_BORDER);
-    DrawTextEx(font, "Editor", {16.0F, 18.0F}, 22.0F, 1.0F, RAYWHITE);
-    for (int i = 0; i < static_cast<int>(toolButtons_.size()); ++i) {
-        const bool active = static_cast<int>(activeTool_) == i;
-        toolButtons_[static_cast<size_t>(i)].draw(
-            font, 17.0F, mouse, active ? ui::theme::BTN_HOVER : ui::theme::BTN_FILL,
-            ui::theme::BTN_HOVER, RAYWHITE, ui::theme::BTN_BORDER);
-    }
+    DrawTextEx(font, "Editor", {panel.x + 12.0F, panel.y + 8.0F}, 22.0F, 1.0F, RAYWHITE);
+
     mapPrevButton_.draw(font, 16.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER, RAYWHITE,
                         ui::theme::BTN_BORDER);
     mapNextButton_.draw(font, 16.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER, RAYWHITE,
@@ -862,74 +1029,99 @@ void EditorScene::drawToolbar(const Font &font, Vector2 mouse) {
         mapBuf[0] = '-';
         mapBuf[1] = '\0';
     }
-    DrawTextEx(font, mapBuf, {144.0F, 346.0F}, 16.0F, 1.0F, ui::theme::LABEL_TEXT);
+    DrawTextEx(font, mapBuf, {panel.x + 148.0F, panel.y + 62.0F}, 14.0F, 1.0F,
+               ui::theme::LABEL_TEXT);
 
     saveButton_.draw(font, 17.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER, RAYWHITE,
                      ui::theme::BTN_BORDER);
-    constexpr float kDdW = 188.0F;
-    constexpr float kDdH = 28.0F;
-    const bool showEnemyType =
-        activeTool_ == Tool::PlaceEnemy ||
-        (activeTool_ == Tool::Select && selected_.type == SelectedType::Enemy);
-    if (showEnemyType) {
-        const Rectangle enemyHdr{16.0F, 154.0F, kDdW, kDdH};
-        const bool ehov = CheckCollisionPointRec(mouse, enemyHdr);
-        DrawRectangleRec(enemyHdr, ehov ? ui::theme::BTN_HOVER : ui::theme::BTN_FILL);
-        DrawRectangleLinesEx(enemyHdr, 1.5F, ui::theme::BTN_BORDER);
-        const char *et = selectedEnemyType_ == 0 ? "Enemy: Imp" : "Enemy: Hellhound";
-        DrawTextEx(font, enemyDropdownOpen_ ? "Enemy: (select...)" : et,
-                   {enemyHdr.x + 6.0F, enemyHdr.y + 5.0F}, 15.0F, 1.0F, RAYWHITE);
-        if (enemyDropdownOpen_) {
-            const char *opts[2] = {"Imp", "Hellhound"};
-            for (int oi = 0; oi < 2; ++oi) {
-                const Rectangle row{enemyHdr.x,
-                                      enemyHdr.y + enemyHdr.height + static_cast<float>(oi) *
-                                                                        (kDdH + 2.0F),
-                                      kDdW, kDdH};
-                const bool rh = CheckCollisionPointRec(mouse, row);
-                DrawRectangleRec(row, rh ? ui::theme::BTN_HOVER : ui::theme::BTN_FILL);
-                DrawRectangleLinesEx(row, 1.0F, ui::theme::BTN_BORDER);
-                DrawTextEx(font, opts[oi], {row.x + 6.0F, row.y + 5.0F}, 14.0F, 1.0F, RAYWHITE);
-            }
-        }
-    }
-    const bool showItemTypeTb =
-        activeTool_ == Tool::PlaceItem ||
-        (activeTool_ == Tool::Select && selected_.type == SelectedType::Item);
-    if (showItemTypeTb) {
-        static const char *kItemOptLbl[] = {"Iron Armor", "Vial of Pure Blood",
-                                             "Vial of Cordial Manic", "Barbed Tunic",
-                                             "Runic Shell"};
-        constexpr int kItemOptCount = static_cast<int>(sizeof(kItemOptLbl) / sizeof(kItemOptLbl[0]));
-        const Rectangle itemHdr{16.0F, 286.0F, kDdW, kDdH};
-        const bool ihov = CheckCollisionPointRec(mouse, itemHdr);
-        DrawRectangleRec(itemHdr, ihov ? ui::theme::BTN_HOVER : ui::theme::BTN_FILL);
-        DrawRectangleLinesEx(itemHdr, 1.5F, ui::theme::BTN_BORDER);
-        const int ik = std::clamp(selectedItemKind_, 0, kItemOptCount - 1);
-        char itemHdrTxt[72];
-        if (itemDropdownOpen_) {
-            std::snprintf(itemHdrTxt, sizeof(itemHdrTxt), "Item: (select...)");
-        } else {
-            std::snprintf(itemHdrTxt, sizeof(itemHdrTxt), "Item: %s", kItemOptLbl[ik]);
-        }
-        DrawTextEx(font, itemHdrTxt, {itemHdr.x + 4.0F, itemHdr.y + 5.0F}, 13.0F, 1.0F, RAYWHITE);
-        if (itemDropdownOpen_) {
-            for (int oi = 0; oi < kItemOptCount; ++oi) {
-                const Rectangle row{itemHdr.x,
-                                    itemHdr.y + itemHdr.height + static_cast<float>(oi) * (kDdH + 2.0F),
-                                    kDdW, kDdH};
-                const bool rh = CheckCollisionPointRec(mouse, row);
-                DrawRectangleRec(row, rh ? ui::theme::BTN_HOVER : ui::theme::BTN_FILL);
-                DrawRectangleLinesEx(row, 1.0F, ui::theme::BTN_BORDER);
-                DrawTextEx(font, kItemOptLbl[oi], {row.x + 4.0F, row.y + 4.0F}, 12.0F, 1.0F,
-                           RAYWHITE);
-            }
-        }
-    }
     loadButton_.draw(font, 17.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER, RAYWHITE,
                      ui::theme::BTN_BORDER);
     backButton_.draw(font, 17.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER, RAYWHITE,
                      ui::theme::BTN_BORDER);
+
+    constexpr float tabYOffset = 238.0F;
+    constexpr float tabH = 28.0F;
+    constexpr float tabGap = 4.0F;
+    const float tabX0 = panel.x + 8.0F;
+    const float tabW = (panel.width - 16.0F - 2.0F * tabGap) / 3.0F;
+    const float tabY = panel.y + tabYOffset;
+    const char *tabLbl[3] = {"Elements", "Items", "Units"};
+    for (int t = 0; t < 3; ++t) {
+        const Rectangle tr{tabX0 + static_cast<float>(t) * (tabW + tabGap), tabY, tabW, tabH};
+        const bool on = static_cast<int>(activeTab_) == t;
+        const bool hov = CheckCollisionPointRec(mouse, tr);
+        DrawRectangleRec(tr, hov ? ui::theme::BTN_HOVER : (on ? ui::theme::SLOT_FILL : ui::theme::BTN_FILL));
+        DrawRectangleLinesEx(tr, on ? 2.0F : 1.0F, on ? ui::theme::BTN_BORDER : Fade(ui::theme::BTN_BORDER, 160));
+        const float fs = 13.0F;
+        const Vector2 td = MeasureTextEx(font, tabLbl[t], fs, 1.0F);
+        DrawTextEx(font, tabLbl[t],
+                   {tr.x + (tr.width - td.x) * 0.5F, tr.y + (tr.height - td.y) * 0.5F}, fs, 1.0F,
+                   RAYWHITE);
+    }
+
+    constexpr float contentYOffset = 272.0F;
+    constexpr float rowH = 28.0F;
+    constexpr float rowGap = 2.0F;
+    const float contentY = panel.y + contentYOffset;
+    const Rectangle contentClip{panel.x + 6.0F, contentY, panel.width - 12.0F,
+                                  panel.y + panel.height - 8.0F - contentY};
+    BeginScissorMode(static_cast<int>(contentClip.x), static_cast<int>(contentClip.y),
+                     static_cast<int>(contentClip.width), static_cast<int>(contentClip.height));
+
+    auto drawRow = [&](float y, const char *label, bool rowActive, bool rowHover) {
+        const Rectangle row{contentClip.x + 2.0F, y, contentClip.width - 4.0F, rowH};
+        DrawRectangleRec(row, rowHover ? ui::theme::BTN_HOVER
+                                       : (rowActive ? ui::theme::SLOT_FILL : ui::theme::BTN_FILL));
+        DrawRectangleLinesEx(row, 1.0F, rowActive ? ui::theme::BTN_BORDER : Fade(ui::theme::BTN_BORDER, 140));
+        DrawTextEx(font, label, {row.x + 8.0F, row.y + 6.0F}, 14.0F, 1.0F, RAYWHITE);
+    };
+
+    if (activeTab_ == EditorTab::Elements) {
+        static constexpr const char *kElemLbl[] = {"Select", "Wall", "Lava", "Casket", "Player spawn"};
+        static constexpr Tool kElemTool[] = {Tool::Select, Tool::PlaceWall, Tool::PlaceLava,
+                                             Tool::PlaceCasket, Tool::SetPlayerSpawn};
+        constexpr int nElem = static_cast<int>(sizeof(kElemLbl) / sizeof(kElemLbl[0]));
+        for (int i = 0; i < nElem; ++i) {
+            const float ry = contentClip.y + static_cast<float>(i) * (rowH + rowGap);
+            const Rectangle hit{contentClip.x + 2.0F, ry, contentClip.width - 4.0F, rowH};
+            const bool rowAct = activeTool_ == kElemTool[static_cast<size_t>(i)];
+            drawRow(ry, kElemLbl[static_cast<size_t>(i)], rowAct, CheckCollisionPointRec(mouse, hit));
+        }
+    } else if (activeTab_ == EditorTab::Items) {
+        static const char *kItemOptLbl[] = {
+            "Iron Armor",        "Vial of Pure Blood", "Vial of Cordial Manic",
+            "Barbed Tunic",      "Runic Shell",        "Vial of Raw Spirit",
+            "Hollow Ring",
+        };
+        constexpr int nItem = static_cast<int>(sizeof(kItemOptLbl) / sizeof(kItemOptLbl[0]));
+        for (int i = 0; i < nItem; ++i) {
+            const float ry = contentClip.y + static_cast<float>(i) * (rowH + rowGap);
+            const Rectangle hit{contentClip.x + 2.0F, ry, contentClip.width - 4.0F, rowH};
+            const bool rowAct = activeTool_ == Tool::PlaceItem && selectedItemKind_ == i;
+            drawRow(ry, kItemOptLbl[static_cast<size_t>(i)], rowAct, CheckCollisionPointRec(mouse, hit));
+        }
+    } else {
+        struct RowDef {
+            const char *label;
+            Tool tool;
+            int enemyType;
+        };
+        static constexpr RowDef kRows[] = {{"Imp", Tool::PlaceEnemy, 0},
+                                           {"Hellhound", Tool::PlaceEnemy, 1},
+                                           {"Player spawn", Tool::SetPlayerSpawn, -1}};
+        constexpr int nU = static_cast<int>(sizeof(kRows) / sizeof(kRows[0]));
+        for (int i = 0; i < nU; ++i) {
+            const float ry = contentClip.y + static_cast<float>(i) * (rowH + rowGap);
+            const Rectangle hit{contentClip.x + 2.0F, ry, contentClip.width - 4.0F, rowH};
+            bool rowAct = activeTool_ == kRows[static_cast<size_t>(i)].tool;
+            if (kRows[static_cast<size_t>(i)].tool == Tool::PlaceEnemy) {
+                rowAct = rowAct && selectedEnemyType_ == kRows[static_cast<size_t>(i)].enemyType;
+            }
+            drawRow(ry, kRows[static_cast<size_t>(i)].label, rowAct, CheckCollisionPointRec(mouse, hit));
+        }
+    }
+
+    EndScissorMode();
 }
 
 void EditorScene::draw(ResourceManager &resources) {
@@ -951,16 +1143,16 @@ void EditorScene::draw(ResourceManager &resources) {
     char posBuf[96];
     std::snprintf(posBuf, sizeof(posBuf), "Cursor: %.1f, %.1f", static_cast<double>(worldMouse.x),
                   static_cast<double>(worldMouse.y));
-    DrawTextEx(font, posBuf, {16.0F, 560.0F}, 16.0F, 1.0F, ui::theme::LABEL_TEXT);
+    DrawTextEx(font, posBuf, {16.0F, 604.0F}, 16.0F, 1.0F, ui::theme::LABEL_TEXT);
 
-    char countBuf[128];
-    std::snprintf(countBuf, sizeof(countBuf), "Walls: %d  Enemies: %d  Items: %d",
-                  static_cast<int>(map_.walls.size()), static_cast<int>(map_.enemies.size()),
-                  static_cast<int>(map_.itemSpawns.size()));
-    DrawTextEx(font, countBuf, {16.0F, 582.0F}, 16.0F, 1.0F, ui::theme::LABEL_TEXT);
+    char countBuf[160];
+    std::snprintf(countBuf, sizeof(countBuf), "Walls: %d  Lava: %d  Enemies: %d  Items: %d",
+                  static_cast<int>(map_.walls.size()), static_cast<int>(map_.lavas.size()),
+                  static_cast<int>(map_.enemies.size()), static_cast<int>(map_.itemSpawns.size()));
+    DrawTextEx(font, countBuf, {16.0F, 626.0F}, 16.0F, 1.0F, ui::theme::LABEL_TEXT);
 
     if (statusTimer_ > 0.0F) {
-        DrawTextEx(font, statusText_, {16.0F, 608.0F}, 16.0F, 1.0F, RAYWHITE);
+        DrawTextEx(font, statusText_, {16.0F, 652.0F}, 16.0F, 1.0F, RAYWHITE);
     }
 
     DrawTextEx(font, "Select: drag | Del remove | Ctrl+D dup | Ctrl+C/V copy-paste", {220.0F, 12.0F},

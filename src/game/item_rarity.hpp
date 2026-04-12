@@ -7,6 +7,21 @@
 
 namespace dreadcast {
 
+/// Clouded, Lucid, Absolute, and Special are the **vial** tier names (stack caps via
+/// `maxStackForConsumableRarity`). Special is also valid on **equippable** gear (use `isConsumable ==
+/// false`); stack rules then come from `ItemData::maxStack`, not this helper.
+[[nodiscard]] inline bool isConsumableRarityTier(ItemRarity r) {
+    switch (r) {
+    case ItemRarity::Clouded:
+    case ItemRarity::Lucid:
+    case ItemRarity::Absolute:
+    case ItemRarity::Special:
+        return true;
+    default:
+        return false;
+    }
+}
+
 [[nodiscard]] inline const char *rarityName(ItemRarity r) {
     switch (r) {
     case ItemRarity::Tarnished:
@@ -55,7 +70,7 @@ namespace dreadcast {
     }
 }
 
-/// Max stack per slot for consumable rarities (Clouded … Special).
+/// Max stack per **consumable** slot for vial-tier rarities only (not used for gear).
 [[nodiscard]] inline int maxStackForConsumableRarity(ItemRarity r) {
     switch (r) {
     case ItemRarity::Clouded:

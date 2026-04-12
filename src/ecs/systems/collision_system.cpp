@@ -329,6 +329,20 @@ entt::entity find_interactable_hover_in_range(entt::registry &registry, Vector2 
     return entt::null;
 }
 
+void rewrite_ground_pickup_indices_after_remove(entt::registry &registry, int removedIdx,
+                                                int oldLastIdx) {
+    if (removedIdx == oldLastIdx) {
+        return;
+    }
+    const auto view = registry.view<ItemPickup>();
+    for (const auto e : view) {
+        auto &ip = view.get<ItemPickup>(e);
+        if (ip.itemIndex == oldLastIdx) {
+            ip.itemIndex = removedIdx;
+        }
+    }
+}
+
 bool try_pickup_item_entity(entt::registry &registry, entt::entity p, InventoryState &inventory,
                             float &inventoryFullFlashTimer) {
     if (!registry.valid(p) || !registry.all_of<ItemPickup, Transform, Sprite>(p)) {
@@ -360,8 +374,10 @@ bool try_pickup_item_entity(entt::registry &registry, entt::entity p, InventoryS
         }
         dst.stackCount += pickupItem.stackCount;
         const int removeIdx = pickupIndex;
+        const int oldLast = static_cast<int>(inventory.items.size()) - 1;
         registry.destroy(p);
         inventory.removeItemAtIndex(removeIdx);
+        rewrite_ground_pickup_indices_after_remove(registry, removeIdx, oldLast);
         return true;
     };
 

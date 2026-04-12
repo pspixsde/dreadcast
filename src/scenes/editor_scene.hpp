@@ -21,12 +21,14 @@ class EditorScene final : public Scene {
     void draw(ResourceManager &resources) override;
 
   private:
-    enum class Tool { Select, PlaceWall, PlaceEnemy, PlaceCasket, SetPlayerSpawn, PlaceItem };
-    enum class SelectedType { None, Wall, Enemy, Casket, PlayerSpawn, Item };
+    enum class Tool { Select, PlaceWall, PlaceLava, PlaceEnemy, PlaceCasket, SetPlayerSpawn,
+                      PlaceItem };
+    enum class EditorTab { Elements, Items, Units };
+    enum class SelectedType { None, Wall, Lava, Enemy, Casket, PlayerSpawn, Item };
 
     enum class ResizeHandle { None, Left, Right, Top, Bottom };
 
-    enum class ClipboardKind { None, Wall, Enemy, Casket, Item };
+    enum class ClipboardKind { None, Wall, Lava, Enemy, Casket, Item };
 
     struct Selection {
         SelectedType type{SelectedType::None};
@@ -40,11 +42,13 @@ class EditorScene final : public Scene {
     [[nodiscard]] Rectangle editorUiHitRect() const;
     [[nodiscard]] bool isMouseOverEditorUi(Vector2 screenMouse) const;
     [[nodiscard]] ResizeHandle wallHandleAt(const Vector2 &worldMouse, const WallData &w) const;
+    [[nodiscard]] ResizeHandle lavaHandleAt(const Vector2 &worldMouse, const LavaData &w) const;
     void drawWorldGrid() const;
     void drawToolbar(const Font &font, Vector2 mouse);
     void drawEditorWorld(const Font &font);
     void drawAltOverlays(const Font &font);
     void drawWallResizeHandles(const Font &font, const WallData &w) const;
+    void drawLavaResizeHandles(const Font &font, const LavaData &w) const;
     void handlePlacement(const Vector2 &worldMouse);
     void handleSelectionInput(InputManager &input, const Vector2 &worldMouse);
     void applySelectionMove(const Vector2 &worldMouse);
@@ -70,25 +74,27 @@ class EditorScene final : public Scene {
     ResizeHandle resizingWall_{ResizeHandle::None};
     WallData wallResizeStart_{};
     Vector2 wallResizeMouseStart_{};
+    ResizeHandle resizingLava_{ResizeHandle::None};
+    LavaData lavaResizeStart_{};
+    Vector2 lavaResizeMouseStart_{};
 
-    std::vector<ui::Button> toolButtons_{};
     ui::Button saveButton_{};
     ui::Button loadButton_{};
     ui::Button backButton_{};
-    bool enemyDropdownOpen_{false};
-    bool itemDropdownOpen_{false};
     ui::Button mapPrevButton_{};
     ui::Button mapNextButton_{};
     ui::Button mapNewButton_{};
     int selectedEnemyType_{0};
     /// Index into item kind table (see `handlePlacement` / `ItemSpawnData::kind`).
     int selectedItemKind_{0};
+    EditorTab activeTab_{EditorTab::Elements};
 
     std::vector<std::string> mapFiles_{};
     int currentMapIndex_{0};
 
     ClipboardKind clipboardKind_{ClipboardKind::None};
     WallData clipboardWall_{};
+    LavaData clipboardLava_{};
     EnemySpawnData clipboardEnemy_{};
     ItemSpawnData clipboardItem_{};
     Vector2 clipboardCasketPos_{};

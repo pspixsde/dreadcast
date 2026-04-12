@@ -17,6 +17,14 @@ struct WallData {
     float halfH{32.0F};
 };
 
+/// Walk-through hazard volume (same layout as walls; serialized as `LAVA`).
+struct LavaData {
+    float cx{0.0F};
+    float cy{0.0F};
+    float halfW{32.0F};
+    float halfH{32.0F};
+};
+
 struct EnemySpawnData {
     float x{0.0F};
     float y{0.0F};
@@ -24,7 +32,8 @@ struct EnemySpawnData {
 };
 
 /// Ground item pickup placement (`ITEM x y kind` in `.map` files). `kind` values: `iron_armor`,
-/// `barbed_tunic`, `vial_pure_blood`, `vial_cordial_manic` (see `makeItemFromMapKind`).
+/// `barbed_tunic`, `runic_shell`, `hollow_ring`, `vial_pure_blood`, `vial_cordial_manic`,
+/// `vial_raw_spirit` (see `makeItemFromMapKind`).
 struct ItemSpawnData {
     float x{0.0F};
     float y{0.0F};
@@ -34,6 +43,7 @@ struct ItemSpawnData {
 struct MapData {
     Vector2 playerSpawn{-100.0F, 0.0F};
     std::vector<WallData> walls{};
+    std::vector<LavaData> lavas{};
     std::vector<EnemySpawnData> enemies{};
     std::vector<ItemSpawnData> itemSpawns{};
     Vector2 casketPos{1050.0F, 0.0F};
@@ -55,6 +65,9 @@ struct MapData {
         out << "PLAYER_SPAWN " << playerSpawn.x << ' ' << playerSpawn.y << '\n';
         for (const WallData &w : walls) {
             out << "WALL " << w.cx << ' ' << w.cy << ' ' << w.halfW << ' ' << w.halfH << '\n';
+        }
+        for (const LavaData &lv : lavas) {
+            out << "LAVA " << lv.cx << ' ' << lv.cy << ' ' << lv.halfW << ' ' << lv.halfH << '\n';
         }
         for (const EnemySpawnData &e : enemies) {
             out << "ENEMY " << e.x << ' ' << e.y << ' ' << e.type << '\n';
@@ -88,6 +101,10 @@ struct MapData {
                 WallData w{};
                 iss >> w.cx >> w.cy >> w.halfW >> w.halfH;
                 parsed.walls.push_back(w);
+            } else if (tag == "LAVA") {
+                LavaData lv{};
+                iss >> lv.cx >> lv.cy >> lv.halfW >> lv.halfH;
+                parsed.lavas.push_back(lv);
             } else if (tag == "ENEMY") {
                 EnemySpawnData e{};
                 iss >> e.x >> e.y;

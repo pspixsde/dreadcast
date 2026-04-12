@@ -52,8 +52,23 @@ void input_system(entt::registry &registry, const InputManager &input, const Cam
                 const Vec2 worldDir = Vec2Normalize(dreadcast::isoToWorld(move));
                 const Vec2 isoDir = dreadcast::worldToIso(worldDir);
                 const float isoLen = Vec2Length(isoDir);
-                const float speedMul =
+                float speedMul =
                     registry.all_of<ManicEffect>(entity) ? config::MANIC_SPEED_MULTIPLIER : 1.0F;
+                bool onLava = false;
+                for (const auto le : registry.view<Lava, Transform>()) {
+                    const auto &lt = registry.get<Transform>(le);
+                    const auto &lv = registry.get<Lava>(le);
+                    const float px = transform.position.x;
+                    const float py = transform.position.y;
+                    if (px >= lt.position.x - lv.halfW && px <= lt.position.x + lv.halfW &&
+                        py >= lt.position.y - lv.halfH && py <= lt.position.y + lv.halfH) {
+                        onLava = true;
+                        break;
+                    }
+                }
+                if (onLava) {
+                    speedMul *= config::LAVA_SPEED_MULTIPLIER;
+                }
                 const float scale =
                     (isoLen > 0.001F) ? (config::PLAYER_MOVE_SPEED * speedMul / isoLen) : 0.0F;
                 vel.value.x = worldDir.x * scale;

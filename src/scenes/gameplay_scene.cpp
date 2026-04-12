@@ -79,6 +79,12 @@ void spawnWallBlock(entt::registry &reg, float cx, float cy, float halfW, float 
     reg.emplace<ecs::Wall>(e, ecs::Wall{halfW, halfH});
 }
 
+void spawnLavaBlock(entt::registry &reg, float cx, float cy, float halfW, float halfH) {
+    const auto e = reg.create();
+    reg.emplace<ecs::Transform>(e, ecs::Transform{{cx, cy}, 0.0F});
+    reg.emplace<ecs::Lava>(e, ecs::Lava{halfW, halfH});
+}
+
 /// Filled convex visibility polygon: center at fan[0], boundary fan[1..n] in CCW order around the
 /// center (same as DrawTriangleFan). Uses per-triangle DrawTriangle calls so we never rely on one
 /// huge RL_QUADS batch (more reliable across drivers than a single DrawTriangleFan).
@@ -115,6 +121,29 @@ void clampRectToScreen(Rectangle &r, int screenW, int screenH) {
     }
 }
 
+/// Keep ability tooltip from overlapping the lower-right ability/consumable cluster (drawn on top).
+void layoutAbilityDescriptionTooltip(Rectangle &tip, const Rectangle &abilityCluster, const Vector2 &mouse,
+                                   int screenW, int screenH) {
+    tip.x = mouse.x;
+    tip.y = mouse.y - tip.height;
+    clampRectToScreen(tip, screenW, screenH);
+    for (int iter = 0; iter < 6 && CheckCollisionRecs(tip, abilityCluster); ++iter) {
+        tip.y = abilityCluster.y - tip.height - 10.0F;
+        if (tip.x < 4.0F) {
+            tip.x = 4.0F;
+        }
+        if (tip.x + tip.width > static_cast<float>(screenW) - 4.0F) {
+            tip.x = static_cast<float>(screenW) - tip.width - 4.0F;
+        }
+        if (tip.y < 4.0F) {
+            tip.y = 4.0F;
+        }
+    }
+    if (tip.y + tip.height > static_cast<float>(screenH) - 4.0F) {
+        tip.y = static_cast<float>(screenH) - tip.height - 4.0F;
+    }
+}
+
 /// Keybind glyph in a small black square, slightly above/outside the icon corner (screen-space HUD).
 void drawHudKeyBadge(const Font &font, const char *keyChr, float iconLeft, float iconTop) {
     constexpr float kSq = 20.0F;
@@ -122,10 +151,10 @@ void drawHudKeyBadge(const Font &font, const char *keyChr, float iconLeft, float
     const float bx = iconLeft - protrude * 0.65F;
     const float by = iconTop - protrude * 1.2F;
     DrawRectangle(static_cast<int>(bx), static_cast<int>(by), static_cast<int>(kSq),
-                  static_cast<int>(kSq), BLACK);
+                  static_cast<int>(kSq), Color{50, 50, 50, 255});
     DrawRectangleLines(static_cast<int>(bx), static_cast<int>(by), static_cast<int>(kSq),
-                       static_cast<int>(kSq), Fade(WHITE, 90));
-    constexpr float ks = 12.0F;
+                       static_cast<int>(kSq), Color{15, 15, 15, 200});
+    constexpr float ks = 15.0F;
     const Vector2 kd = MeasureTextEx(font, keyChr, ks, 1.0F);
     DrawTextEx(font, keyChr, {bx + (kSq - kd.x) * 0.5F, by + (kSq - kd.y) * 0.5F}, ks, 1.0F,
                RAYWHITE);
@@ -393,6 +422,12 @@ void GameplayScene::spawnWalls(const MapData &map) {
     }
 }
 
+void GameplayScene::spawnLavas(const MapData &map) {
+    for (const LavaData &w : map.lavas) {
+        spawnLavaBlock(registry_, w.cx, w.cy, w.halfW, w.halfH);
+    }
+}
+
 void GameplayScene::spawnWorld() {
     registry_.clear();
     inventory_ = InventoryState{};
@@ -401,6 +436,8 @@ void GameplayScene::spawnWorld() {
         cd = 0.0F;
     }
     snareImpactFlash_ = 0.0F;
+    lavaDamageAccumulator_ = 0.0F;
+    spiritRefreshFlashTimer_ = 0.0F;
     MapData map = defaultMapData();
     MapData loaded;
     if (loaded.loadFromFile("assets/maps/default.map")) {
@@ -420,6 +457,7 @@ void GameplayScene::spawnWorld() {
     registry_.emplace<ecs::Player>(player_);
 
     spawnWalls(map);
+    spawnLavas(map);
 
     for (const EnemySpawnData &p : map.enemies) {
         const auto e = registry_.create();
@@ -477,6 +515,21 @@ Vector2 GameplayScene::worldMouseFromScreen(const Vector2 &screenMouse) const {
     return isoToWorld(isoMouse);
 }
 
+void GameplayScene::applyPlayerMaxManaFromEquipment() {
+    if (!registry_.valid(player_) || !registry_.all_of<ecs::Mana>(player_)) {
+        return;
+    }
+    auto &mp = registry_.get<ecs::Mana>(player_);
+    const float bonus = inventory_.totalEquippedMaxManaBonus();
+    const float newMax = 100.0F + bonus;
+    if (std::fabs(mp.max - newMax) < 0.001F) {
+        return;
+    }
+    const float mpRatio = mp.max > 0.001F ? mp.current / mp.max : 1.0F;
+    mp.max = newMax;
+    mp.current = std::clamp(mpRatio * mp.max, 0.0F, mp.max);
+}
+
 void GameplayScene::applyPlayerMaxHpFromEquipment() {
     if (!registry_.valid(player_) || !registry_.all_of<ecs::Health>(player_)) {
         return;
@@ -522,6 +575,60 @@ void GameplayScene::tickHealOverTime(float fixedDt) {
     }
 }
 
+void GameplayScene::tickManaRegenOverTime(float fixedDt) {
+    if (!registry_.valid(player_) || !registry_.all_of<ecs::Mana>(player_)) {
+        return;
+    }
+    if (!registry_.all_of<ecs::ManaRegenOverTime>(player_)) {
+        return;
+    }
+    auto &mrot = registry_.get<ecs::ManaRegenOverTime>(player_);
+    mrot.elapsed += fixedDt;
+    auto &mp = registry_.get<ecs::Mana>(player_);
+    const float rate = mrot.totalMana / mrot.duration;
+    float add = rate * fixedDt;
+    const float remaining = mrot.totalMana - mrot.regenedSoFar;
+    if (add > remaining) {
+        add = remaining;
+    }
+    mrot.regenedSoFar += add;
+    mp.current = std::min(mp.max, mp.current + add);
+    if (mrot.elapsed >= mrot.duration - 1.0e-4F ||
+        mrot.regenedSoFar >= mrot.totalMana - 1.0e-3F) {
+        registry_.remove<ecs::ManaRegenOverTime>(player_);
+    }
+}
+
+void GameplayScene::tickLavaHazard(float fixedDt) {
+    if (!registry_.valid(player_) || !registry_.all_of<ecs::Health, ecs::Transform>(player_)) {
+        return;
+    }
+    const auto &pt = registry_.get<ecs::Transform>(player_);
+    const float px = pt.position.x;
+    const float py = pt.position.y;
+    bool inLava = false;
+    for (const auto e : registry_.view<ecs::Lava, ecs::Transform>()) {
+        const auto &t = registry_.get<ecs::Transform>(e);
+        const auto &lv = registry_.get<ecs::Lava>(e);
+        if (px >= t.position.x - lv.halfW && px <= t.position.x + lv.halfW &&
+            py >= t.position.y - lv.halfH && py <= t.position.y + lv.halfH) {
+            inLava = true;
+            break;
+        }
+    }
+    if (!inLava) {
+        lavaDamageAccumulator_ = 0.0F;
+        return;
+    }
+    lavaDamageAccumulator_ += fixedDt;
+    while (lavaDamageAccumulator_ >= config::LAVA_DAMAGE_INTERVAL) {
+        lavaDamageAccumulator_ -= config::LAVA_DAMAGE_INTERVAL;
+        auto &hp = registry_.get<ecs::Health>(player_);
+        hp.current -= config::LAVA_DAMAGE_PER_TICK;
+        hp.current = std::max(0.0F, hp.current);
+    }
+}
+
 void GameplayScene::tryUseConsumableSlot(int slotIndex) {
     if (slotIndex < 0 || slotIndex >= CONSUMABLE_SLOT_COUNT) {
         return;
@@ -540,7 +647,9 @@ void GameplayScene::tryUseConsumableSlot(int slotIndex) {
         it.stackCount -= 1;
         if (it.stackCount <= 0) {
             inventory_.consumableSlots[static_cast<size_t>(slotIndex)] = -1;
+            const int oldLast = static_cast<int>(inventory_.items.size()) - 1;
             inventory_.removeItemAtIndex(idx);
+            ecs::collision::rewrite_ground_pickup_indices_after_remove(registry_, idx, oldLast);
         }
         applyVialHealOverTime(wasHot);
         return;
@@ -552,8 +661,24 @@ void GameplayScene::tryUseConsumableSlot(int slotIndex) {
         it.stackCount -= 1;
         if (it.stackCount <= 0) {
             inventory_.consumableSlots[static_cast<size_t>(slotIndex)] = -1;
+            const int oldLast = static_cast<int>(inventory_.items.size()) - 1;
             inventory_.removeItemAtIndex(idx);
+            ecs::collision::rewrite_ground_pickup_indices_after_remove(registry_, idx, oldLast);
         }
+        return;
+    }
+    if (it.name == "Vial of Raw Spirit") {
+        const bool wasActive =
+            registry_.valid(player_) && registry_.all_of<ecs::ManaRegenOverTime>(player_);
+        it.stackCount -= 1;
+        if (it.stackCount <= 0) {
+            inventory_.consumableSlots[static_cast<size_t>(slotIndex)] = -1;
+            const int oldLast = static_cast<int>(inventory_.items.size()) - 1;
+            inventory_.removeItemAtIndex(idx);
+            ecs::collision::rewrite_ground_pickup_indices_after_remove(registry_, idx, oldLast);
+        }
+        applyVialRawSpiritMana(wasActive);
+        return;
     }
 }
 
@@ -575,7 +700,9 @@ void GameplayScene::tryUseConsumableBagSlot(int bagSlot) {
         it.stackCount -= 1;
         if (it.stackCount <= 0) {
             inventory_.bagSlots[static_cast<size_t>(bagSlot)] = -1;
+            const int oldLast = static_cast<int>(inventory_.items.size()) - 1;
             inventory_.removeItemAtIndex(idx);
+            ecs::collision::rewrite_ground_pickup_indices_after_remove(registry_, idx, oldLast);
         }
         applyVialHealOverTime(wasHot);
         return;
@@ -587,8 +714,24 @@ void GameplayScene::tryUseConsumableBagSlot(int bagSlot) {
         it.stackCount -= 1;
         if (it.stackCount <= 0) {
             inventory_.bagSlots[static_cast<size_t>(bagSlot)] = -1;
+            const int oldLast = static_cast<int>(inventory_.items.size()) - 1;
             inventory_.removeItemAtIndex(idx);
+            ecs::collision::rewrite_ground_pickup_indices_after_remove(registry_, idx, oldLast);
         }
+        return;
+    }
+    if (it.name == "Vial of Raw Spirit") {
+        const bool wasActive =
+            registry_.valid(player_) && registry_.all_of<ecs::ManaRegenOverTime>(player_);
+        it.stackCount -= 1;
+        if (it.stackCount <= 0) {
+            inventory_.bagSlots[static_cast<size_t>(bagSlot)] = -1;
+            const int oldLast = static_cast<int>(inventory_.items.size()) - 1;
+            inventory_.removeItemAtIndex(idx);
+            ecs::collision::rewrite_ground_pickup_indices_after_remove(registry_, idx, oldLast);
+        }
+        applyVialRawSpiritMana(wasActive);
+        return;
     }
 }
 
@@ -603,6 +746,20 @@ void GameplayScene::applyVialHealOverTime(bool wasAlreadyActive) {
         player_, ecs::HealOverTime{config::HOT_TOTAL_HEAL, config::HOT_DURATION, 0.0F, 0.0F});
     pushStatusHud(StatusHudKind::HealOverTime, "assets/textures/items/vial_pure_blood_icon.png",
                   {220, 80, 80, 255});
+}
+
+void GameplayScene::applyVialRawSpiritMana(bool wasAlreadyActive) {
+    if (!registry_.valid(player_)) {
+        return;
+    }
+    if (wasAlreadyActive) {
+        spiritRefreshFlashTimer_ = 0.35F;
+    }
+    registry_.emplace_or_replace<ecs::ManaRegenOverTime>(
+        player_, ecs::ManaRegenOverTime{config::RAW_SPIRIT_MANA_TOTAL, config::RAW_SPIRIT_DURATION,
+                                        0.0F, 0.0F});
+    pushStatusHud(StatusHudKind::ManaRegenOverTime, "assets/textures/items/vial_raw_spirit_icon.png",
+                  {120, 170, 255, 255});
 }
 
 bool GameplayScene::tryApplyCordialManic() {
@@ -671,7 +828,18 @@ void GameplayScene::checkRunicShellTrigger() {
         return;
     }
     const auto &hp = registry_.get<ecs::Health>(player_);
-    if (hp.max < 0.001F || hp.current > config::RUNIC_SHELL_HP_THRESHOLD * hp.max) {
+    if (hp.max < 0.001F) {
+        return;
+    }
+    const float thresh = config::RUNIC_SHELL_HP_THRESHOLD * hp.max;
+    // Only trigger when HP crosses from above the threshold to at-or-below this tick (damage),
+    // not when already low (cooldown expiry, equip while hurt, etc.).
+    float hpAtTickStart = hp.current;
+    const auto hpIt = hpBeforeFixedStep_.find(player_);
+    if (hpIt != hpBeforeFixedStep_.end()) {
+        hpAtTickStart = hpIt->second;
+    }
+    if (!(hpAtTickStart > thresh + 1.0e-4F && hp.current <= thresh + 1.0e-4F)) {
         return;
     }
 
@@ -758,6 +926,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
     inventoryFullFlashTimer_ = std::max(0.0F, inventoryFullFlashTimer_ - frameDt);
     damageFlashTimer_ = std::max(0.0F, damageFlashTimer_ - frameDt);
     hotRefreshFlashTimer_ = std::max(0.0F, hotRefreshFlashTimer_ - frameDt);
+    spiritRefreshFlashTimer_ = std::max(0.0F, spiritRefreshFlashTimer_ - frameDt);
     runicShellFlashTimer_ = std::max(0.0F, runicShellFlashTimer_ - frameDt);
     snareImpactFlash_ = std::max(0.0F, snareImpactFlash_ - frameDt);
 
@@ -810,9 +979,18 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
     }
 
     applyPlayerMaxHpFromEquipment();
+    applyPlayerMaxManaFromEquipment();
 
+    bool aimSnappedAfterPauseEsc = false;
     if (!inventoryUi_.isOpen() && input.isKeyPressed(KEY_ESCAPE)) {
-        paused_ = !paused_;
+        if (paused_) {
+            paused_ = false;
+            aimScreenPos_ = input.mousePosition();
+            aimScreenInit_ = true;
+            aimSnappedAfterPauseEsc = true;
+        } else {
+            paused_ = true;
+        }
     }
 
     if (paused_) {
@@ -828,6 +1006,8 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         mainMenuButton_.label = "Main Menu";
         if (resumeButton_.wasClicked(mouse, click)) {
             paused_ = false;
+            aimScreenPos_ = mouse;
+            aimScreenInit_ = true;
         }
         if (settingsPauseButton_.wasClicked(mouse, click)) {
             scenes.push(std::make_unique<SettingsScene>());
@@ -845,7 +1025,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         aimScreenPos_ = input.mousePosition();
         aimScreenInit_ = true;
     }
-    if (!paused_ && !inventoryUi_.isOpen()) {
+    if (!paused_ && !inventoryUi_.isOpen() && !aimSnappedAfterPauseEsc) {
         const Vector2 d = input.mouseDelta();
         aimScreenPos_.x = std::clamp(aimScreenPos_.x + d.x * aimMouseSensitivity_, 0.0F,
                                      static_cast<float>(config::WINDOW_WIDTH));
@@ -889,6 +1069,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         ecs::movement_system(registry_, config::FIXED_DT);
         ecs::wall_resolve_collisions(registry_);
         ecs::unit_resolve_collisions(registry_);
+        tickLavaHazard(config::FIXED_DT);
         ecs::wall_destroy_projectiles(registry_);
         ecs::projectile_system(registry_, config::FIXED_DT);
         ecs::collision::projectile_hits(registry_, player_, &inventory_, &snareImpactWorld_,
@@ -897,6 +1078,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         ecs::death_system(registry_, player_, &enemiesSlain_);
         tickManicEffect(config::FIXED_DT);
         tickHealOverTime(config::FIXED_DT);
+        tickManaRegenOverTime(config::FIXED_DT);
         tickRunicShellCooldown(config::FIXED_DT);
         checkRunicShellTrigger();
 
@@ -1384,6 +1566,8 @@ void GameplayScene::syncStatusHudOrder() {
                                return !registry_.all_of<ecs::ManicEffect>(player_);
                            case StatusHudKind::LeadFever:
                                return !registry_.all_of<ecs::LeadFeverEffect>(player_);
+                           case StatusHudKind::ManaRegenOverTime:
+                               return !registry_.all_of<ecs::ManaRegenOverTime>(player_);
                            }
                            return true;
                        }),
@@ -1614,7 +1798,8 @@ void GameplayScene::drawHud(ResourceManager &resources) {
     const float hudW = barX + barW + hudPad - hudLeft;
     const float hudH = hudBottomAll + hudPad - hudTop;
     DrawRectangle(static_cast<int>(hudLeft - 4.0F), static_cast<int>(hudTop - 4.0F),
-                  static_cast<int>(hudW + 8.0F), static_cast<int>(hudH + 8.0F), ui::theme::HUD_BACKING);
+                  static_cast<int>(hudW + 8.0F), static_cast<int>(hudH + 8.0F),
+                  ui::theme::HUD_GREY_BACKING);
 
     const float cx = margin + portraitR;
     const float barsTop = hpBarTop;
@@ -1856,6 +2041,12 @@ void GameplayScene::drawHud(ResourceManager &resources) {
             tRem = lf.duration > 0.001F ? std::max(0.0F, 1.0F - lf.elapsed / lf.duration) : 0.0F;
             ringCol = {180, 255, 200, 255};
             fillFallback = {30, 80, 50, 255};
+        } else if (hud.kind == StatusHudKind::ManaRegenOverTime &&
+                   registry_.all_of<ecs::ManaRegenOverTime>(player_)) {
+            const auto &mr = registry_.get<ecs::ManaRegenOverTime>(player_);
+            tRem = mr.duration > 0.001F ? std::max(0.0F, 1.0F - mr.elapsed / mr.duration) : 0.0F;
+            ringCol = {140, 190, 255, 255};
+            fillFallback = {25, 45, 90, 255};
         }
 
         if (!hud.iconPath.empty()) {
@@ -1883,9 +2074,14 @@ void GameplayScene::drawHud(ResourceManager &resources) {
             DrawRectangle(static_cast<int>(ix), static_cast<int>(iy), static_cast<int>(icon),
                           static_cast<int>(icon), Fade(WHITE, 0.4F * flashA));
         }
+        if (hud.kind == StatusHudKind::ManaRegenOverTime && spiritRefreshFlashTimer_ > 0.001F) {
+            const float flashA = std::min(1.0F, spiritRefreshFlashTimer_ * 5.0F);
+            DrawRectangle(static_cast<int>(ix), static_cast<int>(iy), static_cast<int>(icon),
+                          static_cast<int>(icon), Fade(WHITE, 0.4F * flashA));
+        }
     }
 
-    // Upper-center: consumable slots (C/V) + ability bar — vertical center matches mana bar.
+    // Lower-right: consumable slots (C/V) left of ability bar. Keybind badges drawn last (on top).
     if (ci == 0) {
         constexpr float abSize = 104.0F;
         constexpr float abGap = 16.0F;
@@ -1894,33 +2090,50 @@ void GameplayScene::drawHud(ResourceManager &resources) {
         constexpr float consGap = 12.0F;
         constexpr float clusterGap = 22.0F;
 
-        const float mpCenterY = mpBarTop + barMpH * 0.5F;
-        const float abY = mpCenterY - abSize * 0.5F;
         const float abRowW = 3.0F * abSize + 2.0F * abGap;
-        const float abX0 = (static_cast<float>(w) - abRowW) * 0.5F;
+        const float abRight = static_cast<float>(w) - margin;
+        const float abX0 = abRight - abRowW;
+        const float abY = hudBottomAll - abSize - 8.0F;
 
         const float consRowW = 2.0F * consW + consGap;
         const float consX0 = abX0 - clusterGap - consRowW;
-        const float consY = abY + 14.0F;
+        // Align bottom edge with ability row (shorter 5:4 slots sit higher).
+        const float consY = abY + abSize - consH;
+
+        const float clusterTop = std::min(consY, abY) - 26.0F;
+        const float clusterLeft = consX0 - 14.0F;
+        const float clusterBottom = std::max(consY + consH, abY + abSize) + 6.0F;
+        const float clusterRight = static_cast<float>(w) - margin + 8.0F;
+        const Rectangle abilityCluster{clusterLeft, clusterTop,
+                                       std::max(8.0F, clusterRight - clusterLeft),
+                                       std::max(8.0F, clusterBottom - clusterTop)};
+        DrawRectangleRec(abilityCluster, ui::theme::HUD_GREY_BACKING);
 
         const Vector2 mouse = GetMousePosition();
+
+        bool showHudDescriptionTooltip = false;
+        std::string hudDescTitle;
+        std::string hudDescBody;
 
         const char *consKeys[static_cast<int>(dreadcast::CONSUMABLE_SLOT_COUNT)] = {"C", "V"};
         for (int si = 0; si < dreadcast::CONSUMABLE_SLOT_COUNT; ++si) {
             const float sx = consX0 + static_cast<float>(si) * (consW + consGap);
             const Rectangle consR{sx, consY, consW, consH};
+            const Rectangle consBadgeR = hudKeyBadgeOuterRect(sx, consY);
             DrawRectangleRec(consR, ui::theme::SLOT_FILL);
             DrawRectangleLinesEx(consR, 1.5F, ui::theme::SLOT_BORDER);
-            drawHudKeyBadge(font, consKeys[si], sx, consY);
-
-            const Rectangle badgeR = hudKeyBadgeOuterRect(sx, consY);
-            if (CheckCollisionPointRec(mouse, consR) || CheckCollisionPointRec(mouse, badgeR)) {
-                hoveringHudElement_ = true;
-            }
 
             const int idx = inventory_.consumableSlots[static_cast<size_t>(si)];
+            const ItemData *consItem = nullptr;
             if (idx >= 0 && idx < static_cast<int>(inventory_.items.size())) {
-                const auto &it = inventory_.items[static_cast<size_t>(idx)];
+                consItem = &inventory_.items[static_cast<size_t>(idx)];
+            }
+            if (consItem != nullptr) {
+                const auto &it = *consItem;
+                float ix = sx + 3.0F;
+                float iy = consY + 3.0F;
+                float dw = consW - 6.0F;
+                float dh = consH - 6.0F;
                 if (!it.iconPath.empty()) {
                     const Texture2D tex = resources.getTexture(it.iconPath);
                     if (tex.id != 0) {
@@ -1929,14 +2142,14 @@ void GameplayScene::drawHud(ResourceManager &resources) {
                         const float ip = 3.0F;
                         const float maxW = consW - ip * 2.0F;
                         const float maxH = consH - ip * 2.0F;
-                        float dw = maxH * 7.0F / 5.0F;
-                        float dh = maxH;
+                        dw = maxH * 7.0F / 5.0F;
+                        dh = maxH;
                         if (dw > maxW) {
                             dw = maxW;
                             dh = dw * 5.0F / 7.0F;
                         }
-                        const float ix = sx + (consW - dw) * 0.5F;
-                        const float iy = consY + (consH - dh) * 0.5F;
+                        ix = sx + (consW - dw) * 0.5F;
+                        iy = consY + (consH - dh) * 0.5F;
                         const Rectangle dst{ix, iy, dw, dh};
                         DrawTexturePro(tex, src, dst, {0.0F, 0.0F}, 0.0F, WHITE);
                         if (it.name == "Vial of Cordial Manic" &&
@@ -1949,15 +2162,28 @@ void GameplayScene::drawHud(ResourceManager &resources) {
                         }
                     }
                 }
-                char cntBuf[16];
-                std::snprintf(cntBuf, sizeof(cntBuf), "%d", it.stackCount);
-                constexpr float stackFs = 13.0F;
-                const Vector2 cDim = MeasureTextEx(font, cntBuf, stackFs, 1.0F);
-                const float sp = 3.0F;
-                const float tx = sx + consW - cDim.x - sp;
-                const float ty = consY + consH - cDim.y - sp;
-                DrawTextEx(font, cntBuf, {tx + 1.0F, ty + 1.0F}, stackFs, 1.0F, Fade(BLACK, 200));
-                DrawTextEx(font, cntBuf, {tx, ty}, stackFs, 1.0F, RAYWHITE);
+                if (it.isStackable && it.stackCount >= 1) {
+                    char cntBuf[16];
+                    std::snprintf(cntBuf, sizeof(cntBuf), "%d", it.stackCount);
+                    constexpr float stackFs = 17.0F;
+                    const Vector2 cDim = MeasureTextEx(font, cntBuf, stackFs, 1.0F);
+                    const float sp = 2.0F;
+                    const float tx = ix + dw - cDim.x - sp;
+                    const float ty = iy + dh - cDim.y - sp;
+                    DrawTextEx(font, cntBuf, {tx + 1.0F, ty + 1.0F}, stackFs, 1.0F,
+                               Fade(BLACK, 200));
+                    DrawTextEx(font, cntBuf, {tx, ty}, stackFs, 1.0F, RAYWHITE);
+                }
+            }
+
+            drawHudKeyBadge(font, consKeys[si], sx, consY);
+            if (CheckCollisionPointRec(mouse, consR) || CheckCollisionPointRec(mouse, consBadgeR)) {
+                hoveringHudElement_ = true;
+                if (consItem != nullptr) {
+                    showHudDescriptionTooltip = true;
+                    hudDescTitle = consItem->name;
+                    hudDescBody = consItem->description;
+                }
             }
         }
 
@@ -1965,14 +2191,10 @@ void GameplayScene::drawHud(ResourceManager &resources) {
         for (int ai = 0; ai < 3; ++ai) {
             const float ax = abX0 + static_cast<float>(ai) * (abSize + abGap);
             const Rectangle abR{ax, abY, abSize, abSize};
+            const Rectangle abBadgeR = hudKeyBadgeOuterRect(ax, abY);
             const AbilityDef &ad = UNDEAD_HUNTER_ABILITIES.abilities[static_cast<size_t>(ai)];
             DrawRectangleRec(abR, ui::theme::SLOT_FILL);
             DrawRectangleLinesEx(abR, 2.0F, ui::theme::SLOT_BORDER);
-            drawHudKeyBadge(font, keyLbl[ai], ax, abY);
-            const Rectangle abBadgeR = hudKeyBadgeOuterRect(ax, abY);
-            if (CheckCollisionPointRec(mouse, abR) || CheckCollisionPointRec(mouse, abBadgeR)) {
-                hoveringHudElement_ = true;
-            }
 
             if (ad.iconPath != nullptr && ad.iconPath[0] != '\0') {
                 const Texture2D at = resources.getTexture(ad.iconPath);
@@ -1994,11 +2216,11 @@ void GameplayScene::drawHud(ResourceManager &resources) {
                 char mcBuf[16];
                 std::snprintf(mcBuf, sizeof(mcBuf), "%.0f",
                               static_cast<double>(ad.manaCost));
-                constexpr float mcFs = 15.0F;
+                constexpr float mcFs = 24.0F; // MANA COST FONT SIZE
                 const Vector2 mcDim = MeasureTextEx(font, mcBuf, mcFs, 1.0F);
                 const Color mcCol{80, 140, 255, 255};
                 const float mcx = abR.x + abR.width - mcDim.x - 3.0F;
-                const float mcy = abR.y + abR.height - mcDim.y - 2.0F;
+                const float mcy = abR.y + abR.height - mcDim.y - 1.0F;
                 DrawTextEx(font, mcBuf, {mcx + 1.0F, mcy + 1.0F}, mcFs, 1.0F, Fade(BLACK, 160));
                 DrawTextEx(font, mcBuf, {mcx, mcy}, mcFs, 1.0F, mcCol);
             }
@@ -2023,43 +2245,52 @@ void GameplayScene::drawHud(ResourceManager &resources) {
                            cdFs, 1.0F, {200, 220, 255, 255});
             }
 
+            drawHudKeyBadge(font, keyLbl[ai], ax, abY);
+
             if (CheckCollisionPointRec(mouse, abR) || CheckCollisionPointRec(mouse, abBadgeR)) {
-                const std::string title = ad.name;
-                const std::string body = ad.description;
-                const float tipSz = 13.0F;
-                const Vector2 titleDim = MeasureTextEx(font, title.c_str(), tipSz + 2.0F, 1.0F);
-                float descH = 0.0F;
-                float descW = 0.0F;
-                if (!body.empty()) {
-                    std::istringstream iss(body);
-                    std::string line;
-                    while (std::getline(iss, line)) {
-                        const Vector2 d = MeasureTextEx(font, line.c_str(), tipSz, 1.0F);
-                        descH += d.y + 4.0F;
-                        descW = std::max(descW, d.x);
-                    }
-                    descH = std::max(0.0F, descH - 4.0F);
+                hoveringHudElement_ = true;
+                showHudDescriptionTooltip = true;
+                hudDescTitle = ad.name;
+                hudDescBody = ad.description;
+            }
+        }
+
+        if (showHudDescriptionTooltip) {
+            const float tipSz = 13.0F;
+            const Vector2 titleDim =
+                MeasureTextEx(font, hudDescTitle.c_str(), tipSz + 2.0F, 1.0F);
+            float descH = 0.0F;
+            float descW = 0.0F;
+            if (!hudDescBody.empty()) {
+                std::istringstream iss(hudDescBody);
+                std::string line;
+                while (std::getline(iss, line)) {
+                    const Vector2 d = MeasureTextEx(font, line.c_str(), tipSz, 1.0F);
+                    descH += d.y + 4.0F;
+                    descW = std::max(descW, d.x);
                 }
-                const float pad = 8.0F;
-                const float gap = 6.0F;
-                const float tw = std::max(titleDim.x, descW) + pad * 2.0F;
-                const float th = titleDim.y + gap + descH + pad * 2.0F;
-                Rectangle tip{mouse.x + 14.0F, mouse.y - th - 14.0F, tw, th};
-                clampRectToScreen(tip, w, h);
-                DrawRectangleRec(tip, Fade(ui::theme::PANEL_FILL, 235));
-                DrawRectangleLinesEx(tip, 1.5F, ui::theme::PANEL_BORDER);
-                float yc = tip.y + pad;
-                DrawTextEx(font, title.c_str(), {tip.x + pad, yc}, tipSz + 2.0F, 1.0F, RAYWHITE);
-                yc += titleDim.y + gap;
-                if (!body.empty()) {
-                    std::istringstream iss2(body);
-                    std::string line2;
-                    while (std::getline(iss2, line2)) {
-                        DrawTextEx(font, line2.c_str(), {tip.x + pad, yc}, tipSz, 1.0F,
-                                   ui::theme::LABEL_TEXT);
-                        const Vector2 d = MeasureTextEx(font, line2.c_str(), tipSz, 1.0F);
-                        yc += d.y + 4.0F;
-                    }
+                descH = std::max(0.0F, descH - 4.0F);
+            }
+            const float pad = 8.0F;
+            const float gap = 6.0F;
+            const float tw = std::max(titleDim.x, descW) + pad * 2.0F;
+            const float th = titleDim.y + gap + descH + pad * 2.0F;
+            Rectangle tip{0.0F, 0.0F, tw, th};
+            layoutAbilityDescriptionTooltip(tip, abilityCluster, mouse, w, h);
+            DrawRectangleRec(tip, Fade(ui::theme::PANEL_FILL, 235));
+            DrawRectangleLinesEx(tip, 1.5F, ui::theme::PANEL_BORDER);
+            float yc = tip.y + pad;
+            DrawTextEx(font, hudDescTitle.c_str(), {tip.x + pad, yc}, tipSz + 2.0F, 1.0F,
+                       RAYWHITE);
+            yc += titleDim.y + gap;
+            if (!hudDescBody.empty()) {
+                std::istringstream iss2(hudDescBody);
+                std::string line2;
+                while (std::getline(iss2, line2)) {
+                    DrawTextEx(font, line2.c_str(), {tip.x + pad, yc}, tipSz, 1.0F,
+                               ui::theme::LABEL_TEXT);
+                    const Vector2 d = MeasureTextEx(font, line2.c_str(), tipSz, 1.0F);
+                    yc += d.y + 4.0F;
                 }
             }
         }
@@ -2165,7 +2396,7 @@ void GameplayScene::drawLootProximityPrompt(ResourceManager &resources) {
         boxW = std::max(boxW, descDim.x + 24.0F);
         boxH += descDim.y + 8.0F;
     }
-    Rectangle bg{mouse.x + 14.0F, mouse.y - boxH - 14.0F, boxW, boxH};
+    Rectangle bg{mouse.x, mouse.y - boxH, boxW, boxH};
     clampRectToScreen(bg, config::WINDOW_WIDTH, config::WINDOW_HEIGHT);
     DrawRectangleRec(bg, {0, 0, 0, 210});
     DrawRectangleLinesEx(bg, 2.0F, ui::theme::BTN_BORDER);

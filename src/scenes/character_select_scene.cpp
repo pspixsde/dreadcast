@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
+#include <string>
 
 #include <raylib.h>
 
@@ -13,6 +15,42 @@
 #include "ui/theme.hpp"
 
 namespace dreadcast {
+
+namespace {
+
+float drawMultiline(const Font &font, const char *text, float x, float y, float lineSpacing,
+                    float fontSize, Color col) {
+    if (text == nullptr || text[0] == '\0') {
+        return 0.0F;
+    }
+    const float y0 = y;
+    float cy = y;
+    const char *lineStart = text;
+    for (;;) {
+        const char *newline = std::strchr(lineStart, '\n');
+        const size_t len =
+            newline != nullptr ? static_cast<size_t>(newline - lineStart) : std::strlen(lineStart);
+        if (len > 0) {
+            std::string line(lineStart, len);
+            DrawTextEx(font, line.c_str(), {x, cy}, fontSize, 1.0F, col);
+            const Vector2 dim = MeasureTextEx(font, line.c_str(), fontSize, 1.0F);
+            cy += std::max(lineSpacing, dim.y + 2.0F);
+        } else {
+            cy += lineSpacing;
+        }
+        if (newline == nullptr) {
+            break;
+        }
+        lineStart = newline + 1;
+    }
+    return cy - y0;
+}
+
+void drawHRule(float x0, float x1, float y, Color c) {
+    DrawLineEx({x0, y}, {x1, y}, 1.5F, Fade(c, 0.78F));
+}
+
+} // namespace
 
 CharacterSelectScene::CharacterSelectScene(int *selectedClassIndexOut)
     : selectedOut_(selectedClassIndexOut) {
@@ -95,7 +133,7 @@ void CharacterSelectScene::draw(ResourceManager &resources) {
     DrawRectangleRec({px, py, 420.0F, panelH}, ui::theme::PANEL_FILL);
     DrawRectangleLinesEx({px, py, 420.0F, panelH}, 2.0F, ui::theme::PANEL_BORDER);
 
-    const char *leftTitle = "Classes";
+    const char *leftTitle = "Characters";
     DrawTextEx(font, leftTitle, {px + 16.0F, py + 12.0F}, 20.0F, 1.0F, ui::theme::LABEL_TEXT);
 
     const int cols = 3;
@@ -139,33 +177,123 @@ void CharacterSelectScene::draw(ResourceManager &resources) {
     DrawRectangleLinesEx({detailX, py, detailW, panelH}, 2.0F, ui::theme::PANEL_BORDER);
 
     const CharacterClass &sel = AVAILABLE_CLASSES[static_cast<size_t>(highlightedIndex_)];
-    DrawTextEx(font, "Details", {detailX + 20.0F, py + 16.0F}, 22.0F, 1.0F,
-               ui::theme::LABEL_TEXT);
+    const float padL = 22.0F;
+    const float padR = 18.0F;
+    float y = py + 14.0F;
 
-    const float dpr = 52.0F;
-    const float dcx = detailX + 80.0F;
-    const float dcy = py + 100.0F;
+    DrawTextEx(font, "Details", {detailX + padL, y}, 22.0F, 1.0F, ui::theme::LABEL_TEXT);
+    y += 34.0F;
+
+    const float dpr = 40.0F;
+    const float dcx = detailX + padL + dpr;
+    const float dcy = y + dpr;
     DrawCircle(static_cast<int>(dcx), static_cast<int>(dcy), dpr, ui::theme::PORTRAIT_FILL);
     DrawCircleLines(static_cast<int>(dcx), static_cast<int>(dcy), dpr, ui::theme::PORTRAIT_RING);
     char ini2[2] = {sel.name[0], '\0'};
-    const float dpFont = 56.0F;
+    const float dpFont = 44.0F;
     const Vector2 dpd = MeasureTextEx(font, ini2, dpFont, 1.0F);
     DrawTextEx(font, ini2, {dcx - dpd.x * 0.5F, dcy - dpd.y * 0.5F}, dpFont, 1.0F, RAYWHITE);
 
-    DrawTextEx(font, sel.name, {detailX + 160.0F, py + 70.0F}, 28.0F, 1.0F, RAYWHITE);
-    DrawTextEx(font, sel.description, {detailX + 24.0F, py + 170.0F}, 17.0F, 1.0F,
-               ui::theme::SUBTITLE_TEXT);
+    const float nameX = detailX + padL + dpr * 2.0F + 16.0F;
+    DrawTextEx(font, sel.name, {nameX, y + 18.0F}, 26.0F, 1.0F, RAYWHITE);
+    y += dpr * 2.0F + 12.0F;
 
-    DrawTextEx(font, "Abilities", {detailX + 24.0F, py + 220.0F}, 18.0F, 1.0F,
-               ui::theme::LABEL_TEXT);
-    DrawTextEx(font, sel.detailAbilities, {detailX + 24.0F, py + 250.0F}, 16.0F, 1.0F,
-               ui::theme::MUTED_TEXT);
+    DrawTextEx(font, sel.description, {detailX + padL, y}, 17.0F, 1.0F, ui::theme::SUBTITLE_TEXT);
+    {
+        const Vector2 dd = MeasureTextEx(font, sel.description, 17.0F, 1.0F);
+        y += dd.y + 14.0F;
+    }
 
-    char regenBuf[96];
-    std::snprintf(regenBuf, sizeof(regenBuf), "Passive Regen: +%.1f HP/s, +%.1f Mana/s",
-                  sel.hpRegen, sel.manaRegen);
-    DrawTextEx(font, regenBuf, {detailX + 24.0F, py + 330.0F}, 16.0F, 1.0F,
-               ui::theme::SUBTITLE_TEXT);
+    DrawTextEx(font, "Abilities", {detailX + padL, y}, 18.0F, 1.0F, ui::theme::LABEL_TEXT);
+    y += 26.0F;
+    y += drawMultiline(font, sel.detailAbilities, detailX + padL, y, 18.0F, 15.0F,
+                       ui::theme::MUTED_TEXT);
+    y += 12.0F;
+
+    drawHRule(detailX + padL, detailX + detailW - padR, y, ui::theme::PANEL_BORDER);
+    y += 14.0F;
+
+    DrawTextEx(font, "Bio", {detailX + padL, y}, 18.0F, 1.0F, ui::theme::LABEL_TEXT);
+    y += 24.0F;
+    y += drawMultiline(font, sel.bio, detailX + padL, y, 20.0F, 15.0F, ui::theme::MUTED_TEXT);
+    y += 12.0F;
+
+    drawHRule(detailX + padL, detailX + detailW - padR, y, ui::theme::PANEL_BORDER);
+    y += 14.0F;
+
+    DrawTextEx(font, "Health & Mana", {detailX + padL, y}, 18.0F, 1.0F, ui::theme::LABEL_TEXT);
+    y += 28.0F;
+
+    {
+        constexpr float barW = 132.0F;
+        constexpr float barH = 12.0F;
+        const Rectangle hpBar{detailX + padL, y + 3.0F, barW, barH};
+        DrawRectangleRec(hpBar, Color{90, 22, 28, 220});
+        DrawRectangleRec({hpBar.x, hpBar.y, barW * 0.92F, barH}, Color{200, 55, 65, 244});
+        DrawRectangleLinesEx(hpBar, 1.0F, Fade(ui::theme::PANEL_BORDER, 0.72F));
+        char hpBuf[96];
+        std::snprintf(hpBuf, sizeof(hpBuf), "%.0f max HP   +%.1f /s", static_cast<double>(sel.baseMaxHp),
+                      static_cast<double>(sel.hpRegen));
+        DrawTextEx(font, hpBuf, {detailX + padL + barW + 14.0F, y}, 15.0F, 1.0F, RAYWHITE);
+        y += 28.0F;
+
+        const Rectangle mpBar{detailX + padL, y + 3.0F, barW, barH};
+        DrawRectangleRec(mpBar, Color{22, 38, 90, 220});
+        DrawRectangleRec({mpBar.x, mpBar.y, barW * 0.92F, barH}, Color{70, 120, 220, 244});
+        DrawRectangleLinesEx(mpBar, 1.0F, Fade(ui::theme::PANEL_BORDER, 0.72F));
+        char mpBuf[96];
+        std::snprintf(mpBuf, sizeof(mpBuf), "%.0f max Mana   +%.1f /s",
+                      static_cast<double>(sel.baseMaxMana), static_cast<double>(sel.manaRegen));
+        DrawTextEx(font, mpBuf, {detailX + padL + barW + 14.0F, y}, 15.0F, 1.0F, RAYWHITE);
+        y += 34.0F;
+    }
+
+    drawHRule(detailX + padL, detailX + detailW - padR, y, ui::theme::PANEL_BORDER);
+    y += 14.0F;
+
+    DrawTextEx(font, "Attack", {detailX + padL, y}, 18.0F, 1.0F, ui::theme::LABEL_TEXT);
+    y += 26.0F;
+    DrawTextEx(font, "Ranged", {detailX + padL + 6.0F, y}, 15.0F, 1.0F, ui::theme::SUBTITLE_TEXT);
+    y += 22.0F;
+    {
+        char b1[128];
+        std::snprintf(b1, sizeof(b1), "Curse bolt damage %.0f   range %.0f",
+                      static_cast<double>(sel.rangedDamage), static_cast<double>(sel.rangedRange));
+        DrawTextEx(font, b1, {detailX + padL + 14.0F, y}, 14.0F, 1.0F, RAYWHITE);
+        y += 22.0F;
+        DrawTextEx(font, "Mana cost per shot (see HUD in-game).", {detailX + padL + 14.0F, y}, 13.0F,
+                   1.0F, ui::theme::MUTED_TEXT);
+        y += 22.0F;
+    }
+    DrawTextEx(font, "Melee", {detailX + padL + 6.0F, y}, 15.0F, 1.0F, ui::theme::SUBTITLE_TEXT);
+    y += 22.0F;
+    {
+        char b2[128];
+        std::snprintf(b2, sizeof(b2), "Combo hits %.0f damage each   reach %.0f",
+                      static_cast<double>(sel.meleeDamage), static_cast<double>(sel.meleeRange));
+        DrawTextEx(font, b2, {detailX + padL + 14.0F, y}, 14.0F, 1.0F, RAYWHITE);
+        y += 22.0F;
+        DrawTextEx(font, "Three-hit string, frontal cone, hold RMB to chain.", {detailX + padL + 14.0F, y},
+                   13.0F, 1.0F, ui::theme::MUTED_TEXT);
+        y += 28.0F;
+    }
+
+    drawHRule(detailX + padL, detailX + detailW - padR, y, ui::theme::PANEL_BORDER);
+    y += 14.0F;
+
+    DrawTextEx(font, "Mobility", {detailX + padL, y}, 18.0F, 1.0F, ui::theme::LABEL_TEXT);
+    y += 26.0F;
+    {
+        char m1[128];
+        std::snprintf(m1, sizeof(m1), "Base move speed %.0f (world units / second)",
+                      static_cast<double>(sel.moveSpeed));
+        DrawTextEx(font, m1, {detailX + padL + 6.0F, y}, 14.0F, 1.0F, RAYWHITE);
+        y += 22.0F;
+        char m2[128];
+        std::snprintf(m2, sizeof(m2), "Fog vision radius %.0f (exploration / combat awareness)",
+                      static_cast<double>(sel.visionRange));
+        DrawTextEx(font, m2, {detailX + padL + 6.0F, y}, 14.0F, 1.0F, RAYWHITE);
+    }
 
     const Vector2 mouse = GetMousePosition();
     backButton_.draw(font, 20.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER, RAYWHITE,

@@ -37,6 +37,11 @@ entt::entity find_interactable_hover_in_range(entt::registry &registry, Vector2 
 bool try_pickup_item_entity(entt::registry &registry, entt::entity pickupEntity,
                             InventoryState &inventory, float &inventoryFullFlashTimer);
 
+/// After `InventoryState::removeItemAtIndex(removedIdx)` (swap-with-last), re-point ground
+/// `ItemPickup::itemIndex` values that still referenced `oldLastIdx` to `removedIdx`.
+void rewrite_ground_pickup_indices_after_remove(entt::registry &registry, int removedIdx,
+                                                int oldLastIdx);
+
 } // namespace collision
 } // namespace ecs
 } // namespace dreadcast

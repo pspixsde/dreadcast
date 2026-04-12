@@ -239,6 +239,25 @@ void drawMeleeArc(entt::registry &registry) {
     }
 }
 
+void drawLavaEntity(const Transform &transform, const Lava &lava) {
+    const float x0 = transform.position.x - lava.halfW;
+    const float x1 = transform.position.x + lava.halfW;
+    const float y0 = transform.position.y - lava.halfH;
+    const float y1 = transform.position.y + lava.halfH;
+    const Vector2 p1 = dreadcast::worldToIso(Vector2{x0, y0});
+    const Vector2 p2 = dreadcast::worldToIso(Vector2{x1, y0});
+    const Vector2 p3 = dreadcast::worldToIso(Vector2{x1, y1});
+    const Vector2 p4 = dreadcast::worldToIso(Vector2{x0, y1});
+    const Color fill = {180, 60, 20, 160};
+    const Color outline = {255, 100, 40, 220};
+    DrawTriangle(p1, p2, p3, fill);
+    DrawTriangle(p1, p3, p4, fill);
+    DrawLineV(p1, p2, outline);
+    DrawLineV(p2, p3, outline);
+    DrawLineV(p3, p4, outline);
+    DrawLineV(p4, p1, outline);
+}
+
 void drawWallEntity(const Transform &transform, const Wall &wall) {
     const float x0 = transform.position.x - wall.halfW;
     const float x1 = transform.position.x + wall.halfW;
@@ -331,6 +350,10 @@ void render_system(entt::registry &registry, const Font &font, ResourceManager &
         break;
     }
     const float fogRadius = config::FOG_OF_WAR_RADIUS;
+
+    for (const auto lv : registry.view<Lava, Transform>()) {
+        drawLavaEntity(registry.get<Transform>(lv), registry.get<Lava>(lv));
+    }
 
     for (const auto w : registry.view<Wall, Transform>()) {
         drawWallEntity(registry.get<Transform>(w), registry.get<Wall>(w));

@@ -70,6 +70,28 @@ namespace dreadcast {
             "Cannot be used below 40% max HP.";
         return v;
     }
+    if (kind == "vial_raw_spirit") {
+        ItemData v{};
+        v.name = "Vial of Raw Spirit";
+        v.iconPath = "assets/textures/items/vial_raw_spirit_icon.png";
+        v.rarity = ItemRarity::Clouded;
+        v.isConsumable = true;
+        v.isStackable = true;
+        v.maxStack = maxStackForConsumableRarity(ItemRarity::Clouded);
+        v.stackCount = 1;
+        v.description = "Regenerates 50 mana over 6 seconds.";
+        return v;
+    }
+    if (kind == "hollow_ring") {
+        ItemData ring{};
+        ring.name = "Hollow Ring";
+        ring.iconPath = "assets/textures/items/hollow_ring_icon.png";
+        ring.slot = EquipSlot::Ring;
+        ring.rarity = ItemRarity::Tarnished;
+        ring.maxManaBonus = 15.0F;
+        ring.description = "+15 Max Mana";
+        return ring;
+    }
     return {};
 }
 

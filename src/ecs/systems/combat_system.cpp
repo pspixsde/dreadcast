@@ -54,10 +54,15 @@ void combat_player_ranged(entt::registry &registry, const InputManager &input,
     if (leadFever) {
         const int n = config::LEAD_FEVER_PELLET_COUNT;
         const float spread = config::LEAD_FEVER_SCATTER_ANGLE;
+        const float jitter = config::LEAD_FEVER_SCATTER_RANDOM;
         for (int i = 0; i < n; ++i) {
-            const float t = (n <= 1) ? 0.0F
-                                     : (static_cast<float>(i) / static_cast<float>(n - 1) - 0.5F) *
-                                           (2.0F * spread);
+            const float baseFan = (n <= 1) ? 0.0F
+                                           : (static_cast<float>(i) / static_cast<float>(n - 1) -
+                                              0.5F) *
+                                                 (2.0F * spread);
+            const float randomOffset =
+                (static_cast<float>(GetRandomValue(-100, 100)) / 100.0F) * jitter;
+            const float t = baseFan + randomOffset;
             const float ca = std::cosf(t);
             const float sa = std::sinf(t);
             const Vector2 d{dir.x * ca - dir.y * sa, dir.x * sa + dir.y * ca};
@@ -70,9 +75,9 @@ void combat_player_ranged(entt::registry &registry, const InputManager &input,
             registry.emplace<Sprite>(proj, Sprite{{120, 220, 140, 255}, 9.0F, 9.0F});
             registry.emplace<Projectile>(
                 proj,
-                Projectile{config::PROJECTILE_DAMAGE * config::LEAD_FEVER_DAMAGE_MULT,
-                           config::PROJECTILE_SPEED, config::PROJECTILE_MAX_RANGE, 0.0F, d, true,
-                           entt::null, false, config::LEAD_FEVER_KNOCKBACK});
+                Projectile{config::PROJECTILE_DAMAGE, config::PROJECTILE_SPEED,
+                           config::PROJECTILE_MAX_RANGE, 0.0F, d, true, entt::null, false,
+                           config::LEAD_FEVER_KNOCKBACK});
         }
         return;
     }
