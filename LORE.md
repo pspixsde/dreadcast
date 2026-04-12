@@ -75,7 +75,31 @@ He **collapsed** over their bodies and **died**.
 
 ## Items and artifacts
 
-- Gear and consumables in play tie into **rarity**, **curses**, and **“pure”** vs **dark** rumor; named stories to be added per item as needed.
+Gear and consumables in play tie into **rarity**, **curses**, and **“pure”** vs **dark** rumor. Below are the items currently in the game—add a short lore line under each name when you are ready.
+
+### Armor
+
+- **Iron Armor** —
+
+- **Barbed Tunic** —
+
+- **Runic Shell** —
+
+### Amulet
+
+- **?** —
+
+### Ring
+
+- **Hollow Ring** —
+
+### Consumables (vials)
+
+- **Vial of Pure Blood** —
+
+- **Vial of Cordial Manic** —
+
+- **Vial of Raw Spirit** —
 
 ---
 

@@ -2,11 +2,53 @@
 
 All notable changes to **Dreadcast** will be documented in this file.
 
+## v0.10.3 — 2026-04-11
+
+### Added
+
+- **Character select:** **Bio** line; **Health & Mana** section with bar-style readout; **Attack** (Ranged / Melee); **Mobility** (move speed, fog vision). **`CharacterClass`** gains `bio`, base combat/movement stats for the selector (Undead Hunter populated from current tuning).
+- **Editor toolbar:** **Elements / Items / Units** tabs with a **clipped list** area (no overlapping dropdowns). **Elements:** Select, Wall, Lava, Casket, Player spawn. **Items:** full-name rows for all map item kinds. **Units:** Imp, Hellhound, Player spawn.
+
+### Changed
+
+- **Runic Shell:** Triggers only when HP **crosses** from **above** the 30% threshold to **at or below** it in a fixed tick (uses the same per-tick HP snapshot as floating numbers), not when already low on cooldown expiry or when equipping while hurt.
+- **Editor:** Map overlay labels for item spawns use **full item names** (via `makeItemFromMapKind`), not short tags.
+- **Consumable stack count (inventory + HUD):** Drawn on the **7:5 icon** bottom-right with **larger** font (~17px).
+- **Character select:** Ability blurbs use **`-` list markers** instead of `•` (font renders bullet as `?`).
+
+### Fixed
+
+- **Ground vial / stack pickup:** After `removeItemAtIndex` swap-with-last, remaining **`ItemPickup::itemIndex`** values are rewritten so rapid **E** pickups no longer lose items. Same fix when consuming the last stack from inventory while drops exist (`rewrite_ground_pickup_indices_after_remove`).
+- **Inventory context menu:** **Right-click** another slot while the menu is open **closes** the old menu and **opens** the new one.
+
+## v0.10.2 — 2026-04-11
+
+### Added
+
+- **Lava (editor + maps):** Place and resize like walls (`LAVA cx cy halfW halfH` in `.map` files). Walk-through hazard: **2× slower** movement and **8 damage every 0.5s** while standing in lava.
+- **Vial of Raw Spirit** (`vial_raw_spirit`): **Clouded** consumable; restores **50 mana over 6 seconds**; HUD status icon with timer. Icon: `assets/textures/items/vial_raw_spirit_icon.png`.
+- **Hollow Ring** (`hollow_ring`): **Tarnished** ring; **+15 Max Mana** when equipped. Icon: `assets/textures/items/hollow_ring_icon.png`.
+- **`ItemData::maxManaBonus`**, **`InventoryState::totalEquippedMaxManaBonus()`**, **`applyPlayerMaxManaFromEquipment()`**.
+- **`ecs::ManaRegenOverTime`**, **`ecs::Lava`** components; config: **`LAVA_*`**, **`RAW_SPIRIT_*`**, **`LEAD_FEVER_SCATTER_RANDOM`**.
+
+### Changed
+
+- **Lead Fever:** Pellets deal **full** projectile damage (no half-damage); **random angular jitter** per pellet on top of the base fan spread. Ability and character-select text updated.
+- **HUD:** Portrait/bars and lower-right ability+consumable cluster use **semi-transparent grey** backing (`HUD_GREY_BACKING`).
+- **Keybind badges (C/V, 1–3):** **Dark grey** fill with **subtle black** outline (button-like) instead of black + white outline.
+- **Tooltips:** Inventory, world loot prompts, and ability/consumable HUD tooltips anchor from the **cursor tip** (extend up and right; screen-clamped).
+- **Settings:** **Gameplay** tab — on/off toggles use a **fixed column** for alignment (same pattern on **Video**). **Mouse sensitivity** slider and **Reset** moved to **Controls** (sensitivity first, keybind list, **Reset** above **Back**). **Save** removed; settings **persist on change** (toggles, sensitivity release, reset).
+- **Editor:** Item picker includes Raw Spirit and Hollow Ring; **special_amulet** removed.
+
+### Removed
+
+- **special_amulet** / “Veil of Oddities” item and map spawn.
+
 ## v0.10.1 — 2026-04-10
 
 ### Added
 
-- **Ability HUD:** Draft icons **`assets/textures/drafts/1.png`**, **`2.png`**, **`3.png`** for Undead Hunter abilities; **104×104** slots **upper-center**, vertical center aligned with the **mana bar**; key **1 / 2 / 3** in small **black squares** slightly above/outside each icon; **mana cost** in **blue** at lower-right of each icon (toggleable).
+- **Ability HUD:** Icons **`assets/textures/abilities/lead_fever.png`**, **`deadlight_snare.png`**, **`calamity_slug.png`** for Undead Hunter abilities; **104×104** slots **lower-right**; key **1 / 2 / 3** in small **black squares** slightly above/outside each icon; **mana cost** in **blue** at lower-right of each icon (toggleable).
 - **Consumable HUD (C / V):** **5:4** slots, **half** ability height, **left** of abilities, slightly **lower**; same keybind badge style; **stack count** lower-right inside the slot.
 - **Equipment HUD:** Three **7:5**-fitted icons below the mana bar (armor / amulet / ring) with **Runic Shell** cooldown overlay when applicable.
 - **Floating damage/heal numbers** at entities (world→screen), toggleable; **Settings → Gameplay:** **Show ability mana cost** (default **on**), **Show damage/heal numbers** (default **off**); persisted in **`settings.cfg`**.

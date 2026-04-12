@@ -18,6 +18,10 @@ namespace {
 constexpr float kMouseSensMin = 0.1F;
 constexpr float kMouseSensMax = 3.0F;
 
+void saveSettingsNow(ResourceManager &resources) {
+    (void)resources.settings().saveToFile("settings.cfg");
+}
+
 void updateMouseSensitivitySlider(Vector2 mouse, bool mouseDown, bool mousePressed,
                                   ResourceManager &resources, bool &dragging, Rectangle track) {
     if (mousePressed && CheckCollisionPointRec(mouse, track)) {
@@ -92,62 +96,59 @@ void SettingsScene::update(SceneManager &scenes, InputManager &input,
         }
     }
 
+    if (activeTab_ != Tab::Controls) {
+        draggingMouseSensSlider_ = false;
+        mouseSensSliderPrevDown_ = false;
+    }
+
+    const float toggleBtnX = static_cast<float>(w) * 0.5F + 120.0F;
+    const float toggleBtnW = 80.0F;
+    const float toggleBtnH = 34.0F;
+
     if (activeTab_ == Tab::Gameplay) {
-        const Rectangle sensTrack = {static_cast<float>(w) * 0.5F - 150.0F, 200.0F, 300.0F,
-                                       22.0F};
-        updateMouseSensitivitySlider(mouse, mouseDown, click, resources, draggingMouseSensSlider_,
-                                     sensTrack);
-        const float labelSz = 22.0F;
-        const float rowX = static_cast<float>(w) * 0.5F - 220.0F;
-        float rowY = sensTrack.y + 52.0F;
-        const char *manaLbl = "Show ability mana cost";
-        const Vector2 manaDim = MeasureTextEx(resources.uiFont(), manaLbl, labelSz, 1.0F);
-        manaCostToggleButton_.rect = {rowX + manaDim.x + 160.0F, rowY - 3.0F, 80.0F, 34.0F};
+        const float rowY0 = 200.0F;
+        manaCostToggleButton_.rect = {toggleBtnX, rowY0 - 3.0F, toggleBtnW, toggleBtnH};
         manaCostToggleButton_.label =
             resources.settings().showAbilityManaCost ? "On" : "Off";
         if (manaCostToggleButton_.wasClicked(mouse, click)) {
             resources.settings().showAbilityManaCost = !resources.settings().showAbilityManaCost;
+            saveSettingsNow(resources);
         }
-        rowY += 46.0F;
-        const char *dmgLbl = "Show damage/heal numbers";
-        const Vector2 dmgDim = MeasureTextEx(resources.uiFont(), dmgLbl, labelSz, 1.0F);
-        damageNumbersToggleButton_.rect = {rowX + dmgDim.x + 160.0F, rowY - 3.0F, 80.0F, 34.0F};
+        const float rowY1 = rowY0 + 46.0F;
+        damageNumbersToggleButton_.rect = {toggleBtnX, rowY1 - 3.0F, toggleBtnW, toggleBtnH};
         damageNumbersToggleButton_.label =
             resources.settings().showDamageNumbers ? "On" : "Off";
         if (damageNumbersToggleButton_.wasClicked(mouse, click)) {
             resources.settings().showDamageNumbers = !resources.settings().showDamageNumbers;
+            saveSettingsNow(resources);
         }
-        const float btnY = rowY + 40.0F;
-        const float btnW = 140.0F;
-        const float btnH = 40.0F;
-        const float btnGap = 16.0F;
-        const float btnTotal = btnW * 2.0F + btnGap;
-        const float btnX0 = static_cast<float>(w) * 0.5F - btnTotal * 0.5F;
-        gameplaySaveButton_.rect = {btnX0, btnY, btnW, btnH};
-        gameplaySaveButton_.label = "Save";
-        gameplayResetButton_.rect = {btnX0 + btnW + btnGap, btnY, btnW, btnH};
-        gameplayResetButton_.label = "Reset";
-        if (gameplaySaveButton_.wasClicked(mouse, click)) {
-            (void)resources.settings().saveToFile("settings.cfg");
+    } else if (activeTab_ == Tab::Controls) {
+        const Rectangle sensTrack = {static_cast<float>(w) * 0.5F - 150.0F, 190.0F, 300.0F,
+                                       22.0F};
+        updateMouseSensitivitySlider(mouse, mouseDown, click, resources, draggingMouseSensSlider_,
+                                     sensTrack);
+        if (mouseSensSliderPrevDown_ && !mouseDown) {
+            saveSettingsNow(resources);
         }
-        if (gameplayResetButton_.wasClicked(mouse, click)) {
+        mouseSensSliderPrevDown_ = mouseDown;
+
+        resetButton_.rect = {(static_cast<float>(w) - 200.0F) * 0.5F,
+                             static_cast<float>(h) - 170.0F, 200.0F, 44.0F};
+        resetButton_.label = "Reset";
+        if (resetButton_.wasClicked(mouse, click)) {
             resources.settings() = GameSettings{};
+            saveSettingsNow(resources);
         }
-    } else {
-        draggingMouseSensSlider_ = false;
     }
 
     if (activeTab_ == Tab::Video) {
-        const float labelSz = 22.0F;
-        const char *label = "Show FPS Counter";
-        const Vector2 labelDim = MeasureTextEx(resources.uiFont(), label, labelSz, 1.0F);
-        const float rowY = 190.0F;
-        const float rowX = static_cast<float>(w) * 0.5F - 220.0F;
-        fpsCounterToggleButton_.rect = {rowX + labelDim.x + 160.0F, rowY - 3.0F, 80.0F, 34.0F};
+        const float rowY = 200.0F;
+        fpsCounterToggleButton_.rect = {toggleBtnX, rowY - 3.0F, toggleBtnW, toggleBtnH};
         fpsCounterToggleButton_.label =
             resources.settings().showFpsCounter ? "On" : "Off";
         if (fpsCounterToggleButton_.wasClicked(mouse, click)) {
             resources.settings().showFpsCounter = !resources.settings().showFpsCounter;
+            saveSettingsNow(resources);
         }
     }
 
@@ -199,48 +200,37 @@ void SettingsScene::draw(ResourceManager &resources) {
                          activeTab_ == Tab::Video ? ui::theme::BTN_HOVER : ui::theme::BTN_FILL,
                          ui::theme::BTN_HOVER, RAYWHITE, ui::theme::BTN_BORDER);
 
+    const float toggleBtnX = static_cast<float>(w) * 0.5F + 120.0F;
+    const float toggleBtnW = 80.0F;
+    const float toggleBtnH = 34.0F;
+
     if (activeTab_ == Tab::Gameplay) {
-        const Rectangle sensTrack = {static_cast<float>(w) * 0.5F - 150.0F, 200.0F, 300.0F,
-                                     22.0F};
-        drawMouseSensitivitySlider(font, mouse, resources.settings().mouseSensitivity, sensTrack);
         const float labelSz = 22.0F;
         const float rowX = static_cast<float>(w) * 0.5F - 220.0F;
-        float rowY = sensTrack.y + 52.0F;
+        float rowY = 200.0F;
         const char *manaLbl = "Show ability mana cost";
-        const Vector2 manaDim = MeasureTextEx(font, manaLbl, labelSz, 1.0F);
         DrawTextEx(font, manaLbl, {rowX, rowY}, labelSz, 1.0F, ui::theme::LABEL_TEXT);
-        manaCostToggleButton_.rect = {rowX + manaDim.x + 160.0F, rowY - 3.0F, 80.0F, 34.0F};
+        manaCostToggleButton_.rect = {toggleBtnX, rowY - 3.0F, toggleBtnW, toggleBtnH};
         manaCostToggleButton_.label =
             resources.settings().showAbilityManaCost ? "On" : "Off";
         manaCostToggleButton_.draw(font, 18.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER,
                                    RAYWHITE, ui::theme::BTN_BORDER);
         rowY += 46.0F;
         const char *dmgLbl = "Show damage/heal numbers";
-        const Vector2 dmgDim = MeasureTextEx(font, dmgLbl, labelSz, 1.0F);
         DrawTextEx(font, dmgLbl, {rowX, rowY}, labelSz, 1.0F, ui::theme::LABEL_TEXT);
-        damageNumbersToggleButton_.rect = {rowX + dmgDim.x + 160.0F, rowY - 3.0F, 80.0F, 34.0F};
+        damageNumbersToggleButton_.rect = {toggleBtnX, rowY - 3.0F, toggleBtnW, toggleBtnH};
         damageNumbersToggleButton_.label =
             resources.settings().showDamageNumbers ? "On" : "Off";
         damageNumbersToggleButton_.draw(font, 18.0F, mouse, ui::theme::BTN_FILL,
                                         ui::theme::BTN_HOVER, RAYWHITE, ui::theme::BTN_BORDER);
-        const float btnY = rowY + 40.0F;
-        const float btnW = 140.0F;
-        const float btnH = 40.0F;
-        const float btnGap = 16.0F;
-        const float btnTotal = btnW * 2.0F + btnGap;
-        const float btnX0 = static_cast<float>(w) * 0.5F - btnTotal * 0.5F;
-        gameplaySaveButton_.rect = {btnX0, btnY, btnW, btnH};
-        gameplaySaveButton_.label = "Save";
-        gameplayResetButton_.rect = {btnX0 + btnW + btnGap, btnY, btnW, btnH};
-        gameplayResetButton_.label = "Reset";
-        gameplaySaveButton_.draw(font, 18.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER,
-                                 RAYWHITE, ui::theme::BTN_BORDER);
-        gameplayResetButton_.draw(font, 18.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER,
-                                  RAYWHITE, ui::theme::BTN_BORDER);
     } else if (activeTab_ == Tab::Controls) {
+        const Rectangle sensTrack = {static_cast<float>(w) * 0.5F - 150.0F, 190.0F, 300.0F,
+                                     22.0F};
+        drawMouseSensitivitySlider(font, mouse, resources.settings().mouseSensitivity, sensTrack);
+
         const float rowLabelX = static_cast<float>(w) * 0.5F - 280.0F;
         const float rowKeyX = static_cast<float>(w) * 0.5F + 40.0F;
-        float rowY = 190.0F;
+        float rowY = 268.0F;
         const float rowGap = 36.0F;
         const float textSize = 20.0F;
 
@@ -249,7 +239,7 @@ void SettingsScene::draw(ResourceManager &resources) {
             const char *key;
         };
         const Row rows[] = {{"Move", "WASD / Arrow keys"},
-                            {"Aim", "Mouse (sensitivity in Gameplay tab)"},
+                            {"Aim", "Mouse (sensitivity above)"},
                             {"Ranged attack", "Left mouse button"},
                             {"Melee attack", "Right mouse button"},
                             {"Pick up item", "E (near drop, cursor on item)"},
@@ -265,18 +255,25 @@ void SettingsScene::draw(ResourceManager &resources) {
             DrawTextEx(font, r.key, {rowKeyX, rowY}, textSize, 1.0F, RAYWHITE);
             rowY += rowGap;
         }
+
+        resetButton_.rect = {(static_cast<float>(w) - 200.0F) * 0.5F,
+                             static_cast<float>(h) - 170.0F, 200.0F, 44.0F};
+        resetButton_.label = "Reset";
+        resetButton_.draw(font, 18.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER, RAYWHITE,
+                          ui::theme::BTN_BORDER);
     } else {
         const float labelSz = 22.0F;
         const char *label = "Show FPS Counter";
         const Vector2 labelDim = MeasureTextEx(font, label, labelSz, 1.0F);
-        const float rowY = 190.0F;
+        const float rowY = 200.0F;
         const float rowX = static_cast<float>(w) * 0.5F - 220.0F;
         DrawTextEx(font, label, {rowX, rowY}, labelSz, 1.0F, ui::theme::LABEL_TEXT);
 
-        fpsCounterToggleButton_.rect = {rowX + labelDim.x + 160.0F, rowY - 3.0F, 80.0F, 34.0F};
+        fpsCounterToggleButton_.rect = {toggleBtnX, rowY - 3.0F, toggleBtnW, toggleBtnH};
         fpsCounterToggleButton_.label = resources.settings().showFpsCounter ? "On" : "Off";
         fpsCounterToggleButton_.draw(font, 18.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER,
                                      RAYWHITE, ui::theme::BTN_BORDER);
+        (void)labelDim;
     }
 
     backButton_.draw(font, 22.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER, RAYWHITE,

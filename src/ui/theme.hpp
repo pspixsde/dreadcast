@@ -23,6 +23,8 @@ inline constexpr Color MUTED_TEXT = {175, 130, 100, 255};
 inline constexpr Color CLEAR_BG = {18, 10, 10, 255};
 inline constexpr Color MENU_BG = {18, 10, 10, 255};
 inline constexpr Color HUD_BACKING = {0, 0, 0, 140};
+/// Semi-transparent grey HUD cluster backing (portrait, ability bar, etc.).
+inline constexpr Color HUD_GREY_BACKING = {60, 60, 60, 120};
 inline constexpr Color INVENTORY_OVERLAY = {0, 0, 0, 160};
 inline constexpr Color PAUSE_OVERLAY = {0, 0, 0, 180};
 

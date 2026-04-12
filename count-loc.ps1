@@ -35,3 +35,5 @@ Write-Host "C++ files under src\: $fileCount"
 # Write-Host "Non-blank lines in CMakeLists.txt: $cmakeLines"
 Write-Host "Total non-blank lines (src + CMakeLists.txt): $total"
 # Write-Host "(CHANGELOG.md and README.md are not counted.)"
+
+# RUN THIS IN THE PROJECT ROOT: powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\emilk\Projects\Dreadcast\count-loc.ps1"

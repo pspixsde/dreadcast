@@ -13,7 +13,7 @@ namespace dreadcast::ui {
 
 /// Fixed 7:5 draw size for item icons in the inventory (same in every slot type; centered in each
 /// slot; sized to fit bag slots with margin).
-inline constexpr float ITEM_ICON_DRAW_H = 56.0F;
+inline constexpr float ITEM_ICON_DRAW_H = 72.0F;
 inline constexpr float ITEM_ICON_DRAW_W = ITEM_ICON_DRAW_H * 7.0F / 5.0F;
 
 /// Result of inventory interaction (e.g. drop item to ground).

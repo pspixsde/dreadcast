@@ -68,7 +68,8 @@ inline constexpr float MANIC_SPEED_MULTIPLIER = 2.0F;
 inline constexpr float MANIC_MIN_HP_FRACTION = 0.40F;
 
 inline constexpr float MELEE_DAMAGE = 20.0F;
-inline constexpr float MELEE_KNOCKBACK = 350.0F;
+/// Base speed applied to enemies on RMB melee hits (scaled per combo swing).
+inline constexpr float MELEE_KNOCKBACK = 400.0F;
 inline constexpr float MELEE_RANGE = 60.0F;
 inline constexpr float MELEE_COOLDOWN = 0.4F;
 inline constexpr float KNOCKBACK_DURATION = 0.25F;
@@ -104,12 +105,22 @@ inline constexpr unsigned char FOG_DARKNESS_ALPHA = 145;
 /// edge; ~12–18 reads closer to Dota-style soft fog.
 inline constexpr float FOG_EDGE_SOFTEN_PIXELS = 17.0F;
 
+/// Lava: movement multiplier while standing in lava (0.5 = half speed = 2x slower).
+inline constexpr float LAVA_SPEED_MULTIPLIER = 0.5F;
+inline constexpr float LAVA_DAMAGE_PER_TICK = 8.0F;
+inline constexpr float LAVA_DAMAGE_INTERVAL = 0.5F;
+
+/// Vial of Raw Spirit (consumable)
+inline constexpr float RAW_SPIRIT_MANA_TOTAL = 50.0F;
+inline constexpr float RAW_SPIRIT_DURATION = 6.0F;
+
 // Lead Fever (ability 1)
 inline constexpr float LEAD_FEVER_DURATION = 6.0F;
 inline constexpr float LEAD_FEVER_MANA_COST = 25.0F;
 inline constexpr float LEAD_FEVER_COOLDOWN = 20.0F;
 inline constexpr int LEAD_FEVER_PELLET_COUNT = 4;
-inline constexpr float LEAD_FEVER_DAMAGE_MULT = 0.5F;
+/// Extra random angular jitter per pellet (radians), on top of the base fan spread.
+inline constexpr float LEAD_FEVER_SCATTER_RANDOM = 0.18F;
 inline constexpr float LEAD_FEVER_KNOCKBACK = 250.0F;
 inline constexpr float LEAD_FEVER_SCATTER_ANGLE = 0.35F;
 

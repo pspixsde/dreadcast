@@ -27,7 +27,7 @@ struct FloatingNumber {
     float driftX{0.0F};
 };
 
-enum class StatusHudKind { HealOverTime, ManicEffect, LeadFever };
+enum class StatusHudKind { HealOverTime, ManicEffect, LeadFever, ManaRegenOverTime };
 
 struct ActiveStatusHud {
     StatusHudKind kind{StatusHudKind::HealOverTime};
@@ -51,14 +51,19 @@ class GameplayScene final : public Scene {
   private:
     void spawnWorld();
     void spawnWalls(const MapData &map);
+    void spawnLavas(const MapData &map);
     void applyPlayerMaxHpFromEquipment();
+    void applyPlayerMaxManaFromEquipment();
     void tickHealOverTime(float fixedDt);
+    void tickManaRegenOverTime(float fixedDt);
+    void tickLavaHazard(float fixedDt);
     void tickManicEffect(float fixedDt);
     void tickRunicShellCooldown(float fixedDt);
     void checkRunicShellTrigger();
     void tryUseConsumableSlot(int slotIndex);
     void tryUseConsumableBagSlot(int bagSlot);
     void applyVialHealOverTime(bool wasAlreadyActive);
+    void applyVialRawSpiritMana(bool wasAlreadyActive);
     [[nodiscard]] bool tryApplyCordialManic();
     [[nodiscard]] Vector2 worldMouseFromScreen(const Vector2 &screenMouse) const;
 
@@ -117,6 +122,8 @@ class GameplayScene final : public Scene {
     float damageFlashTimer_{0.0F};
     float prevPlayerHp_{100.0F};
     float hotRefreshFlashTimer_{0.0F};
+    float spiritRefreshFlashTimer_{0.0F};
+    float lavaDamageAccumulator_{0.0F};
     float runicShellFlashTimer_{0.0F};
     float snareImpactFlash_{0.0F};
     Vector2 snareImpactWorld_{0.0F, 0.0F};

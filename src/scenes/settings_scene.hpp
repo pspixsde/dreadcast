@@ -24,10 +24,10 @@ class SettingsScene final : public Scene {
     ui::Button fpsCounterToggleButton_{};
     ui::Button manaCostToggleButton_{};
     ui::Button damageNumbersToggleButton_{};
-    ui::Button gameplaySaveButton_{};
-    ui::Button gameplayResetButton_{};
+    ui::Button resetButton_{};
 
     bool draggingMouseSensSlider_{false};
+    bool mouseSensSliderPrevDown_{false};
 };
 
 } // namespace dreadcast

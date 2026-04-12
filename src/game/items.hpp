@@ -8,7 +8,8 @@ namespace dreadcast {
 
 enum class EquipSlot { Armor, Amulet, Ring, COUNT };
 
-/// Equippable rarities: Tarnished … Abyssal. Consumable rarities: Clouded … Special (distinct names).
+/// Rarity is one enum for UI and saves. Gear: Tarnished … Abyssal, or **Special** (odd rules).
+/// Vials: Clouded … Special (see `isConsumableRarityTier` in `item_rarity.hpp`).
 enum class ItemRarity : uint8_t {
     Tarnished = 0,
     Blighted,
@@ -31,6 +32,8 @@ struct ItemData {
     int maxStack{1};
     int stackCount{1};
     float maxHpBonus{0.0F};
+    /// Bonus to max mana while equipped (rings etc.).
+    float maxManaBonus{0.0F};
     /// Passive HP/s while equipped (armor etc.).
     float hpRegenBonus{0.0F};
     /// Fraction of incoming damage reflected to attacker (instant, not projectile).
@@ -90,6 +93,18 @@ struct InventoryState {
             const int idx = equipped[i];
             if (idx >= 0 && idx < static_cast<int>(items.size())) {
                 sum += items[static_cast<size_t>(idx)].maxHpBonus;
+            }
+        }
+        return sum;
+    }
+
+    /// Sum of `maxManaBonus` from all equipped items.
+    [[nodiscard]] float totalEquippedMaxManaBonus() const {
+        float sum = 0.0F;
+        for (size_t i = 0; i < equipped.size(); ++i) {
+            const int idx = equipped[i];
+            if (idx >= 0 && idx < static_cast<int>(items.size())) {
+                sum += items[static_cast<size_t>(idx)].maxManaBonus;
             }
         }
         return sum;
