@@ -5,6 +5,9 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
+
+#include "game/game_data.hpp"
 
 namespace dreadcast {
 
@@ -86,7 +89,10 @@ void GameSettings::loadFromFile(const std::string &path) {
     }
 }
 
-ResourceManager::ResourceManager() { settings_.loadFromFile("settings.cfg"); }
+ResourceManager::ResourceManager() {
+    settings_.loadFromFile("settings.cfg");
+    static_cast<void>(loadGameData());
+}
 
 ResourceManager::~ResourceManager() { unloadAll(); }
 
@@ -111,7 +117,11 @@ Sound ResourceManager::getSound(const std::string &path) {
     if (it != sounds_.end()) {
         return it->second;
     }
-    const Sound snd = LoadSound(path.c_str());
+    const std::string resolved = resolveAssetPath(path);
+    const Sound snd = LoadSound(resolved.c_str());
+    if (!IsSoundValid(snd)) {
+        TraceLog(LOG_WARNING, "Dreadcast: could not load sound from \"%s\"", resolved.c_str());
+    }
     sounds_[path] = snd;
     return snd;
 }
@@ -121,7 +131,27 @@ void ResourceManager::loadUiFont(const std::string &path, int baseSize) {
         return;
     }
     const std::string resolved = resolveAssetPath(path);
-    const Font loaded = LoadFontEx(resolved.c_str(), baseSize, nullptr, 0);
+    std::vector<int> codepoints;
+    codepoints.reserve(256);
+    for (int c = 32; c <= 126; ++c) {
+        codepoints.push_back(c);
+    }
+    for (int c = 0x00C0; c <= 0x00FF; ++c) {
+        codepoints.push_back(c);
+    }
+    const int extras[] = {
+        0x2013, // en dash
+        0x2014, // em dash
+        0x2018, 0x2019, // ‘ ’
+        0x201C, 0x201D, // “ ”
+        0x2026, // ellipsis
+    };
+    for (int c : extras) {
+        codepoints.push_back(c);
+    }
+    const Font loaded =
+        LoadFontEx(resolved.c_str(), baseSize, codepoints.data(),
+                   static_cast<int>(codepoints.size()));
     if (loaded.glyphCount > 0) {
         uiFont_ = loaded;
         uiFontOwned_ = true;

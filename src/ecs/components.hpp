@@ -92,7 +92,7 @@ struct MeleeAttacker {
     static constexpr float kRecoveryDuration = 0.38F;
     static constexpr float kSingleSwingCooldown = 0.22F;
 
-    static constexpr float kKnockbackScale[3] = {0.7F, 0.9F, 1.6F};
+    static constexpr float kKnockbackScale[3] = {0.9F, 1.1F, 1.6F};
     static constexpr float kDamageScale[3] = {1.0F, 1.0F, 1.35F};
     static constexpr float kArcHalfDeg[3] = {35.0F, 45.0F, 60.0F};
 
@@ -234,6 +234,46 @@ struct SnareDashState {
     float distance{150.0F};
     float traveled{0.0F};
     Vector2 direction{0.0F, 0.0F};
+};
+
+/// Base ranged damage from character data (curse bolt); level bonuses add on top.
+struct PlayerCombatBase {
+    float rangedDamage{10.0F};
+};
+
+/// Movement + fog vision from character data (JSON).
+struct PlayerMoveStats {
+    float moveSpeed{dreadcast::config::PLAYER_MOVE_SPEED};
+    float visionRange{dreadcast::config::FOG_OF_WAR_RADIUS};
+};
+
+/// Max HP/Mana before equipment (from character JSON); equipment adds on top.
+struct PlayerClassStats {
+    float baseMaxHp{100.0F};
+    float baseMaxMana{100.0F};
+};
+
+/// XP and per-level tuning (gains copied from character at spawn).
+struct PlayerLevel {
+    int level{1};
+    float xp{0.0F};
+    float xpToNextLevel{100.0F};
+    /// Extra ranged damage from level-ups (added to `PlayerCombatBase::rangedDamage`).
+    float rangedDamageBonus{0.0F};
+    float perLevelMaxHp{10.0F};
+    float perLevelMaxMana{10.0F};
+    float perLevelRangedDamage{5.0F};
+    float perLevelMeleeDamage{5.0F};
+};
+
+/// XP granted when this enemy dies.
+struct EnemyXpReward {
+    float xp{25.0F};
+};
+
+/// Display level on enemy HUD (current content: all level 1).
+struct EnemyDisplayLevel {
+    int level{1};
 };
 
 /// Tag for the player-controlled entity.

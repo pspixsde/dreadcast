@@ -69,8 +69,11 @@ void input_system(entt::registry &registry, const InputManager &input, const Cam
                 if (onLava) {
                     speedMul *= config::LAVA_SPEED_MULTIPLIER;
                 }
-                const float scale =
-                    (isoLen > 0.001F) ? (config::PLAYER_MOVE_SPEED * speedMul / isoLen) : 0.0F;
+                float moveSpeed = config::PLAYER_MOVE_SPEED;
+                if (registry.all_of<PlayerMoveStats>(entity)) {
+                    moveSpeed = registry.get<PlayerMoveStats>(entity).moveSpeed;
+                }
+                const float scale = (isoLen > 0.001F) ? (moveSpeed * speedMul / isoLen) : 0.0F;
                 vel.value.x = worldDir.x * scale;
                 vel.value.y = worldDir.y * scale;
             }

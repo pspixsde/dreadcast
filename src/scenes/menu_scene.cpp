@@ -10,6 +10,7 @@
 #include "core/input.hpp"
 #include "core/resource_manager.hpp"
 #include "game/character.hpp"
+#include "game/game_data.hpp"
 #include "scenes/character_select_scene.hpp"
 #include "scenes/gameplay_scene.hpp"
 #include "scenes/scene_manager.hpp"
@@ -62,26 +63,28 @@ void MenuScene::draw(ResourceManager &resources) {
     DrawRectangleRec({panelX, panelY, panelW, panelH}, ui::theme::PANEL_FILL);
     DrawRectangleLinesEx({panelX, panelY, panelW, panelH}, 2.0F, ui::theme::PANEL_BORDER);
 
-    const int cix = std::clamp(selectedClassIndex_, 0, CLASS_COUNT - 1);
-    const CharacterClass &cls = AVAILABLE_CLASSES[static_cast<size_t>(cix)];
+    const int nClasses = std::max(1, characterCount());
+    const int cix = std::clamp(selectedClassIndex_, 0, nClasses - 1);
+    const CharacterClass &cls = characterAt(cix);
 
     const float portraitR = 32.0F;
     const float cx = panelX + 24.0F + portraitR;
     const float cy = panelY + panelH * 0.5F;
     DrawCircle(static_cast<int>(cx), static_cast<int>(cy), portraitR, ui::theme::PORTRAIT_FILL);
     DrawCircleLines(static_cast<int>(cx), static_cast<int>(cy), portraitR, ui::theme::PORTRAIT_RING);
-    char oneChar[2] = {cls.name[0], '\0'};
+    const char initial = cls.name.empty() ? '?' : cls.name[0];
+    char oneChar[2] = {initial, '\0'};
     const float portraitFont = 34.0F;
     const Vector2 idim = MeasureTextEx(font, oneChar, portraitFont, 1.0F);
     DrawTextEx(font, oneChar, {cx - idim.x * 0.5F, cy - idim.y * 0.5F}, portraitFont, 1.0F,
                RAYWHITE);
 
     const float nameSize = 22.0F;
-    const Vector2 nameDim = MeasureTextEx(font, cls.name, nameSize, 1.0F);
+    const Vector2 nameDim = MeasureTextEx(font, cls.name.c_str(), nameSize, 1.0F);
     // Keep the class name clear of the portrait circle.
     const float nameX = panelX + portraitR * 2.0F + 36.0F;
     const float nameY = panelY + panelH * 0.5F - nameDim.y * 0.5F;
-    DrawTextEx(font, cls.name, {nameX, nameY}, nameSize, 1.0F, RAYWHITE);
+    DrawTextEx(font, cls.name.c_str(), {nameX, nameY}, nameSize, 1.0F, RAYWHITE);
 
     changeClassButton_.rect = {panelX + panelW - 116.0F, panelY + 26.0F, 100.0F, 36.0F};
     changeClassButton_.label = "Change";

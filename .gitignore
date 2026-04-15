@@ -32,3 +32,12 @@ Thumbs.db
 
 # Raylib / FetchContent cache (optional local)
 _deps/
+
+# Draft assets / experiments (not shipped)
+drafts/
+
+# Cursor IDE
+.cursor/
+
+# Local gameplay settings (generated at runtime)
+settings.cfg
