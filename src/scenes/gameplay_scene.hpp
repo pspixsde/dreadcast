@@ -120,6 +120,7 @@ class GameplayScene final : public Scene {
     float noManaFlashTimer_{0.0F};
     float inventoryFullFlashTimer_{0.0F};
     float damageFlashTimer_{0.0F};
+    float hurtGruntCooldown_{0.0F};
     float prevPlayerHp_{100.0F};
     float hotRefreshFlashTimer_{0.0F};
     float spiritRefreshFlashTimer_{0.0F};

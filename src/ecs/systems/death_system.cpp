@@ -1,13 +1,57 @@
 #include "ecs/systems/death_system.hpp"
 
+#include <algorithm>
 #include <vector>
 
 #include <entt/entt.hpp>
 
-#include "config.hpp"
 #include "ecs/components.hpp"
 
 namespace dreadcast::ecs {
+
+namespace {
+
+void applyLevelUp(entt::registry &registry, entt::entity player, PlayerLevel &pl) {
+    if (!registry.valid(player)) {
+        return;
+    }
+    ++pl.level;
+    pl.rangedDamageBonus += pl.perLevelRangedDamage;
+
+    if (registry.all_of<PlayerClassStats>(player)) {
+        auto &pc = registry.get<PlayerClassStats>(player);
+        pc.baseMaxHp += pl.perLevelMaxHp;
+        pc.baseMaxMana += pl.perLevelMaxMana;
+    }
+    if (registry.all_of<Health>(player)) {
+        auto &hp = registry.get<Health>(player);
+        hp.max += pl.perLevelMaxHp;
+        hp.current = std::min(hp.max, hp.current + pl.perLevelMaxHp);
+    }
+    if (registry.all_of<Mana>(player)) {
+        auto &mp = registry.get<Mana>(player);
+        mp.max += pl.perLevelMaxMana;
+        mp.current = std::min(mp.max, mp.current + pl.perLevelMaxMana);
+    }
+    if (registry.all_of<MeleeAttacker>(player)) {
+        auto &melee = registry.get<MeleeAttacker>(player);
+        melee.damage += pl.perLevelMeleeDamage;
+    }
+}
+
+void awardXpToPlayer(entt::registry &registry, entt::entity player, float amount) {
+    if (!registry.valid(player) || !registry.all_of<PlayerLevel>(player)) {
+        return;
+    }
+    auto &pl = registry.get<PlayerLevel>(player);
+    pl.xp += amount;
+    while (pl.xp + 1.0e-4F >= pl.xpToNextLevel) {
+        pl.xp -= pl.xpToNextLevel;
+        applyLevelUp(registry, player, pl);
+    }
+}
+
+} // namespace
 
 void death_system(entt::registry &registry, entt::entity player, int *enemiesSlainOut) {
     std::vector<entt::entity> toDestroy{};
@@ -27,16 +71,11 @@ void death_system(entt::registry &registry, entt::entity player, int *enemiesSla
             if (enemiesSlainOut != nullptr) {
                 ++(*enemiesSlainOut);
             }
-            if (registry.all_of<Transform, Sprite>(e)) {
-                const auto &t = registry.get<Transform>(e);
-                const auto &s = registry.get<Sprite>(e);
-                (void)s;
-                const auto shard = registry.create();
-                registry.emplace<Transform>(shard, Transform{t.position, 0.0F});
-                registry.emplace<Velocity>(shard, Velocity{});
-                registry.emplace<Sprite>(shard, Sprite{{120, 200, 255, 255}, 14.0F, 14.0F});
-                registry.emplace<ManaShard>(shard, ManaShard{config::MANA_SHARD_AMOUNT});
+            float xpAmt = 25.0F;
+            if (registry.all_of<EnemyXpReward>(e)) {
+                xpAmt = registry.get<EnemyXpReward>(e).xp;
             }
+            awardXpToPlayer(registry, player, xpAmt);
         }
         toDestroy.push_back(e);
     }

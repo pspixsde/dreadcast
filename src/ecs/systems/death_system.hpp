@@ -4,7 +4,7 @@
 
 namespace dreadcast::ecs {
 
-/// Removes dead non-player entities; spawns mana shards for dead enemies.
+/// Removes dead non-player entities; awards XP on enemy death (no mana drops).
 /// Increments `*enemiesSlainOut` once per destroyed `Enemy` when non-null.
 void death_system(entt::registry &registry, entt::entity player, int *enemiesSlainOut = nullptr);
 

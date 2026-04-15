@@ -13,23 +13,23 @@
 
 namespace dreadcast::ecs {
 
-void combat_player_ranged(entt::registry &registry, const InputManager &input,
+bool combat_player_ranged(entt::registry &registry, const InputManager &input,
                           const Camera2D &camera, entt::entity player, float &noManaFlashTimer,
                           Vector2 aimScreenPos) {
     if (!registry.valid(player) || !input.isMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-        return;
+        return false;
     }
     if (!registry.all_of<Transform, Mana, Sprite>(player)) {
-        return;
+        return false;
     }
     if (registry.all_of<SlugAimState>(player)) {
-        return;
+        return false;
     }
 
     auto &mana = registry.get<Mana>(player);
     if (mana.current < config::MANA_COST_SHOT) {
         noManaFlashTimer = 1.2F;
-        return;
+        return false;
     }
 
     mana.current -= config::MANA_COST_SHOT;
@@ -42,7 +42,8 @@ void combat_player_ranged(entt::registry &registry, const InputManager &input,
     const float dy = worldMouse.y - pt.position.y;
     const float len = std::sqrt(dx * dx + dy * dy);
     if (len <= 0.001F) {
-        return;
+        mana.current += config::MANA_COST_SHOT;
+        return false;
     }
     const Vector2 dir = {dx / len, dy / len};
 
@@ -50,6 +51,14 @@ void combat_player_ranged(entt::registry &registry, const InputManager &input,
         std::sqrt(ps.width * ps.width + ps.height * ps.height) * 0.5F;
     const float spawnDist = halfDiag + config::PROJECTILE_RADIUS + 2.0F;
     const bool leadFever = registry.all_of<LeadFeverEffect>(player);
+
+    float shotDamage = config::PROJECTILE_DAMAGE;
+    if (registry.all_of<PlayerCombatBase>(player)) {
+        shotDamage = registry.get<PlayerCombatBase>(player).rangedDamage;
+    }
+    if (registry.all_of<PlayerLevel>(player)) {
+        shotDamage += registry.get<PlayerLevel>(player).rangedDamageBonus;
+    }
 
     if (leadFever) {
         const int n = config::LEAD_FEVER_PELLET_COUNT;
@@ -75,11 +84,11 @@ void combat_player_ranged(entt::registry &registry, const InputManager &input,
             registry.emplace<Sprite>(proj, Sprite{{120, 220, 140, 255}, 9.0F, 9.0F});
             registry.emplace<Projectile>(
                 proj,
-                Projectile{config::PROJECTILE_DAMAGE, config::PROJECTILE_SPEED,
+                Projectile{shotDamage, config::PROJECTILE_SPEED,
                            config::PROJECTILE_MAX_RANGE, 0.0F, d, true, entt::null, false,
                            config::LEAD_FEVER_KNOCKBACK});
         }
-        return;
+        return true;
     }
 
     const auto proj = registry.create();
@@ -89,9 +98,10 @@ void combat_player_ranged(entt::registry &registry, const InputManager &input,
     registry.emplace<Velocity>(proj,
                                Velocity{{dir.x * config::PROJECTILE_SPEED, dir.y * config::PROJECTILE_SPEED}});
     registry.emplace<Sprite>(proj, Sprite{{255, 240, 120, 255}, 10.0F, 10.0F});
-    registry.emplace<Projectile>(proj, Projectile{config::PROJECTILE_DAMAGE, config::PROJECTILE_SPEED,
+    registry.emplace<Projectile>(proj, Projectile{shotDamage, config::PROJECTILE_SPEED,
                                                     config::PROJECTILE_MAX_RANGE, 0.0F, dir, true,
                                                     entt::null, false, 0.0F});
+    return true;
 }
 
 namespace {

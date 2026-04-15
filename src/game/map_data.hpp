@@ -17,6 +17,10 @@ struct WallData {
     float halfH{32.0F};
 };
 
+inline bool operator==(const WallData &a, const WallData &b) {
+    return a.cx == b.cx && a.cy == b.cy && a.halfW == b.halfW && a.halfH == b.halfH;
+}
+
 /// Walk-through hazard volume (same layout as walls; serialized as `LAVA`).
 struct LavaData {
     float cx{0.0F};
@@ -25,20 +29,32 @@ struct LavaData {
     float halfH{32.0F};
 };
 
+inline bool operator==(const LavaData &a, const LavaData &b) {
+    return a.cx == b.cx && a.cy == b.cy && a.halfW == b.halfW && a.halfH == b.halfH;
+}
+
 struct EnemySpawnData {
     float x{0.0F};
     float y{0.0F};
     std::string type{"imp"};
 };
 
+inline bool operator==(const EnemySpawnData &a, const EnemySpawnData &b) {
+    return a.x == b.x && a.y == b.y && a.type == b.type;
+}
+
 /// Ground item pickup placement (`ITEM x y kind` in `.map` files). `kind` values: `iron_armor`,
 /// `barbed_tunic`, `runic_shell`, `hollow_ring`, `vial_pure_blood`, `vial_cordial_manic`,
-/// `vial_raw_spirit` (see `makeItemFromMapKind`).
+/// `vial_raw_spirit` (see `makeItemFromMapKind` / `assets/data/items.json`).
 struct ItemSpawnData {
     float x{0.0F};
     float y{0.0F};
     std::string kind{"iron_armor"};
 };
+
+inline bool operator==(const ItemSpawnData &a, const ItemSpawnData &b) {
+    return a.x == b.x && a.y == b.y && a.kind == b.kind;
+}
 
 struct MapData {
     Vector2 playerSpawn{-100.0F, 0.0F};
@@ -48,6 +64,13 @@ struct MapData {
     std::vector<ItemSpawnData> itemSpawns{};
     Vector2 casketPos{1050.0F, 0.0F};
     bool hasCasket{true};
+
+    [[nodiscard]] bool operator==(const MapData &o) const {
+        return playerSpawn.x == o.playerSpawn.x && playerSpawn.y == o.playerSpawn.y &&
+               hasCasket == o.hasCasket && casketPos.x == o.casketPos.x &&
+               casketPos.y == o.casketPos.y && walls == o.walls && lavas == o.lavas &&
+               enemies == o.enemies && itemSpawns == o.itemSpawns;
+    }
 
     bool saveToFile(const std::string &path) const {
         std::filesystem::path p(path);

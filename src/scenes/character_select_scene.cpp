@@ -11,6 +11,7 @@
 #include "core/input.hpp"
 #include "core/resource_manager.hpp"
 #include "game/character.hpp"
+#include "game/game_data.hpp"
 #include "scenes/scene_manager.hpp"
 #include "ui/theme.hpp"
 
@@ -55,7 +56,7 @@ void drawHRule(float x0, float x1, float y, Color c) {
 CharacterSelectScene::CharacterSelectScene(int *selectedClassIndexOut)
     : selectedOut_(selectedClassIndexOut) {
     if (selectedOut_ != nullptr) {
-        highlightedIndex_ = std::clamp(*selectedOut_, 0, CLASS_COUNT - 1);
+        highlightedIndex_ = std::clamp(*selectedOut_, 0, std::max(0, characterCount() - 1));
     }
 }
 
@@ -86,7 +87,7 @@ void CharacterSelectScene::update(SceneManager &scenes, InputManager &input,
     const float gridOriginX = px + 24.0F;
     const float gridOriginY = py + 56.0F;
 
-    for (int i = 0; i < CLASS_COUNT; ++i) {
+    for (int i = 0; i < characterCount(); ++i) {
         const int row = i / cols;
         const int col = i % cols;
         const Rectangle card{gridOriginX + static_cast<float>(col) * (cardW + gap),
@@ -143,7 +144,7 @@ void CharacterSelectScene::draw(ResourceManager &resources) {
     const float gridOriginX = px + 24.0F;
     const float gridOriginY = py + 56.0F;
 
-    for (int i = 0; i < CLASS_COUNT; ++i) {
+    for (int i = 0; i < characterCount(); ++i) {
         const int row = i / cols;
         const int col = i % cols;
         const Rectangle card{gridOriginX + static_cast<float>(col) * (cardW + gap),
@@ -154,20 +155,21 @@ void CharacterSelectScene::draw(ResourceManager &resources) {
         DrawRectangleRec(card, fill);
         DrawRectangleLinesEx(card, 2.0F, border);
 
-        const CharacterClass &cls = AVAILABLE_CLASSES[static_cast<size_t>(i)];
+        const CharacterClass &cls = characterAt(i);
         const float pr = 28.0F;
         const float cx = card.x + card.width * 0.5F;
         const float cy = card.y + 20.0F + pr;
         DrawCircle(static_cast<int>(cx), static_cast<int>(cy), pr, ui::theme::PORTRAIT_FILL);
         DrawCircleLines(static_cast<int>(cx), static_cast<int>(cy), pr, ui::theme::PORTRAIT_RING);
-        char ini[2] = {cls.name[0], '\0'};
+        const char iniCh = cls.name.empty() ? '?' : cls.name[0];
+        char ini[2] = {iniCh, '\0'};
         const float pFont = 32.0F;
         const Vector2 pDim = MeasureTextEx(font, ini, pFont, 1.0F);
         DrawTextEx(font, ini, {cx - pDim.x * 0.5F, cy - pDim.y * 0.5F}, pFont, 1.0F, RAYWHITE);
 
         const float nameSize = 15.0F;
-        const Vector2 nDim = MeasureTextEx(font, cls.name, nameSize, 1.0F);
-        DrawTextEx(font, cls.name, {card.x + (card.width - nDim.x) * 0.5F, card.y + cardH - 28.0F},
+        const Vector2 nDim = MeasureTextEx(font, cls.name.c_str(), nameSize, 1.0F);
+        DrawTextEx(font, cls.name.c_str(), {card.x + (card.width - nDim.x) * 0.5F, card.y + cardH - 28.0F},
                    nameSize, 1.0F, RAYWHITE);
     }
 
@@ -176,7 +178,7 @@ void CharacterSelectScene::draw(ResourceManager &resources) {
     DrawRectangleRec({detailX, py, detailW, panelH}, ui::theme::PANEL_FILL);
     DrawRectangleLinesEx({detailX, py, detailW, panelH}, 2.0F, ui::theme::PANEL_BORDER);
 
-    const CharacterClass &sel = AVAILABLE_CLASSES[static_cast<size_t>(highlightedIndex_)];
+    const CharacterClass &sel = characterAt(highlightedIndex_);
     const float padL = 22.0F;
     const float padR = 18.0F;
     float y = py + 14.0F;
@@ -189,24 +191,25 @@ void CharacterSelectScene::draw(ResourceManager &resources) {
     const float dcy = y + dpr;
     DrawCircle(static_cast<int>(dcx), static_cast<int>(dcy), dpr, ui::theme::PORTRAIT_FILL);
     DrawCircleLines(static_cast<int>(dcx), static_cast<int>(dcy), dpr, ui::theme::PORTRAIT_RING);
-    char ini2[2] = {sel.name[0], '\0'};
+    const char ini2Ch = sel.name.empty() ? '?' : sel.name[0];
+    char ini2[2] = {ini2Ch, '\0'};
     const float dpFont = 44.0F;
     const Vector2 dpd = MeasureTextEx(font, ini2, dpFont, 1.0F);
     DrawTextEx(font, ini2, {dcx - dpd.x * 0.5F, dcy - dpd.y * 0.5F}, dpFont, 1.0F, RAYWHITE);
 
     const float nameX = detailX + padL + dpr * 2.0F + 16.0F;
-    DrawTextEx(font, sel.name, {nameX, y + 18.0F}, 26.0F, 1.0F, RAYWHITE);
+    DrawTextEx(font, sel.name.c_str(), {nameX, y + 18.0F}, 26.0F, 1.0F, RAYWHITE);
     y += dpr * 2.0F + 12.0F;
 
-    DrawTextEx(font, sel.description, {detailX + padL, y}, 17.0F, 1.0F, ui::theme::SUBTITLE_TEXT);
+    DrawTextEx(font, sel.description.c_str(), {detailX + padL, y}, 17.0F, 1.0F, ui::theme::SUBTITLE_TEXT);
     {
-        const Vector2 dd = MeasureTextEx(font, sel.description, 17.0F, 1.0F);
+        const Vector2 dd = MeasureTextEx(font, sel.description.c_str(), 17.0F, 1.0F);
         y += dd.y + 14.0F;
     }
 
     DrawTextEx(font, "Abilities", {detailX + padL, y}, 18.0F, 1.0F, ui::theme::LABEL_TEXT);
     y += 26.0F;
-    y += drawMultiline(font, sel.detailAbilities, detailX + padL, y, 18.0F, 15.0F,
+    y += drawMultiline(font, sel.detailAbilities.c_str(), detailX + padL, y, 18.0F, 15.0F,
                        ui::theme::MUTED_TEXT);
     y += 12.0F;
 
@@ -215,7 +218,7 @@ void CharacterSelectScene::draw(ResourceManager &resources) {
 
     DrawTextEx(font, "Bio", {detailX + padL, y}, 18.0F, 1.0F, ui::theme::LABEL_TEXT);
     y += 24.0F;
-    y += drawMultiline(font, sel.bio, detailX + padL, y, 20.0F, 15.0F, ui::theme::MUTED_TEXT);
+    y += drawMultiline(font, sel.bio.c_str(), detailX + padL, y, 20.0F, 15.0F, ui::theme::MUTED_TEXT);
     y += 12.0F;
 
     drawHRule(detailX + padL, detailX + detailW - padR, y, ui::theme::PANEL_BORDER);
@@ -293,6 +296,24 @@ void CharacterSelectScene::draw(ResourceManager &resources) {
         std::snprintf(m2, sizeof(m2), "Fog vision radius %.0f (exploration / combat awareness)",
                       static_cast<double>(sel.visionRange));
         DrawTextEx(font, m2, {detailX + padL + 6.0F, y}, 14.0F, 1.0F, RAYWHITE);
+        y += 28.0F;
+    }
+
+    drawHRule(detailX + padL, detailX + detailW - padR, y, ui::theme::PANEL_BORDER);
+    y += 14.0F;
+
+    DrawTextEx(font, "Leveling", {detailX + padL, y}, 18.0F, 1.0F, ui::theme::LABEL_TEXT);
+    y += 26.0F;
+    {
+        char lv[256];
+        std::snprintf(lv, sizeof(lv),
+                      "Each level requires 100 XP (from enemy kills). Per level: +%.0f max HP, "
+                      "+%.0f max Mana, +%.0f ranged damage, +%.0f melee damage.",
+                      static_cast<double>(sel.levelMaxHpGain),
+                      static_cast<double>(sel.levelMaxManaGain),
+                      static_cast<double>(sel.levelProjectileDamageGain),
+                      static_cast<double>(sel.levelMeleeDamageGain));
+        y += drawMultiline(font, lv, detailX + padL, y, 20.0F, 14.0F, ui::theme::MUTED_TEXT);
     }
 
     const Vector2 mouse = GetMousePosition();

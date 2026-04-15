@@ -28,9 +28,8 @@
 #include "ecs/systems/projectile_system.hpp"
 #include "ecs/systems/render_system.hpp"
 #include "ecs/systems/wall_system.hpp"
-#include "game/ability.hpp"
 #include "game/character.hpp"
-#include "game/item_factory.hpp"
+#include "game/game_data.hpp"
 #include "game/map_data.hpp"
 #include "scenes/menu_scene.hpp"
 #include "scenes/scene_manager.hpp"
@@ -166,6 +165,13 @@ void drawHudKeyBadge(const Font &font, const char *keyChr, float iconLeft, float
     const float bx = iconLeft - protrude * 0.65F;
     const float by = iconTop - protrude * 1.2F;
     return {bx, by, kSq, kSq};
+}
+
+[[nodiscard]] float playerVisionRadiusForFog(const entt::registry &reg, entt::entity player) {
+    if (reg.valid(player) && reg.all_of<ecs::PlayerMoveStats>(player)) {
+        return reg.get<ecs::PlayerMoveStats>(player).visionRange;
+    }
+    return config::FOG_OF_WAR_RADIUS;
 }
 
 } // namespace
@@ -444,15 +450,37 @@ void GameplayScene::spawnWorld() {
         map = loaded;
     }
 
+    const int classIdx = std::clamp(selectedClass_, 0, std::max(0, characterCount() - 1));
+    const CharacterClass &cls = characterAt(classIdx);
+
     player_ = registry_.create();
     registry_.emplace<ecs::Transform>(player_, ecs::Transform{map.playerSpawn, 0.0F});
     registry_.emplace<ecs::Velocity>(player_, ecs::Velocity{});
     registry_.emplace<ecs::Sprite>(player_,
                                    ecs::Sprite{{0, 220, 255, 255}, 36.0F, 36.0F});
-    registry_.emplace<ecs::Health>(player_, ecs::Health{config::PLAYER_BASE_MAX_HP,
-                                                        config::PLAYER_BASE_MAX_HP});
-    registry_.emplace<ecs::Mana>(player_, ecs::Mana{100.0F, 100.0F});
-    registry_.emplace<ecs::MeleeAttacker>(player_, ecs::MeleeAttacker{});
+    registry_.emplace<ecs::Health>(player_, ecs::Health{cls.baseMaxHp, cls.baseMaxHp});
+    registry_.emplace<ecs::Mana>(player_, ecs::Mana{cls.baseMaxMana, cls.baseMaxMana});
+    {
+        ecs::MeleeAttacker melee{};
+        melee.damage = cls.meleeDamage;
+        melee.knockback = config::MELEE_KNOCKBACK;
+        melee.range = cls.meleeRange;
+        registry_.emplace<ecs::MeleeAttacker>(player_, melee);
+    }
+    registry_.emplace<ecs::PlayerCombatBase>(player_, ecs::PlayerCombatBase{cls.rangedDamage});
+    registry_.emplace<ecs::PlayerMoveStats>(player_,
+                                            ecs::PlayerMoveStats{cls.moveSpeed, cls.visionRange});
+    registry_.emplace<ecs::PlayerClassStats>(player_,
+                                             ecs::PlayerClassStats{cls.baseMaxHp, cls.baseMaxMana});
+    registry_.emplace<ecs::PlayerLevel>(
+        player_, ecs::PlayerLevel{1,
+                                  0.0F,
+                                  100.0F,
+                                  0.0F,
+                                  cls.levelMaxHpGain,
+                                  cls.levelMaxManaGain,
+                                  cls.levelProjectileDamageGain,
+                                  cls.levelMeleeDamageGain});
     registry_.emplace<ecs::Facing>(player_, ecs::Facing{});
     registry_.emplace<ecs::Player>(player_);
 
@@ -488,6 +516,8 @@ void GameplayScene::spawnWorld() {
             e, ecs::Agitation{hellhound ? config::HELLHOUND_AGITATION_RANGE
                                         : config::IMP_AGITATION_RANGE,
                               config::ENEMY_CALM_DOWN_DELAY, 0.0F, false});
+        registry_.emplace<ecs::EnemyXpReward>(e, ecs::EnemyXpReward{hellhound ? 30.0F : 25.0F});
+        registry_.emplace<ecs::EnemyDisplayLevel>(e, ecs::EnemyDisplayLevel{1});
     }
 
     if (map.hasCasket) {
@@ -507,7 +537,7 @@ void GameplayScene::spawnWorld() {
         spawnItemPickupAtWorld({isp.x, isp.y}, idx);
     }
 
-    prevPlayerHp_ = config::PLAYER_BASE_MAX_HP;
+    prevPlayerHp_ = cls.baseMaxHp;
 }
 
 Vector2 GameplayScene::worldMouseFromScreen(const Vector2 &screenMouse) const {
@@ -521,7 +551,10 @@ void GameplayScene::applyPlayerMaxManaFromEquipment() {
     }
     auto &mp = registry_.get<ecs::Mana>(player_);
     const float bonus = inventory_.totalEquippedMaxManaBonus();
-    const float newMax = 100.0F + bonus;
+    const float baseMana = registry_.all_of<ecs::PlayerClassStats>(player_)
+                               ? registry_.get<ecs::PlayerClassStats>(player_).baseMaxMana
+                               : 100.0F;
+    const float newMax = baseMana + bonus;
     if (std::fabs(mp.max - newMax) < 0.001F) {
         return;
     }
@@ -536,7 +569,10 @@ void GameplayScene::applyPlayerMaxHpFromEquipment() {
     }
     auto &hp = registry_.get<ecs::Health>(player_);
     const float bonus = inventory_.totalEquippedMaxHpBonus();
-    const float newMax = config::PLAYER_BASE_MAX_HP + bonus;
+    const float baseHp = registry_.all_of<ecs::PlayerClassStats>(player_)
+                             ? registry_.get<ecs::PlayerClassStats>(player_).baseMaxHp
+                             : config::PLAYER_BASE_MAX_HP;
+    const float newMax = baseHp + bonus;
     if (std::fabs(hp.max - newMax) < 0.001F) {
         return;
     }
@@ -929,6 +965,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
     spiritRefreshFlashTimer_ = std::max(0.0F, spiritRefreshFlashTimer_ - frameDt);
     runicShellFlashTimer_ = std::max(0.0F, runicShellFlashTimer_ - frameDt);
     snareImpactFlash_ = std::max(0.0F, snareImpactFlash_ - frameDt);
+    hurtGruntCooldown_ = std::max(0.0F, hurtGruntCooldown_ - frameDt);
 
     if (gameOver_) {
         const Vector2 mouse = input.mousePosition();
@@ -1036,8 +1073,15 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
     const bool invOpen = inventoryUi_.isOpen();
     if (!invOpen) {
         ecs::input_system(registry_, input, camera_.camera(), aimScreenPos_);
-        ecs::combat_player_ranged(registry_, input, camera_.camera(), player_, noManaFlashTimer_,
-                                  aimScreenPos_);
+        if (ecs::combat_player_ranged(registry_, input, camera_.camera(), player_, noManaFlashTimer_,
+                                      aimScreenPos_)) {
+            Sound gun = resources.getSound("assets/sounds/gun_shot.wav");
+            if (IsSoundValid(gun)) {
+                const float p = 0.85F + static_cast<float>(GetRandomValue(0, 30)) / 100.0F;
+                SetSoundPitch(gun, p);
+                PlaySound(gun);
+            }
+        }
     } else if (registry_.valid(player_) && registry_.all_of<ecs::Velocity>(player_)) {
         auto &vel = registry_.get<ecs::Velocity>(player_);
         vel.value.x = 0.0F;
@@ -1085,8 +1129,8 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         // Passive regen based on the selected class (+ equipment); blocked during ManicEffect.
         if (registry_.valid(player_) && registry_.all_of<ecs::Health, ecs::Mana>(player_) &&
             !registry_.all_of<ecs::ManicEffect>(player_)) {
-            const int ci = std::clamp(selectedClass_, 0, CLASS_COUNT - 1);
-            const auto &cls = AVAILABLE_CLASSES[static_cast<size_t>(ci)];
+            const int ci = std::clamp(selectedClass_, 0, std::max(0, characterCount() - 1));
+            const auto &cls = characterAt(ci);
             auto &hp2 = registry_.get<ecs::Health>(player_);
             auto &mp = registry_.get<ecs::Mana>(player_);
             hp2.current = std::min(
@@ -1096,8 +1140,8 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         } else if (registry_.valid(player_) && registry_.all_of<ecs::Mana>(player_) &&
                    registry_.all_of<ecs::ManicEffect>(player_)) {
             auto &mp = registry_.get<ecs::Mana>(player_);
-            const int ci = std::clamp(selectedClass_, 0, CLASS_COUNT - 1);
-            const auto &cls = AVAILABLE_CLASSES[static_cast<size_t>(ci)];
+            const int ci = std::clamp(selectedClass_, 0, std::max(0, characterCount() - 1));
+            const auto &cls = characterAt(ci);
             mp.current = std::min(mp.max, mp.current + cls.manaRegen * config::FIXED_DT);
         }
 
@@ -1141,6 +1185,15 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         const float cur = registry_.get<ecs::Health>(player_).current;
         if (cur < prevPlayerHp_ - 1.0e-4F) {
             damageFlashTimer_ = 0.5F;
+            const int cix = std::clamp(selectedClass_, 0, std::max(0, characterCount() - 1));
+            if (hurtGruntCooldown_ <= 0.001F && characterAt(cix).id == "undead_hunter") {
+                Sound grunt = resources.getSound("assets/sounds/undead_hunter_hurt.wav");
+                if (IsSoundValid(grunt)) {
+                    SetSoundPitch(grunt, 0.88F + static_cast<float>(GetRandomValue(0, 24)) / 100.0F);
+                    PlaySound(grunt);
+                }
+                hurtGruntCooldown_ = 20.0F;
+            }
         }
         prevPlayerHp_ = cur;
     }
@@ -1319,7 +1372,8 @@ void GameplayScene::drawFogMaskTexture() {
     const auto &pt = registry_.get<ecs::Transform>(player_);
     const Vector2 playerWorld = pt.position;
 
-    buildVisibilityPolygonWorld(playerWorld, registry_, config::FOG_OF_WAR_RADIUS, fogVisWorld_);
+    buildVisibilityPolygonWorld(playerWorld, registry_, playerVisionRadiusForFog(registry_, player_),
+                                fogVisWorld_);
 
     const int n = static_cast<int>(fogVisWorld_.size());
     fogDbgBoundarySamples_ = n;
@@ -1346,7 +1400,7 @@ void GameplayScene::drawFogMaskTexture() {
     if (n >= 3) {
         drawFogVisibilityFilled(fogVisFan_.data(), n, BLACK);
     } else {
-        DrawCircleV(centerIso, config::FOG_OF_WAR_RADIUS, BLACK);
+        DrawCircleV(centerIso, playerVisionRadiusForFog(registry_, player_), BLACK);
     }
     rlDrawRenderBatchActive();
     rlEnableBackfaceCulling();
@@ -1476,7 +1530,8 @@ void GameplayScene::drawFogOfWarLegacy() {
     const auto &pt = registry_.get<ecs::Transform>(player_);
     const Vector2 center =
         GetWorldToScreen2D(worldToIso(pt.position), camera_.camera());
-    const float inner = config::FOG_OF_WAR_RADIUS * camera_.camera().zoom;
+    const float inner =
+        playerVisionRadiusForFog(registry_, player_) * camera_.camera().zoom;
     const float outer = std::sqrt(static_cast<float>(config::WINDOW_WIDTH * config::WINDOW_WIDTH +
                                                       config::WINDOW_HEIGHT * config::WINDOW_HEIGHT));
     if (outer <= inner + 1.0F) {
@@ -1706,9 +1761,13 @@ void GameplayScene::fireCalamitySlug(const Vector2 &dirWorld) {
         proj, ecs::Velocity{{d.x * config::SLUG_SPEED, d.y * config::SLUG_SPEED}});
     registry_.emplace<ecs::Sprite>(proj, ecs::Sprite{{255, 200, 80, 255}, config::SLUG_SIZE,
                                                      config::SLUG_SIZE});
+    float slugDmg = config::SLUG_DAMAGE;
+    if (registry_.valid(player_) && registry_.all_of<ecs::PlayerLevel>(player_)) {
+        slugDmg += registry_.get<ecs::PlayerLevel>(player_).rangedDamageBonus;
+    }
     registry_.emplace<ecs::Projectile>(
-        proj, ecs::Projectile{config::SLUG_DAMAGE, config::SLUG_SPEED, config::SLUG_MAX_RANGE, 0.0F,
-                              d, true, entt::null, true, 0.0F});
+        proj, ecs::Projectile{slugDmg, config::SLUG_SPEED, config::SLUG_MAX_RANGE, 0.0F, d, true,
+                              entt::null, true, 0.0F});
     registry_.emplace<ecs::SlugProjectile>(
         proj, ecs::SlugProjectile{config::SLUG_KNOCKBACK_SIDE});
     registry_.emplace<ecs::PierceHitRecord>(proj, ecs::PierceHitRecord{});
@@ -1725,11 +1784,12 @@ void GameplayScene::tryUseAbility(int abilityIndex) {
         registry_.all_of<ecs::SnareDashState>(player_)) {
         return;
     }
-    const int ci = std::clamp(selectedClass_, 0, CLASS_COUNT - 1);
+    const int ci = std::clamp(selectedClass_, 0, std::max(0, characterCount() - 1));
     if (ci != 0) {
         return;
     }
-    const AbilityDef &def = UNDEAD_HUNTER_ABILITIES.abilities[static_cast<size_t>(abilityIndex)];
+    const AbilityDef &def =
+        undeadHunterAbilities().abilities[static_cast<size_t>(abilityIndex)];
     if (abilityCdRem_[static_cast<size_t>(abilityIndex)] > 0.001F) {
         return;
     }
@@ -1744,7 +1804,7 @@ void GameplayScene::tryUseAbility(int abilityIndex) {
     if (abilityIndex == 0) {
         registry_.emplace_or_replace<ecs::LeadFeverEffect>(
             player_, ecs::LeadFeverEffect{config::LEAD_FEVER_DURATION, 0.0F});
-        const std::string icon = def.iconPath != nullptr ? std::string(def.iconPath) : std::string{};
+        const std::string icon = def.iconPath;
         pushStatusHud(StatusHudKind::LeadFever, icon, {140, 220, 160, 255});
         return;
     }
@@ -1777,24 +1837,33 @@ void GameplayScene::drawHud(ResourceManager &resources) {
     const auto &hp = registry_.get<ecs::Health>(player_);
     const auto &mp = registry_.get<ecs::Mana>(player_);
 
+    const int ci = std::clamp(selectedClass_, 0, std::max(0, characterCount() - 1));
+    const auto &cls = characterAt(ci);
+
     const float margin = 16.0F;
     const float portraitR = 58.0F;
-    const float barW = 320.0F;
+    const float barW = 380.0F;
     const float barHpH = 34.0F;
     const float barMpH = 22.0F;
     const float barGap = 4.0F;
     const float barX = margin + portraitR * 2.0F + 12.0F;
     const float hudBottomAll = static_cast<float>(h) - margin;
-    const float equipRowH = 44.0F;
-    const float hudBottomBars = hudBottomAll - equipRowH - 8.0F;
-    const float hpBarTop = hudBottomBars - barMpH - barGap - barHpH;
+    /// Align equipment row bottom with lower-right consumable row when Undead Hunter HUD is shown.
+    const float equipBottomTarget = (ci == 0) ? (hudBottomAll - 8.0F) : (hudBottomAll - 12.0F);
+    constexpr float kEquipSlotHeightScale = 0.65F;
+    /// HP/mana/equip/portrait Y baseline: chosen so equip bottoms sit on `equipBottomTarget` with
+    /// `kEquipSlotHeightScale` and the `max(44, …)` slot-height clamp (see equip row below).
+    const float barsStackToEquipTop = barHpH + barGap + barMpH + barGap;
+    const float hpBarTop = equipBottomTarget - 44.0F * kEquipSlotHeightScale - barsStackToEquipTop;
+    /// Grey backing uses the original layout anchor (do not resize or move the panel).
+    const float hpBarTopBacking = hudBottomAll - 138.0F;
     const float icon = 28.0F;
     const int statusIconCount = static_cast<int>(statusHudOrder_.size());
     const float iconLift = statusIconCount > 0 ? icon + 10.0F : 0.0F;
 
     const float hudPad = 8.0F;
     const float hudLeft = margin;
-    const float hudTop = hpBarTop - hudPad - iconLift;
+    const float hudTop = hpBarTopBacking - hudPad - iconLift;
     const float hudW = barX + barW + hudPad - hudLeft;
     const float hudH = hudBottomAll + hudPad - hudTop;
     DrawRectangle(static_cast<int>(hudLeft - 4.0F), static_cast<int>(hudTop - 4.0F),
@@ -1808,14 +1877,39 @@ void GameplayScene::drawHud(ResourceManager &resources) {
     DrawCircle(static_cast<int>(cx), static_cast<int>(cy), portraitR, ui::theme::PORTRAIT_FILL);
     DrawCircleLines(static_cast<int>(cx), static_cast<int>(cy), portraitR, ui::theme::PORTRAIT_RING);
 
-    const int ci = std::clamp(selectedClass_, 0, CLASS_COUNT - 1);
-    const auto &cls = AVAILABLE_CLASSES[static_cast<size_t>(ci)];
-    const char initial = cls.name[0];
+    const char initial = cls.name.empty() ? '?' : cls.name[0];
     const float portraitFont = 36.0F;
     char oneChar[2] = {initial, '\0'};
     const Vector2 idim = MeasureTextEx(font, oneChar, portraitFont, 1.0F);
     DrawTextEx(font, oneChar, {cx - idim.x * 0.5F, cy - idim.y * 0.5F}, portraitFont, 1.0F,
                RAYWHITE);
+
+    if (registry_.all_of<ecs::PlayerLevel>(player_)) {
+        const auto &pl = registry_.get<ecs::PlayerLevel>(player_);
+        const float badgeR = 22.0F;
+        const float bx = cx + portraitR * 0.58F;
+        const float by = cy + portraitR * 0.52F;
+        const Vector2 badgeCenter{bx, by};
+        DrawCircleV(badgeCenter, badgeR, Color{38, 34, 40, 245});
+        DrawCircleLinesV(badgeCenter, badgeR, ui::theme::PORTRAIT_RING);
+        const float xpT = pl.xpToNextLevel > 1.0e-4F
+                              ? std::clamp(pl.xp / pl.xpToNextLevel, 0.0F, 1.0F)
+                              : 0.0F;
+        const float startDeg = -90.0F;
+        const float progDeg = 360.0F * xpT;
+        DrawRing(badgeCenter, badgeR - 3.5F, badgeR - 1.25F, startDeg, startDeg + progDeg, 40,
+                 Color{210, 175, 95, 255});
+        if (xpT < 0.999F) {
+            DrawRing(badgeCenter, badgeR - 3.5F, badgeR - 1.25F, startDeg + progDeg,
+                     startDeg + 360.0F, 40, Fade(WHITE, 0.14F));
+        }
+        char lvlBuf[12];
+        std::snprintf(lvlBuf, sizeof(lvlBuf), "%d", pl.level);
+        const float lvlFs = 18.0F;
+        const Vector2 lvlDim = MeasureTextEx(font, lvlBuf, lvlFs, 1.0F);
+        DrawTextEx(font, lvlBuf, {bx - lvlDim.x * 0.5F, by - lvlDim.y * 0.5F}, lvlFs, 1.0F,
+                   RAYWHITE);
+    }
 
     DrawRectangle(static_cast<int>(barX), static_cast<int>(hpBarTop), static_cast<int>(barW),
                   static_cast<int>(barHpH), {50, 20, 20, 255});
@@ -1880,10 +1974,13 @@ void GameplayScene::drawHud(ResourceManager &resources) {
                    regenSz, 1.0F, ui::theme::LABEL_TEXT);
     }
 
-    // Equipped gear row (armor / amulet / ring) below mana bar — cooldown overlay for Runic Shell.
-    const float equipY = mpBarTop + barMpH + 6.0F;
+    // Equipped gear row: same vertical gap as between HP and mana (`barGap`). Slot height is a fraction
+    // of the space down to the consumable/ability bottom line (`equipBottomTarget`).
+    const float equipY = mpBarTop + barMpH + barGap;
+    const float equipAvailable = equipBottomTarget - equipY;
+    const float equipSpanFull = std::max(44.0F, equipAvailable);
+    const float equipSlotH = equipSpanFull * kEquipSlotHeightScale;
     const float equipGap = 6.0F;
-    const float equipSlotH = equipRowH - 10.0F;
     const float equipSlotW = (barW - equipGap * 2.0F) / 3.0F;
     float rscdRatioHud = 0.0F;
     float rscdSecHud = 0.0F;
@@ -2192,11 +2289,12 @@ void GameplayScene::drawHud(ResourceManager &resources) {
             const float ax = abX0 + static_cast<float>(ai) * (abSize + abGap);
             const Rectangle abR{ax, abY, abSize, abSize};
             const Rectangle abBadgeR = hudKeyBadgeOuterRect(ax, abY);
-            const AbilityDef &ad = UNDEAD_HUNTER_ABILITIES.abilities[static_cast<size_t>(ai)];
+            const AbilityDef &ad =
+                undeadHunterAbilities().abilities[static_cast<size_t>(ai)];
             DrawRectangleRec(abR, ui::theme::SLOT_FILL);
             DrawRectangleLinesEx(abR, 2.0F, ui::theme::SLOT_BORDER);
 
-            if (ad.iconPath != nullptr && ad.iconPath[0] != '\0') {
+            if (!ad.iconPath.empty()) {
                 const Texture2D at = resources.getTexture(ad.iconPath);
                 if (at.id != 0) {
                     const Rectangle src{0.0F, 0.0F, static_cast<float>(at.width),

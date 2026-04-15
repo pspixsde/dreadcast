@@ -2,6 +2,32 @@
 
 All notable changes to **Dreadcast** will be documented in this file.
 
+## v0.11.0 — 2026-04-15
+
+### Added
+
+- **Data-driven items and abilities (JSON):** **`assets/data/items.json`** defines all map/editor item kinds (`id` matches `.map` `ITEM` lines). Fields mirror **`ItemData`**: `name`, `iconPath`, `equipSlot` (`Armor` / `Amulet` / `Ring`), `rarity` (Tarnished … Special), `isConsumable`, `isStackable`, `maxStack`, `stackCount`, `maxHpBonus`, `maxManaBonus`, `hpRegenBonus`, `damageReflectPercent`, `description`.
+- **`assets/data/abilities.json`:** Undead Hunter ability bar — **`abilities`** array of up to three objects: `name`, `description`, `iconPath`, `manaCost`, `cooldown` (used by HUD and **`tryUseAbility`** for mana spend and cooldown timers). **`version`** and **`characterId`** reserved for future expansion.
+- **`assets/data/characters.json`:** Playable classes (stats, bio, ability blurbs, per-level HP/mana/damage gains). **`loadCharactersFromJson`**, **`characterCount()`**, **`characterAt()`**; menu, character select, and gameplay use the runtime list with an embedded fallback if the file is missing.
+- **Audio:** **`assets/sounds/gun_shot.wav`** on successful ranged shots (random pitch); **`assets/sounds/undead_hunter_hurt.wav`** when the Undead Hunter loses HP (**20s** cooldown). **`ResourceManager::getSound`** resolves paths like textures.
+- **XP / leveling:** **`PlayerLevel`**, **`EnemyXpReward`**, **`EnemyDisplayLevel`**; enemies award XP on death (**no mana shards**). Level-ups increase max HP/mana, melee damage, and ranged bonus; **HUD** shows level + XP ring on the portrait; **character select** has a **Leveling** section; **enemy** level disc beside the HP bar.
+- **Map editor:** **Unsaved changes** modal (**Save** / **Don't save** / **Cancel**) when leaving or switching maps with dirty edits; **`MapData::operator==`** for dirty detection. **Middle-mouse** camera grip uses a world anchor (no feedback drift).
+- **`.gitignore`:** **`drafts/`**, **`.cursor/`**, **`settings.cfg`** (local drafts and config).
+
+### Changed
+
+- **`makeItemFromMapKind`** and ability definitions live in **`game/game_data.hpp`** / **`game_data.cpp`** (loaded from **`assets/data/*.json`**). **`AbilityDef`** uses **`std::string`** for text and icon paths; **`gameplay_scene.cpp`** uses **`undeadHunterAbilities()`** and empty checks on **`iconPath`**.
+- **Character data:** **`CharacterClass`** uses **`std::string`** fields; hardcoded **`AVAILABLE_CLASSES`** removed.
+- **UI font:** **`loadUiFont`** loads extra codepoints (en/em dash, smart quotes, ellipsis) so character text punctuation renders correctly.
+- **HUD (gameplay):** Wider lower-left cluster (**`barW`** ~380); equipment row height adjusted so slot bottoms align with consumable row.
+- **Removed** unused shim headers **`src/game/ability.hpp`** and **`src/game/item_factory.hpp`**; code includes **`game_data.hpp`** directly.
+- **Scope note:** ability **mechanics** (durations, projectile speeds, slug damage, snare stun, Lead Fever pellet count, etc.) still live in **`config.hpp`** and ECS/combat code. **`abilities.json`** is the source of truth for **HUD copy**, **icons**, **mana cost**, and **cooldown** used by **`tryUseAbility`**; keep descriptions in sync when you change config numbers, or extend JSON later to drive those fields too.
+
+### Fixed
+
+- **Editor:** Middle-mouse pan/grip now follows the cursor reliably.
+
+
 ## v0.10.3 — 2026-04-11
 
 ### Added
@@ -72,7 +98,7 @@ All notable changes to **Dreadcast** will be documented in this file.
 - **`ecs::StunnedState`**, **`LeadFeverEffect`**, **`SnareProjectile`**, **`SlugProjectile`**, **`PierceHitRecord`**, **`SlugAimState`**, **`SnareDashState`**; **`Projectile::pierce`**, **`knockbackOnHit`**.
 - **Stacking status HUD:** multiple vial/ability effects with **right = oldest**, **left = newest**; icons use **center-cropped** item art (or placeholder fill) plus timer ring.
 - **`LORE.md`** template for non-mechanical world/character notes.
-- **`src/game/ability.hpp`** — ability definitions for the Undead Hunter.
+- **`src/game/ability.hpp`** — ability definitions for the Undead Hunter (superseded in v0.11.0 by **`game_data.hpp`** + **`assets/data/abilities.json`**).
 
 ### Changed
 
@@ -136,7 +162,7 @@ All notable changes to **Dreadcast** will be documented in this file.
 ### Added
 
 - **High-res item icons:** Iron armor and vial of pure blood use new **PNG** art (`assets/textures/items/*.png`, 7:5, source resolution 1152×823).
-- **`game/item_factory.hpp`:** Shared `makeItemFromMapKind()` for casket loot, map spawns, and editor-defined drops.
+- **`game/item_factory.hpp`:** Shared `makeItemFromMapKind()` for casket loot, map spawns, and editor-defined drops (superseded in v0.11.0 by **`game_data.hpp`** + **`assets/data/items.json`**).
 - **`game/item_rarity.hpp`:** Rarity tiers (**Common** … **Legendary**, **Special**), **gear** style names (Tarnished … Abyssal), **vial** style names (Clouded … Anomalous `[Vial]`), colors, and **`rarityLine()`** for UI. **`ItemData::rarity`** on items.
 - **Map item spawns:** `.map` files support **`ITEM x y kind`** lines (`kind` is `iron_armor` or `vial_pure_blood`). Gameplay spawns matching **ground pickups** at load (items are added to the pool and dropped in world space).
 - **Editor — place items:** New **Item** tool with **Item: Armor / Item: Vial** type toggle (same pattern as enemies). Item pickups render in the world view; select, drag, **Del**, **Ctrl+D**, **Ctrl+C / Ctrl+V** work like other entities. Status line lists **Items** count.

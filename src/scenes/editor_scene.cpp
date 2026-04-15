@@ -10,7 +10,7 @@
 
 #include "config.hpp"
 #include "core/input.hpp"
-#include "game/item_factory.hpp"
+#include "game/game_data.hpp"
 #include "core/iso_utils.hpp"
 #include "core/resource_manager.hpp"
 #include "scenes/menu_scene.hpp"
@@ -128,6 +128,7 @@ void EditorScene::onEnter() {
     ensureValidMapIndex();
     map_ = defaultMapData();
     loadMap();
+    syncSavedSnapshot();
 
     mapPrevButton_.rect = {16.0F, 58.0F, 56.0F, 28.0F};
     mapPrevButton_.label = "<";
@@ -415,7 +416,11 @@ void EditorScene::pasteFromClipboard(const Vector2 &worldMouse) {
 bool EditorScene::saveMap() {
     ensureValidMapIndex();
     const std::string path = "assets/maps/" + mapFiles_[static_cast<size_t>(currentMapIndex_)] + ".map";
-    return map_.saveToFile(path);
+    const bool ok = map_.saveToFile(path);
+    if (ok) {
+        syncSavedSnapshot();
+    }
+    return ok;
 }
 
 bool EditorScene::loadMap() {
@@ -430,6 +435,7 @@ bool EditorScene::loadMap() {
     resizingWall_ = ResizeHandle::None;
     resizingLava_ = ResizeHandle::None;
     draggingSelection_ = false;
+    syncSavedSnapshot();
     return true;
 }
 
@@ -456,6 +462,65 @@ void EditorScene::newMap() {
     resizingLava_ = ResizeHandle::None;
     statusText_ = "New map (unsaved layout)";
     statusTimer_ = 2.0F;
+    syncSavedSnapshot();
+}
+
+bool EditorScene::hasUnsavedChanges() const { return !(map_ == savedMapSnapshot_); }
+
+void EditorScene::syncSavedSnapshot() { savedMapSnapshot_ = map_; }
+
+void EditorScene::applyPendingWithoutSaving(SceneManager &scenes) {
+    switch (pendingAction_) {
+    case PendingAction::Back:
+        scenes.replace(std::make_unique<MenuScene>());
+        break;
+    case PendingAction::PrevMap: {
+        ensureValidMapIndex();
+        const int n = static_cast<int>(mapFiles_.size());
+        currentMapIndex_ = (currentMapIndex_ - 1 + n) % n;
+        const bool ok = loadMap();
+        statusText_ = ok ? "Loaded map" : "Load failed";
+        statusTimer_ = 2.0F;
+        break;
+    }
+    case PendingAction::NextMap: {
+        ensureValidMapIndex();
+        const int n = static_cast<int>(mapFiles_.size());
+        currentMapIndex_ = (currentMapIndex_ + 1) % n;
+        const bool ok = loadMap();
+        statusText_ = ok ? "Loaded map" : "Load failed";
+        statusTimer_ = 2.0F;
+        break;
+    }
+    case PendingAction::NewMap:
+        newMap();
+        break;
+    case PendingAction::None:
+        break;
+    }
+    pendingAction_ = PendingAction::None;
+    showUnsavedDialog_ = false;
+}
+
+void EditorScene::drawUnsavedChangesModal(const Font &font, Vector2 mouse) {
+    const int w = config::WINDOW_WIDTH;
+    const int h = config::WINDOW_HEIGHT;
+    DrawRectangle(0, 0, w, h, Fade(BLACK, 0.55F));
+    const float boxW = 520.0F;
+    const float boxH = 200.0F;
+    const Rectangle box{(static_cast<float>(w) - boxW) * 0.5F, (static_cast<float>(h) - boxH) * 0.5F,
+                          boxW, boxH};
+    DrawRectangleRec(box, ui::theme::PANEL_FILL);
+    DrawRectangleLinesEx(box, 2.0F, ui::theme::PANEL_BORDER);
+    DrawTextEx(font, "Unsaved changes", {box.x + 24.0F, box.y + 20.0F}, 22.0F, 1.0F, RAYWHITE);
+    DrawTextEx(font, "Save changes to the current map before leaving?", {box.x + 24.0F, box.y + 58.0F},
+               16.0F, 1.0F, ui::theme::MUTED_TEXT);
+    unsavedSaveButton_.draw(font, 18.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER, RAYWHITE,
+                            ui::theme::BTN_BORDER);
+    unsavedDontSaveButton_.draw(font, 18.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER, RAYWHITE,
+                                ui::theme::BTN_BORDER);
+    unsavedCancelButton_.draw(font, 18.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER, RAYWHITE,
+                              ui::theme::BTN_BORDER);
 }
 
 void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &worldMouse) {
@@ -674,7 +739,70 @@ void EditorScene::update(SceneManager &scenes, InputManager &input, ResourceMana
     const bool overUi = isMouseOverEditorUi(mouse);
     bool uiConsumedClick = false;
 
+    if (showUnsavedDialog_) {
+        const int w = config::WINDOW_WIDTH;
+        const int h = config::WINDOW_HEIGHT;
+        constexpr float boxW = 520.0F;
+        constexpr float boxH = 200.0F;
+        const float boxX = (static_cast<float>(w) - boxW) * 0.5F;
+        const float boxY = (static_cast<float>(h) - boxH) * 0.5F;
+        unsavedSaveButton_.rect = {boxX + 32.0F, boxY + boxH - 56.0F, 130.0F, 40.0F};
+        unsavedSaveButton_.label = "Save";
+        unsavedDontSaveButton_.rect = {boxX + 182.0F, boxY + boxH - 56.0F, 130.0F, 40.0F};
+        unsavedDontSaveButton_.label = "Don't save";
+        unsavedCancelButton_.rect = {boxX + 332.0F, boxY + boxH - 56.0F, 130.0F, 40.0F};
+        unsavedCancelButton_.label = "Cancel";
+        if (unsavedSaveButton_.wasClicked(mouse, click)) {
+            if (saveMap()) {
+                const PendingAction a = pendingAction_;
+                pendingAction_ = PendingAction::None;
+                showUnsavedDialog_ = false;
+                if (a == PendingAction::Back) {
+                    scenes.replace(std::make_unique<MenuScene>());
+                } else if (a == PendingAction::PrevMap) {
+                    ensureValidMapIndex();
+                    const int n = static_cast<int>(mapFiles_.size());
+                    currentMapIndex_ = (currentMapIndex_ - 1 + n) % n;
+                    const bool ok = loadMap();
+                    statusText_ = ok ? "Loaded map" : "Load failed";
+                    statusTimer_ = 2.0F;
+                } else if (a == PendingAction::NextMap) {
+                    ensureValidMapIndex();
+                    const int n = static_cast<int>(mapFiles_.size());
+                    currentMapIndex_ = (currentMapIndex_ + 1) % n;
+                    const bool ok = loadMap();
+                    statusText_ = ok ? "Loaded map" : "Load failed";
+                    statusTimer_ = 2.0F;
+                } else if (a == PendingAction::NewMap) {
+                    newMap();
+                }
+            }
+            uiConsumedClick = true;
+        } else if (unsavedDontSaveButton_.wasClicked(mouse, click)) {
+            applyPendingWithoutSaving(scenes);
+            uiConsumedClick = true;
+        } else if (unsavedCancelButton_.wasClicked(mouse, click) || input.isKeyPressed(KEY_ESCAPE)) {
+            pendingAction_ = PendingAction::None;
+            showUnsavedDialog_ = false;
+            uiConsumedClick = true;
+        }
+        if (fixedTimer_.consumeSteps(frameDt) > 0) {
+            // keep timer in sync
+        }
+        camera_.update(frameDt);
+        (void)resources;
+        return;
+    }
+
     if (mapPrevButton_.wasClicked(mouse, click)) {
+        if (hasUnsavedChanges()) {
+            pendingAction_ = PendingAction::PrevMap;
+            showUnsavedDialog_ = true;
+            uiConsumedClick = true;
+            camera_.update(frameDt);
+            (void)resources;
+            return;
+        }
         ensureValidMapIndex();
         const int n = static_cast<int>(mapFiles_.size());
         currentMapIndex_ = (currentMapIndex_ - 1 + n) % n;
@@ -684,6 +812,14 @@ void EditorScene::update(SceneManager &scenes, InputManager &input, ResourceMana
         uiConsumedClick = true;
     }
     if (mapNextButton_.wasClicked(mouse, click)) {
+        if (hasUnsavedChanges()) {
+            pendingAction_ = PendingAction::NextMap;
+            showUnsavedDialog_ = true;
+            uiConsumedClick = true;
+            camera_.update(frameDt);
+            (void)resources;
+            return;
+        }
         ensureValidMapIndex();
         const int n = static_cast<int>(mapFiles_.size());
         currentMapIndex_ = (currentMapIndex_ + 1) % n;
@@ -693,6 +829,14 @@ void EditorScene::update(SceneManager &scenes, InputManager &input, ResourceMana
         uiConsumedClick = true;
     }
     if (mapNewButton_.wasClicked(mouse, click)) {
+        if (hasUnsavedChanges()) {
+            pendingAction_ = PendingAction::NewMap;
+            showUnsavedDialog_ = true;
+            uiConsumedClick = true;
+            camera_.update(frameDt);
+            (void)resources;
+            return;
+        }
         newMap();
         uiConsumedClick = true;
     }
@@ -710,6 +854,14 @@ void EditorScene::update(SceneManager &scenes, InputManager &input, ResourceMana
         uiConsumedClick = true;
     }
     if (backButton_.wasClicked(mouse, click) || input.isKeyPressed(KEY_ESCAPE)) {
+        if (hasUnsavedChanges()) {
+            pendingAction_ = PendingAction::Back;
+            showUnsavedDialog_ = true;
+            uiConsumedClick = true;
+            camera_.update(frameDt);
+            (void)resources;
+            return;
+        }
         scenes.replace(std::make_unique<MenuScene>());
         return;
     }
@@ -814,15 +966,22 @@ void EditorScene::update(SceneManager &scenes, InputManager &input, ResourceMana
                                  camera_.camera().target.y + camMove.y * kEditorPanSpeed * frameDt});
     }
 
-    if (input.isMouseButtonHeld(MOUSE_BUTTON_MIDDLE)) {
-        const Vector2 cart = worldMouseFromScreen(mouse);
-        const Vector2 isoGrip = worldToIso(cart);
-        const Vector2 screenGrip = GetWorldToScreen2D(isoGrip, camera_.camera());
-        const Vector2 d = {mouse.x - screenGrip.x, mouse.y - screenGrip.y};
-        const float z = camera_.camera().zoom;
-        camera_.camera().target.x -= d.x / z;
-        camera_.camera().target.y -= d.y / z;
-        camera_.syncFollowFromCamera();
+    if (input.isMouseButtonPressed(MOUSE_BUTTON_MIDDLE)) {
+        gripActive_ = true;
+        gripWorldAnchor_ = worldMouseFromScreen(mouse);
+    }
+    if (gripActive_) {
+        if (!input.isMouseButtonHeld(MOUSE_BUTTON_MIDDLE)) {
+            gripActive_ = false;
+        } else {
+            const Vector2 gripIso = worldToIso(gripWorldAnchor_);
+            const Vector2 screenGrip = GetWorldToScreen2D(gripIso, camera_.camera());
+            const Vector2 d = {mouse.x - screenGrip.x, mouse.y - screenGrip.y};
+            const float z = camera_.camera().zoom;
+            camera_.camera().target.x -= d.x / z;
+            camera_.camera().target.y -= d.y / z;
+            camera_.syncFollowFromCamera();
+        }
     }
 
     const float wheel = GetMouseWheelMove();
@@ -1159,6 +1318,10 @@ void EditorScene::draw(ResourceManager &resources) {
                16.0F, 1.0F, ui::theme::MUTED_TEXT);
     DrawTextEx(font, "Wall resize: handles / arrows (Shift=faster) | Mid-mouse: camera grip", {220.0F, 32.0F},
                16.0F, 1.0F, ui::theme::MUTED_TEXT);
+
+    if (showUnsavedDialog_) {
+        drawUnsavedChangesModal(font, mouse);
+    }
 }
 
 } // namespace dreadcast

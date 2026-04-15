@@ -11,9 +11,10 @@ class InputManager;
 namespace ecs {
 
 /// Left-click ranged attack (frame input). Sets `noManaFlashTimer` when mana is too low.
-void combat_player_ranged(entt::registry &registry, const InputManager &input,
-                          const Camera2D &camera, entt::entity player, float &noManaFlashTimer,
-                          Vector2 aimScreenPos);
+/// @return true if a shot was fired (mana spent and projectiles spawned).
+[[nodiscard]] bool combat_player_ranged(entt::registry &registry, const InputManager &input,
+                                          const Camera2D &camera, entt::entity player,
+                                          float &noManaFlashTimer, Vector2 aimScreenPos);
 
 /// Right-click melee: cooldown, damage, knockback (fixed timestep).
 void combat_player_melee(entt::registry &registry, const InputManager &input, entt::entity player,

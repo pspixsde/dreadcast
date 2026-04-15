@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 #include <entt/entt.hpp>
 #include <raylib.h>
@@ -164,6 +165,21 @@ void drawEnemyOverlays(entt::registry &registry, const Font &font, Vector2 fogOr
         const float barW = sprite.width;
         const float barH = 6.0F;
         const float barY = iso.y - half - 28.0F;
+        int dispLevel = 1;
+        if (registry.all_of<EnemyDisplayLevel>(entity)) {
+            dispLevel = registry.get<EnemyDisplayLevel>(entity).level;
+        }
+        constexpr float lvlR = 9.0F;
+        const float lvlCx = iso.x - barW * 0.5F - lvlR * 2.0F - 6.0F;
+        const float lvlCy = barY + barH * 0.5F;
+        DrawCircleV({lvlCx, lvlCy}, lvlR, {30, 18, 22, 240});
+        DrawCircleLinesV({lvlCx, lvlCy}, lvlR, {90, 70, 75, 255});
+        char lvTxt[8];
+        std::snprintf(lvTxt, sizeof(lvTxt), "%d", dispLevel);
+        const float lvFs = 11.0F;
+        const Vector2 lvDim = MeasureTextEx(font, lvTxt, lvFs, 1.0F);
+        DrawTextEx(font, lvTxt, {lvlCx - lvDim.x * 0.5F, lvlCy - lvDim.y * 0.5F}, lvFs, 1.0F,
+                   RAYWHITE);
         const float x = iso.x - barW * 0.5F;
         DrawRectangle(static_cast<int>(x), static_cast<int>(barY), static_cast<int>(barW),
                       static_cast<int>(barH), {40, 20, 20, 255});
@@ -345,11 +361,14 @@ void drawSpriteEntity(entt::entity entity, entt::registry &registry, ResourceMan
 
 void render_system(entt::registry &registry, const Font &font, ResourceManager &resources) {
     Vector2 fogOrigin{0.0F, 0.0F};
+    float fogRadius = config::FOG_OF_WAR_RADIUS;
     for (const auto p : registry.view<Player, Transform>()) {
         fogOrigin = registry.get<Transform>(p).position;
+        if (registry.all_of<PlayerMoveStats>(p)) {
+            fogRadius = registry.get<PlayerMoveStats>(p).visionRange;
+        }
         break;
     }
-    const float fogRadius = config::FOG_OF_WAR_RADIUS;
 
     for (const auto lv : registry.view<Lava, Transform>()) {
         drawLavaEntity(registry.get<Transform>(lv), registry.get<Lava>(lv));

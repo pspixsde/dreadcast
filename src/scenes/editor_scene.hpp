@@ -59,6 +59,10 @@ class EditorScene final : public Scene {
     bool saveMap();
     bool loadMap();
     void newMap();
+    [[nodiscard]] bool hasUnsavedChanges() const;
+    void syncSavedSnapshot();
+    void applyPendingWithoutSaving(SceneManager &scenes);
+    void drawUnsavedChangesModal(const Font &font, Vector2 mouse);
     void pasteFromClipboard(const Vector2 &worldMouse);
     void copySelectionToClipboard();
 
@@ -102,6 +106,17 @@ class EditorScene final : public Scene {
 
     float statusTimer_{0.0F};
     const char *statusText_{"Ready"};
+
+    MapData savedMapSnapshot_{};
+    enum class PendingAction { None, Back, PrevMap, NextMap, NewMap };
+    PendingAction pendingAction_{PendingAction::None};
+    bool showUnsavedDialog_{false};
+    ui::Button unsavedSaveButton_{};
+    ui::Button unsavedDontSaveButton_{};
+    ui::Button unsavedCancelButton_{};
+
+    bool gripActive_{false};
+    Vector2 gripWorldAnchor_{0.0F, 0.0F};
 };
 
 } // namespace dreadcast

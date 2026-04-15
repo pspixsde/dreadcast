@@ -25,10 +25,18 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(entt)
 
+# nlohmann/json (data-driven items / abilities)
+FetchContent_Declare(
+    json
+    URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(json)
+
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS src/*.cpp)
 add_executable(${PROJECT_NAME} ${SOURCES})
 target_include_directories(${PROJECT_NAME} PRIVATE src)
-target_link_libraries(${PROJECT_NAME} PRIVATE raylib EnTT::EnTT)
+target_link_libraries(${PROJECT_NAME} PRIVATE raylib EnTT::EnTT nlohmann_json::nlohmann_json)
 
 # Copy assets next to the executable so font paths work when running from build/Release (etc.).
 add_custom_command(
