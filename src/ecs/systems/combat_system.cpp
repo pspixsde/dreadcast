@@ -1,5 +1,6 @@
 #include "ecs/systems/combat_system.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 #include <entt/entt.hpp>
@@ -10,29 +11,34 @@
 #include "core/iso_utils.hpp"
 #include "core/types.hpp"
 #include "ecs/components.hpp"
+#include "game/game_data.hpp"
 
 namespace dreadcast::ecs {
 
 bool combat_player_ranged(entt::registry &registry, const InputManager &input,
                           const Camera2D &camera, entt::entity player, float &noManaFlashTimer,
                           Vector2 aimScreenPos) {
+    (void)noManaFlashTimer;
     if (!registry.valid(player) || !input.isMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
         return false;
     }
-    if (!registry.all_of<Transform, Mana, Sprite>(player)) {
+    if (!registry.all_of<Transform, Sprite>(player)) {
         return false;
     }
     if (registry.all_of<SlugAimState>(player)) {
         return false;
     }
 
-    auto &mana = registry.get<Mana>(player);
-    if (mana.current < config::MANA_COST_SHOT) {
-        noManaFlashTimer = 1.2F;
+    auto &chamber = registry.get_or_emplace<ChamberState>(player);
+    if (chamber.isReloading) {
         return false;
     }
-
-    mana.current -= config::MANA_COST_SHOT;
+    if (chamber.shotsRemaining <= 0) {
+        chamber.isReloading = true;
+        chamber.reloadTimer = 0.0F;
+        chamber.reloadDuration = config::CHAMBER_RELOAD_TIME;
+        return false;
+    }
 
     const auto &pt = registry.get<Transform>(player);
     const auto &ps = registry.get<Sprite>(player);
@@ -42,7 +48,6 @@ bool combat_player_ranged(entt::registry &registry, const InputManager &input,
     const float dy = worldMouse.y - pt.position.y;
     const float len = std::sqrt(dx * dx + dy * dy);
     if (len <= 0.001F) {
-        mana.current += config::MANA_COST_SHOT;
         return false;
     }
     const Vector2 dir = {dx / len, dy / len};
@@ -61,9 +66,11 @@ bool combat_player_ranged(entt::registry &registry, const InputManager &input,
     }
 
     if (leadFever) {
-        const int n = config::LEAD_FEVER_PELLET_COUNT;
-        const float spread = config::LEAD_FEVER_SCATTER_ANGLE;
-        const float jitter = config::LEAD_FEVER_SCATTER_RANDOM;
+        const auto &leadDef = undeadHunterAbilities().abilities[0];
+        const int n = std::max(1, leadDef.pelletCount);
+        const float spread = std::max(0.0F, leadDef.scatterAngle);
+        const float jitter = std::max(0.0F, leadDef.scatterRandom);
+        const float knockback = std::max(0.0F, leadDef.knockback);
         for (int i = 0; i < n; ++i) {
             const float baseFan = (n <= 1) ? 0.0F
                                            : (static_cast<float>(i) / static_cast<float>(n - 1) -
@@ -86,8 +93,10 @@ bool combat_player_ranged(entt::registry &registry, const InputManager &input,
                 proj,
                 Projectile{shotDamage, config::PROJECTILE_SPEED,
                            config::PROJECTILE_MAX_RANGE, 0.0F, d, true, entt::null, false,
-                           config::LEAD_FEVER_KNOCKBACK});
+                           knockback});
         }
+        --chamber.shotsRemaining;
+        chamber.idleTimer = 0.0F;
         return true;
     }
 
@@ -101,6 +110,13 @@ bool combat_player_ranged(entt::registry &registry, const InputManager &input,
     registry.emplace<Projectile>(proj, Projectile{shotDamage, config::PROJECTILE_SPEED,
                                                     config::PROJECTILE_MAX_RANGE, 0.0F, dir, true,
                                                     entt::null, false, 0.0F});
+    --chamber.shotsRemaining;
+    chamber.idleTimer = 0.0F;
+    if (chamber.shotsRemaining <= 0) {
+        chamber.isReloading = true;
+        chamber.reloadTimer = 0.0F;
+        chamber.reloadDuration = config::CHAMBER_RELOAD_TIME;
+    }
     return true;
 }
 

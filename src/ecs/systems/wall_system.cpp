@@ -84,10 +84,87 @@ void separateFromWall(Vector2 &pos, const Sprite &spr, const Rectangle &wallR) {
     }
 }
 
+[[nodiscard]] bool aabbOverlapsPolygonFill(const Vector2 &pos, const Sprite &spr,
+                                           const std::vector<Vector2> &poly) {
+    const int n = static_cast<int>(poly.size());
+    if (n < 3) {
+        return false;
+    }
+    const Rectangle er = entityRect(pos, spr);
+    const Vector2 corners[4] = {
+        {er.x, er.y},
+        {er.x + er.width, er.y},
+        {er.x + er.width, er.y + er.height},
+        {er.x, er.y + er.height},
+    };
+    for (const Vector2 &c : corners) {
+        if (CheckCollisionPointPoly(c, poly.data(), n)) {
+            return true;
+        }
+    }
+    const Vector2 mid{er.x + er.width * 0.5F, er.y + er.height * 0.5F};
+    if (CheckCollisionPointPoly(mid, poly.data(), n)) {
+        return true;
+    }
+    return false;
+}
+
+void separateFromSolidPolygon(Vector2 &pos, const Sprite &spr,
+                              const std::vector<Vector2> &poly) {
+    const int n = static_cast<int>(poly.size());
+    if (n < 3 || !aabbOverlapsPolygonFill(pos, spr, poly)) {
+        return;
+    }
+    Vector2 centroid{0.0F, 0.0F};
+    for (const Vector2 &v : poly) {
+        centroid.x += v.x;
+        centroid.y += v.y;
+    }
+    const float inv = 1.0F / static_cast<float>(n);
+    centroid.x *= inv;
+    centroid.y *= inv;
+
+    for (int iter = 0; iter < 48; ++iter) {
+        if (!aabbOverlapsPolygonFill(pos, spr, poly)) {
+            return;
+        }
+        float dx = pos.x - centroid.x;
+        float dy = pos.y - centroid.y;
+        const float len = std::sqrt(dx * dx + dy * dy);
+        if (len < 1.0e-3F) {
+            pos.x += 4.0F;
+            continue;
+        }
+        dx /= len;
+        dy /= len;
+        pos.x += dx * 4.0F;
+        pos.y += dy * 4.0F;
+    }
+}
+
+[[nodiscard]] bool circleHitsPolygon(Vector2 center, float r, const std::vector<Vector2> &poly) {
+    const int n = static_cast<int>(poly.size());
+    if (n < 3) {
+        return false;
+    }
+    if (CheckCollisionPointPoly(center, poly.data(), n)) {
+        return true;
+    }
+    for (int i = 0; i < n; ++i) {
+        const Vector2 a = poly[static_cast<size_t>(i)];
+        const Vector2 b = poly[static_cast<size_t>((i + 1) % n)];
+        if (CheckCollisionCircleLine(center, r, a, b)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 void wall_resolve_collisions(entt::registry &registry) {
     const auto walls = registry.view<Wall, Transform>();
+    const auto polys = registry.view<SolidPolygon, Transform>();
     const auto interactables = registry.view<Interactable, Transform, Sprite>();
     const auto movers = registry.view<Transform, Sprite>();
 
@@ -95,7 +172,6 @@ void wall_resolve_collisions(entt::registry &registry) {
         if (registry.all_of<Projectile>(m)) {
             continue;
         }
-        // Caskets / interactables are static; we only resolve against them.
         if (registry.all_of<Interactable>(m)) {
             continue;
         }
@@ -108,7 +184,11 @@ void wall_resolve_collisions(entt::registry &registry) {
             separateFromWall(t.position, spr, wr);
         }
 
-        // Treat interactable entities (caskets) as solid blocks too.
+        for (const auto pe : polys) {
+            const auto &poly = registry.get<SolidPolygon>(pe);
+            separateFromSolidPolygon(t.position, spr, poly.vertsWorld);
+        }
+
         for (const auto it : interactables) {
             if (it == m) {
                 continue;
@@ -150,10 +230,10 @@ void unit_resolve_collisions(entt::registry &registry) {
 
 void wall_destroy_projectiles(entt::registry &registry) {
     const auto walls = registry.view<Wall, Transform>();
+    const auto polys = registry.view<SolidPolygon, Transform>();
     const auto projectiles = registry.view<Projectile, Transform, Sprite>();
 
     std::vector<entt::entity> toDestroy;
-    // entt::view doesn't provide size(); we'll just let the vector grow as needed.
 
     for (const auto p : projectiles) {
         if (!registry.valid(p)) {
@@ -165,14 +245,27 @@ void wall_destroy_projectiles(entt::registry &registry) {
                                   std::max(ps.width, ps.height) * 0.5F);
         const Vector2 center{pt.position.x, pt.position.y};
 
+        bool hit = false;
         for (const auto w : walls) {
             const auto &wt = registry.get<Transform>(w);
             const auto &wall = registry.get<Wall>(w);
             const Rectangle wr = wallRect(wt, wall);
             if (circleRectOverlap(center, r, wr)) {
-                toDestroy.push_back(p);
+                hit = true;
                 break;
             }
+        }
+        if (!hit) {
+            for (const auto pe : polys) {
+                const auto &poly = registry.get<SolidPolygon>(pe);
+                if (circleHitsPolygon(center, r, poly.vertsWorld)) {
+                    hit = true;
+                    break;
+                }
+            }
+        }
+        if (hit) {
+            toDestroy.push_back(p);
         }
     }
 

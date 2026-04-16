@@ -2,37 +2,62 @@
 
 All notable changes to **Dreadcast** will be documented in this file.
 
+## v0.12.0 — 2026-04-17
+
+### Added
+
+- **Chamber / reload (ranged):** Basic shots no longer cost mana; **6-round chamber**, **2s** active reload, **3s** idle full reload; **15** base projectile damage. `**ChamberState**` on the player; HUD **ammo icon** with shot count; **reload progress ring on the aim cursor** (toggle **Settings → Gameplay → Show reload on cursor**).
+- **Minimap** (upper-left) and **full map overlay** (**M** to toggle, **Esc** / **M** to close) with walls, lava, solids, player, fog-visible enemies, casket, and anvils.
+- **Map solids:** `**SOLID**` closed polygons in `.map` files; `**SolidShapeData**` / `**ecs::SolidPolygon**` — collision, fog LOS, and rendering. **Editor:** **Solid (poly)** tool — click vertices, **Enter** to commit (≥3 verts), **RMB** removes last draft vertex.
+- **Anvils:** `**ANVIL**` in maps; editor **Anvil** tool; gameplay **F** opens **Forge / Disassemble** with **vial_pure_blood + iron_armor → barbed_tunic** and reverse breakdown; items use **`catalogId`** from `items.json` for matching.
+- **Anvil UI (full workbench DnD):** Drag from the **inventory bag** into **forge input slots** or the **disassemble input**; **pick up** bench items with **LMB** and drop on an **empty** bag cell, another **empty** forge/disassemble output slot, or **cancel** to restore; **RMB** a forge input returns that stack to the bag (or world drop if full). **Disassemble** fills an **output pool** — drag outputs into the bag the same way. **Click the forge output preview** to craft when the recipe matches (**ordered per-slot** inputs, extra forge slots must be empty). Shared **`AnvilUiLayout`** for hit-tests; **`InventoryUI::hitTestBagSlot`** respects the inventory **panel shift** when the anvil is open.
+- **Casket loot:** `**CasketData**` with **3 item id slots**; extended `**CASKET**` map lines; editor **Casket loot** side panel (cycle rows) when a casket is selected.
+- **Inventory:** **Separate** on stacked bag consumables; **merge stacks** on bag drag-drop; **Settings → Gameplay → Separate drops when bag is full** (with world drop behavior).
+- **Editor:** **Magnetic edge snap** for wall and lava resize handles (hold **Ctrl** to suppress); **yellow guide line** when snapped.
+- **Audio:** `**assets/sounds/hellhound_agro.wav**` on Hellhound **agitated** transition (random pitch); `**assets/sounds/calamity_slug_fire.wav**` on Calamity Slug fire (fixed pitch); **Lead Fever** suppresses normal **gun_shot** SFX.
+
+### Changed
+
+- **Melee:** Combo damage scaling flattened — all swings use the same damage multiplier (`**kDamageScale**` all **1.0**).
+- **Forge recipes:** Matching is **strict by slot order** (inputs must sit in forge slots **0..N-1** in recipe order; remaining forge slots empty), not a multiset of ingredients.
+- **Calamity Slug:** Higher **`projectileSpeed`** in `**assets/data/abilities.json**`.
+- **Items:** `**ItemData::catalogId**` parsed from JSON `**id**`; stacking prefers matching **catalog id** when present.
+
+### Fixed
+
+- **Editor / maps:** `**Vector2**` vector comparisons in `**SolidShapeData::operator==**` (manual vertex compare) so builds succeed on strict C++ lib implementations.
+- **Anvil + inventory:** Anvil panel is drawn **above** the inventory dim overlay so it stays **readable and clickable**; releases over the bench no longer count as **drop to world** when dragging from the bag.
+
 ## v0.11.0 — 2026-04-15
 
 ### Added
 
-- **Data-driven items and abilities (JSON):** **`assets/data/items.json`** defines all map/editor item kinds (`id` matches `.map` `ITEM` lines). Fields mirror **`ItemData`**: `name`, `iconPath`, `equipSlot` (`Armor` / `Amulet` / `Ring`), `rarity` (Tarnished … Special), `isConsumable`, `isStackable`, `maxStack`, `stackCount`, `maxHpBonus`, `maxManaBonus`, `hpRegenBonus`, `damageReflectPercent`, `description`.
-- **`assets/data/abilities.json`:** Undead Hunter ability bar — **`abilities`** array of up to three objects: `name`, `description`, `iconPath`, `manaCost`, `cooldown` (used by HUD and **`tryUseAbility`** for mana spend and cooldown timers). **`version`** and **`characterId`** reserved for future expansion.
-- **`assets/data/characters.json`:** Playable classes (stats, bio, ability blurbs, per-level HP/mana/damage gains). **`loadCharactersFromJson`**, **`characterCount()`**, **`characterAt()`**; menu, character select, and gameplay use the runtime list with an embedded fallback if the file is missing.
-- **Audio:** **`assets/sounds/gun_shot.wav`** on successful ranged shots (random pitch); **`assets/sounds/undead_hunter_hurt.wav`** when the Undead Hunter loses HP (**20s** cooldown). **`ResourceManager::getSound`** resolves paths like textures.
-- **XP / leveling:** **`PlayerLevel`**, **`EnemyXpReward`**, **`EnemyDisplayLevel`**; enemies award XP on death (**no mana shards**). Level-ups increase max HP/mana, melee damage, and ranged bonus; **HUD** shows level + XP ring on the portrait; **character select** has a **Leveling** section; **enemy** level disc beside the HP bar.
-- **Map editor:** **Unsaved changes** modal (**Save** / **Don't save** / **Cancel**) when leaving or switching maps with dirty edits; **`MapData::operator==`** for dirty detection. **Middle-mouse** camera grip uses a world anchor (no feedback drift).
-- **`.gitignore`:** **`drafts/`**, **`.cursor/`**, **`settings.cfg`** (local drafts and config).
+- **Data-driven items and abilities (JSON):** `**assets/data/items.json`** defines all map/editor item kinds (`id` matches `.map` `ITEM` lines). Fields mirror `**ItemData`**: `name`, `iconPath`, `equipSlot` (`Armor` / `Amulet` / `Ring`), `rarity` (Tarnished … Special), `isConsumable`, `isStackable`, `maxStack`, `stackCount`, `maxHpBonus`, `maxManaBonus`, `hpRegenBonus`, `damageReflectPercent`, `description`.
+- `**assets/data/abilities.json`:** Undead Hunter ability bar — `**abilities`** array of up to three objects with full gameplay tuning: `name`, `description`, `iconPath`, `manaCost`, `cooldown`, effect duration, projectile/dash parameters, pellet/scatter/knockback values, and slug stats. Runtime uses these values for both HUD and ability behavior.
+- `**assets/data/characters.json`:** Playable classes (stats, bio, ability blurbs, per-level HP/mana/damage gains). `**loadCharactersFromJson`**, `**characterCount()`**, `**characterAt()**`; menu, character select, and gameplay use the runtime list with an embedded fallback if the file is missing.
+- **Audio:** `**assets/sounds/gun_shot.wav`** on successful ranged shots (random pitch); `**assets/sounds/undead_hunter_hurt.wav`** when the Undead Hunter loses HP (**20s** cooldown). `**ResourceManager::getSound`** resolves paths like textures.
+- **XP / leveling:** `**PlayerLevel`**, `**EnemyXpReward`**, `**EnemyDisplayLevel**`; enemies award XP on death (**no mana shards**). Level-ups increase max HP/mana, melee damage, and ranged bonus; **HUD** shows level + XP ring on the portrait; **character select** has a **Leveling** section; **enemy** level disc beside the HP bar.
+- **Map editor:** **Unsaved changes** modal (**Save** / **Don't save** / **Cancel**) when leaving or switching maps with dirty edits; `**MapData::operator==`** for dirty detection. **Middle-mouse** camera grip uses a world anchor (no feedback drift).
+- `**.gitignore`:** `**drafts/`**, `**.cursor/`**, `**settings.cfg**` (local drafts and config).
 
 ### Changed
 
-- **`makeItemFromMapKind`** and ability definitions live in **`game/game_data.hpp`** / **`game_data.cpp`** (loaded from **`assets/data/*.json`**). **`AbilityDef`** uses **`std::string`** for text and icon paths; **`gameplay_scene.cpp`** uses **`undeadHunterAbilities()`** and empty checks on **`iconPath`**.
-- **Character data:** **`CharacterClass`** uses **`std::string`** fields; hardcoded **`AVAILABLE_CLASSES`** removed.
-- **UI font:** **`loadUiFont`** loads extra codepoints (en/em dash, smart quotes, ellipsis) so character text punctuation renders correctly.
-- **HUD (gameplay):** Wider lower-left cluster (**`barW`** ~380); equipment row height adjusted so slot bottoms align with consumable row.
-- **Removed** unused shim headers **`src/game/ability.hpp`** and **`src/game/item_factory.hpp`**; code includes **`game_data.hpp`** directly.
-- **Scope note:** ability **mechanics** (durations, projectile speeds, slug damage, snare stun, Lead Fever pellet count, etc.) still live in **`config.hpp`** and ECS/combat code. **`abilities.json`** is the source of truth for **HUD copy**, **icons**, **mana cost**, and **cooldown** used by **`tryUseAbility`**; keep descriptions in sync when you change config numbers, or extend JSON later to drive those fields too.
+- `**makeItemFromMapKind**` and ability definitions live in `**game/game_data.hpp**` / `**game_data.cpp**` (loaded from `**assets/data/*.json**`). `**AbilityDef**` uses `**std::string**` for text and icon paths; `**gameplay_scene.cpp**` uses `**undeadHunterAbilities()**` and empty checks on `**iconPath**`.
+- **Character data:** `**CharacterClass`** uses `**std::string`** fields; hardcoded `**AVAILABLE_CLASSES**` removed.
+- **UI font:** `**loadUiFont`** loads extra codepoints (en/em dash, smart quotes, ellipsis) so character text punctuation renders correctly.
+- **HUD (gameplay):** Wider lower-left cluster (`**barW`** ~380); equipment row height adjusted so slot bottoms align with consumable row.
+- **Removed** unused shim headers `**src/game/ability.hpp`** and `**src/game/item_factory.hpp`**; code includes `**game_data.hpp**` directly.
+- **Ability tuning source:** ability **mechanics and presentation** are now driven from `**assets/data/abilities.json`** via `AbilityDef` (with embedded fallback JSON in `game_data.cpp`), replacing prior hardcoded ability constants in `config.hpp`.
 
 ### Fixed
 
 - **Editor:** Middle-mouse pan/grip now follows the cursor reliably.
 
-
 ## v0.10.3 — 2026-04-11
 
 ### Added
 
-- **Character select:** **Bio** line; **Health & Mana** section with bar-style readout; **Attack** (Ranged / Melee); **Mobility** (move speed, fog vision). **`CharacterClass`** gains `bio`, base combat/movement stats for the selector (Undead Hunter populated from current tuning).
+- **Character select:** **Bio** line; **Health & Mana** section with bar-style readout; **Attack** (Ranged / Melee); **Mobility** (move speed, fog vision). `**CharacterClass`** gains `bio`, base combat/movement stats for the selector (Undead Hunter populated from current tuning).
 - **Editor toolbar:** **Elements / Items / Units** tabs with a **clipped list** area (no overlapping dropdowns). **Elements:** Select, Wall, Lava, Casket, Player spawn. **Items:** full-name rows for all map item kinds. **Units:** Imp, Hellhound, Player spawn.
 
 ### Changed
@@ -40,11 +65,11 @@ All notable changes to **Dreadcast** will be documented in this file.
 - **Runic Shell:** Triggers only when HP **crosses** from **above** the 30% threshold to **at or below** it in a fixed tick (uses the same per-tick HP snapshot as floating numbers), not when already low on cooldown expiry or when equipping while hurt.
 - **Editor:** Map overlay labels for item spawns use **full item names** (via `makeItemFromMapKind`), not short tags.
 - **Consumable stack count (inventory + HUD):** Drawn on the **7:5 icon** bottom-right with **larger** font (~17px).
-- **Character select:** Ability blurbs use **`-` list markers** instead of `•` (font renders bullet as `?`).
+- **Character select:** Ability blurbs use `**-` list markers** instead of `•` (font renders bullet as `?`).
 
 ### Fixed
 
-- **Ground vial / stack pickup:** After `removeItemAtIndex` swap-with-last, remaining **`ItemPickup::itemIndex`** values are rewritten so rapid **E** pickups no longer lose items. Same fix when consuming the last stack from inventory while drops exist (`rewrite_ground_pickup_indices_after_remove`).
+- **Ground vial / stack pickup:** After `removeItemAtIndex` swap-with-last, remaining `**ItemPickup::itemIndex`** values are rewritten so rapid **E** pickups no longer lose items. Same fix when consuming the last stack from inventory while drops exist (`rewrite_ground_pickup_indices_after_remove`).
 - **Inventory context menu:** **Right-click** another slot while the menu is open **closes** the old menu and **opens** the new one.
 
 ## v0.10.2 — 2026-04-11
@@ -54,8 +79,8 @@ All notable changes to **Dreadcast** will be documented in this file.
 - **Lava (editor + maps):** Place and resize like walls (`LAVA cx cy halfW halfH` in `.map` files). Walk-through hazard: **2× slower** movement and **8 damage every 0.5s** while standing in lava.
 - **Vial of Raw Spirit** (`vial_raw_spirit`): **Clouded** consumable; restores **50 mana over 6 seconds**; HUD status icon with timer. Icon: `assets/textures/items/vial_raw_spirit_icon.png`.
 - **Hollow Ring** (`hollow_ring`): **Tarnished** ring; **+15 Max Mana** when equipped. Icon: `assets/textures/items/hollow_ring_icon.png`.
-- **`ItemData::maxManaBonus`**, **`InventoryState::totalEquippedMaxManaBonus()`**, **`applyPlayerMaxManaFromEquipment()`**.
-- **`ecs::ManaRegenOverTime`**, **`ecs::Lava`** components; config: **`LAVA_*`**, **`RAW_SPIRIT_*`**, **`LEAD_FEVER_SCATTER_RANDOM`**.
+- `**ItemData::maxManaBonus`**, `**InventoryState::totalEquippedMaxManaBonus()`**, `**applyPlayerMaxManaFromEquipment()**`.
+- `**ecs::ManaRegenOverTime**`, `**ecs::Lava**` components; config: `**LAVA_***`, `**RAW_SPIRIT_***`, `**LEAD_FEVER_SCATTER_RANDOM**`.
 
 ### Changed
 
@@ -74,17 +99,17 @@ All notable changes to **Dreadcast** will be documented in this file.
 
 ### Added
 
-- **Ability HUD:** Icons **`assets/textures/abilities/lead_fever.png`**, **`deadlight_snare.png`**, **`calamity_slug.png`** for Undead Hunter abilities; **104×104** slots **lower-right**; key **1 / 2 / 3** in small **black squares** slightly above/outside each icon; **mana cost** in **blue** at lower-right of each icon (toggleable).
+- **Ability HUD:** Icons `**assets/textures/abilities/lead_fever.png`**, `**deadlight_snare.png`**, `**calamity_slug.png**` for Undead Hunter abilities; **104×104** slots **lower-right**; key **1 / 2 / 3** in small **black squares** slightly above/outside each icon; **mana cost** in **blue** at lower-right of each icon (toggleable).
 - **Consumable HUD (C / V):** **5:4** slots, **half** ability height, **left** of abilities, slightly **lower**; same keybind badge style; **stack count** lower-right inside the slot.
 - **Equipment HUD:** Three **7:5**-fitted icons below the mana bar (armor / amulet / ring) with **Runic Shell** cooldown overlay when applicable.
-- **Floating damage/heal numbers** at entities (world→screen), toggleable; **Settings → Gameplay:** **Show ability mana cost** (default **on**), **Show damage/heal numbers** (default **off**); persisted in **`settings.cfg`**.
-- **`GameSettings`:** **`showAbilityManaCost`**, **`showDamageNumbers`**.
+- **Floating damage/heal numbers** at entities (world→screen), toggleable; **Settings → Gameplay:** **Show ability mana cost** (default **on**), **Show damage/heal numbers** (default **off**); persisted in `**settings.cfg`**.
+- `**GameSettings`:** `**showAbilityManaCost`**, `**showDamageNumbers`**.
 
 ### Changed
 
 - **Pure Blood HOT + Cordial Manic:** HOT **timer keeps running** during Manic; **no healing** while Manic (Cordial still blocks regen/HOT HP as before).
 - **Inventory rarity (i) panel:** Wider (**560px**); each tier is **name — description** on **one line** with shortened blurbs.
-- **`InventoryUI::drawItemIcon`** is **public** for reuse (gameplay equipment row uses local scaled draw to fit slots).
+- `**InventoryUI::drawItemIcon`** is **public** for reuse (gameplay equipment row uses local scaled draw to fit slots).
 
 ### Fixed
 
@@ -95,21 +120,21 @@ All notable changes to **Dreadcast** will be documented in this file.
 ### Added
 
 - **Undead Hunter abilities (keys 1–3):** **Lead Fever** (scatter pellets + knockback, HUD status), **Deadlight Snare** (net, backward dash, pull + **Stunned**), **Calamity Slug** (1s aim, piercing 50 damage, sideways knockback). Lower-right HUD ability bar with cooldown overlay and hover tooltips.
-- **`ecs::StunnedState`**, **`LeadFeverEffect`**, **`SnareProjectile`**, **`SlugProjectile`**, **`PierceHitRecord`**, **`SlugAimState`**, **`SnareDashState`**; **`Projectile::pierce`**, **`knockbackOnHit`**.
+- `**ecs::StunnedState`**, `**LeadFeverEffect`**, `**SnareProjectile**`, `**SlugProjectile**`, `**PierceHitRecord**`, `**SlugAimState**`, `**SnareDashState**`; `**Projectile::pierce**`, `**knockbackOnHit**`.
 - **Stacking status HUD:** multiple vial/ability effects with **right = oldest**, **left = newest**; icons use **center-cropped** item art (or placeholder fill) plus timer ring.
-- **`LORE.md`** template for non-mechanical world/character notes.
-- **`src/game/ability.hpp`** — ability definitions for the Undead Hunter (superseded in v0.11.0 by **`game_data.hpp`** + **`assets/data/abilities.json`**).
+- `**LORE.md`** template for non-mechanical world/character notes.
+- `**src/game/ability.hpp`** — ability definitions for the Undead Hunter (superseded in v0.11.0 by `**game_data.hpp**` + `**assets/data/abilities.json**`).
 
 ### Changed
 
 - **Cordial Manic:** no longer removes **Pure Blood** HOT; **Pure Blood** can be drunk during Manic (no HP from HOT while Manic); **Runic Shell** shockwave still fires but **does not heal** under Manic.
 - **Inventory:** rarity **info** control polished (fill, double ring, hover); draw order fixed so **item tooltips render on top** of the info button and rarity panel.
 - **Settings → Controls:** documents abilities **1 / 2 / 3**.
-- **Fog of war:** composite overlay shader **blurs the fog mask** (5×5 tap) so the visibility boundary fades gradually (Dota-style soft edge). Tunable via **`FOG_EDGE_SOFTEN_PIXELS`** in `config.hpp` (**0** = previous hard edge).
+- **Fog of war:** composite overlay shader **blurs the fog mask** (5×5 tap) so the visibility boundary fades gradually (Dota-style soft edge). Tunable via `**FOG_EDGE_SOFTEN_PIXELS`** in `config.hpp` (**0** = previous hard edge).
 
 ### Fixed
 
-- **Fog of war (RT + shader path):** Visibility “island” could disappear entirely (full-screen fog) while the CPU still built a valid polygon — the mask render target stayed white because **backface culling** and a single huge **`DrawTriangleFan`** batch did not reliably produce visible geometry when drawing into an FBO under **`BeginMode2D`**. Mask fill now uses **per-wedge `DrawTriangle`** with **winding chosen for Y-down space**, **culling disabled** for that pass, **scissor/depth** cleared defensively, **batch flush** before ending 2D mode, and **separate `src` rects** for scene vs mask in the composite blit. **F3** toggles an optional debug overlay (RT previews + stats).
+- **Fog of war (RT + shader path):** Visibility “island” could disappear entirely (full-screen fog) while the CPU still built a valid polygon — the mask render target stayed white because **backface culling** and a single huge `**DrawTriangleFan`** batch did not reliably produce visible geometry when drawing into an FBO under `**BeginMode2D`**. Mask fill now uses **per-wedge `DrawTriangle`** with **winding chosen for Y-down space**, **culling disabled** for that pass, **scissor/depth** cleared defensively, **batch flush** before ending 2D mode, and **separate `src` rects** for scene vs mask in the composite blit. **F3** toggles an optional debug overlay (RT previews + stats).
 
 ## v0.9.1 — 2026-04-03
 
@@ -117,8 +142,8 @@ All notable changes to **Dreadcast** will be documented in this file.
 
 - **Runic Shell** armor (`runic_shell` map kind): **Cursed** rarity; **+25 Max HP**; when HP drops below **30%**, releases an energy shockwave dealing **30 damage** and knockback to nearby enemies, then heals **30 HP**. **30s** cooldown with timer overlay on the inventory icon. Expanding ring VFX on activation. Icon: `assets/textures/items/runic_shell_icon.png`.
 - **Vial visual effects:** **Vial of Pure Blood** (HOT active) — pulsing crimson glow ring and orbiting particles around the player. **Vial of Cordial Manic** — golden flickering energy aura with trailing speed lines while moving.
-- **`ecs::KnockbackState`** component: enemies skip AI and decelerate during knockback; melee strikes now set velocity directly for a visible, consistent push.
-- **`ecs::RunicShellCooldown`** component for tracking the triggered armor ability.
+- `**ecs::KnockbackState`** component: enemies skip AI and decelerate during knockback; melee strikes now set velocity directly for a visible, consistent push.
+- `**ecs::RunicShellCooldown`** component for tracking the triggered armor ability.
 - **Enemy AI — stuck detection:** Enemies track displacement over time; when stuck against a wall for **0.25s**, AI steers perpendicular to slide around the obstruction via wall-avoidance raycasts.
 - **Enemy rule — damage boosts aggro:** Any player damage (melee or projectile) to an enemy increases its **agitation range by 100** (permanent per hit).
 - **Equip slot icons:** Empty Armor, Amulet, and Ring slots display centered **512×512** PNG icons (black-on-transparent, tinted to match UI) instead of text labels. Icons: `assets/textures/ui/armor_slot.png`, `amulet_slot.png`, `ring_slot.png`.
@@ -141,8 +166,8 @@ All notable changes to **Dreadcast** will be documented in this file.
 - **Settings → Gameplay:** **Save** writes `settings.cfg` (mouse sensitivity + FPS toggle); **Reset** restores default `GameSettings`. Settings load from disk when the game starts (`ResourceManager` constructor).
 - **Barbed Tunic** armor (`barbed_tunic` map kind): **Blighted** rarity; **+0.3 HP/s** and **10%** incoming damage reflected instantly to the attacker (projectiles track source entity; hellhound melee reflects to self). Icon: `assets/textures/items/barbed_tunic_icon.png`.
 - **Vial of Cordial Manic** (`vial_cordial_manic`): **Lucid** rarity (stack **3**); **7s** effect — **2×** move speed, **invulnerability** vs enemies, **no HP regen** (class + gear + heal-over-time blocked), linear **40% max HP** self-drain; unusable below **40%** current HP (**red X** on HUD + inventory icon). HUD status icon with timer. Icon: `assets/textures/items/vial_cordial_manic_icon.png`.
-- **`ecs::ManicEffect`** player component; **`Projectile::source`** for reflect attribution.
-- **`GameCamera::syncFollowFromCamera()`** for editor grip / direct target edits.
+- `**ecs::ManicEffect`** player component; `**Projectile::source`** for reflect attribution.
+- `**GameCamera::syncFollowFromCamera()**` for editor grip / direct target edits.
 
 ### Changed
 
@@ -150,7 +175,7 @@ All notable changes to **Dreadcast** will be documented in this file.
 - **Inventory slots:** Rarity-colored **tint** fills slot behind centered **7:5** icons (equippable + consumable colors per plan).
 - **Vial of Pure Blood:** **Clouded**; using again while HOT is active **refreshes** the effect; brief **white flash** on the HOT HUD icon.
 - **Editor:** Wider **UI hit rect** blocks world placement when clicking dropdowns; **Enemy** and **Item** pickers are **dropdowns** (items: Iron Armor, Pure Blood, Cordial Manic, Barbed Tunic). **Middle-mouse** pan updates the camera target **directly** (no lerp drift).
-- **`ItemData`:** `hpRegenBonus`, `damageReflectPercent`; **`InventoryState::totalEquippedHpRegenBonus`**, **`totalEquippedDamageReflect`**.
+- `**ItemData`:** `hpRegenBonus`, `damageReflectPercent`; `**InventoryState::totalEquippedHpRegenBonus`**, `**totalEquippedDamageReflect`**.
 - **Passive HP regen HUD** shows class + equipment total (hidden during Cordial Manic).
 
 ### Fixed
@@ -162,9 +187,9 @@ All notable changes to **Dreadcast** will be documented in this file.
 ### Added
 
 - **High-res item icons:** Iron armor and vial of pure blood use new **PNG** art (`assets/textures/items/*.png`, 7:5, source resolution 1152×823).
-- **`game/item_factory.hpp`:** Shared `makeItemFromMapKind()` for casket loot, map spawns, and editor-defined drops (superseded in v0.11.0 by **`game_data.hpp`** + **`assets/data/items.json`**).
-- **`game/item_rarity.hpp`:** Rarity tiers (**Common** … **Legendary**, **Special**), **gear** style names (Tarnished … Abyssal), **vial** style names (Clouded … Anomalous `[Vial]`), colors, and **`rarityLine()`** for UI. **`ItemData::rarity`** on items.
-- **Map item spawns:** `.map` files support **`ITEM x y kind`** lines (`kind` is `iron_armor` or `vial_pure_blood`). Gameplay spawns matching **ground pickups** at load (items are added to the pool and dropped in world space).
+- `**game/item_factory.hpp`:** Shared `makeItemFromMapKind()` for casket loot, map spawns, and editor-defined drops (superseded in v0.11.0 by `**game_data.hpp`** + `**assets/data/items.json`**).
+- `**game/item_rarity.hpp`:** Rarity tiers (**Common** … **Legendary**, **Special**), **gear** style names (Tarnished … Abyssal), **vial** style names (Clouded … Anomalous `[Vial]`), colors, and `**rarityLine()`** for UI. `**ItemData::rarity`** on items.
+- **Map item spawns:** `.map` files support `**ITEM x y kind`** lines (`kind` is `iron_armor` or `vial_pure_blood`). Gameplay spawns matching **ground pickups** at load (items are added to the pool and dropped in world space).
 - **Editor — place items:** New **Item** tool with **Item: Armor / Item: Vial** type toggle (same pattern as enemies). Item pickups render in the world view; select, drag, **Del**, **Ctrl+D**, **Ctrl+C / Ctrl+V** work like other entities. Status line lists **Items** count.
 - **Inventory — Shift+click:** **Shift+left-click** on **bag** slots **equips** gear or consumables (consumables only if a consumable slot is free). **Shift+left-click** on **equipped gear** or **consumable bar** **unequips** to the bag **only when at least one bag slot is empty** (otherwise no-op). Consumables from bag do not steal a full consumable bar (no replace when both slots full).
 - **Consumable stack count:** Stack size is drawn in the **lower-right** of **consumable** inventory slots (stackable items).
@@ -179,7 +204,7 @@ All notable changes to **Dreadcast** will be documented in this file.
 - **Item copy:** Iron Armor and Vial of Pure Blood use **Common** rarity and updated **descriptions** (Tarnished / Clouded flavor + stats).
 - **Inventory drag:** **Item icon** follows the cursor (shadow + frame), not text.
 - **HUD consumable bar:** **7:5** icon fit in the compact slots.
-- **Gameplay:** `spawnWorld()` resets **inventory** and applies map **ITEM** spawns; casket loot uses **`makeItemFromMapKind()`**.
+- **Gameplay:** `spawnWorld()` resets **inventory** and applies map **ITEM** spawns; casket loot uses `**makeItemFromMapKind()`**.
 
 ## v0.7.0 — 2026-04-01
 
@@ -251,8 +276,8 @@ All notable changes to **Dreadcast** will be documented in this file.
 
 ### Changed
 
-- **Vial rename + behavior:** `Vile of Pure Blood` renamed to **`Vial of Pure Blood`** and treated as a true consumable (not armor).
-- **Consumable keybinds:** Consumable usage moved from `1 / 2` to **`C / V`**.
+- **Vial rename + behavior:** `Vile of Pure Blood` renamed to `**Vial of Pure Blood`** and treated as a true consumable (not armor).
+- **Consumable keybinds:** Consumable usage moved from `1 / 2` to `**C / V`**.
 - **Menu/UI:** Main menu class name no longer overlaps its portrait; HUD portrait and HP/MP bars are bigger.
 - **Loot UX:** Old Casket loot drops are spawned in the direction away from the player’s opening position, not on top of the casket.
 - **Font quality:** UI text rendering improved (larger base font load + mipmaps/trilinear filtering) to reduce jaggies at small sizes.
@@ -397,3 +422,4 @@ All notable changes to **Dreadcast** will be documented in this file.
 ### Fixed
 
 - **Build:** `menu_scene.cpp` and `gameplay_scene.cpp` now include `core/input.hpp` so `InputManager` is a complete type when calling `isKeyPressed` (fixes incomplete-type errors with strict toolchains, e.g. Clang).
+

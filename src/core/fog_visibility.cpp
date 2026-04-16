@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "config.hpp"
+#include "core/poly_helpers.hpp"
 #include "ecs/components.hpp"
 
 namespace dreadcast {
@@ -76,6 +77,7 @@ void buildVisibilityPolygonWorld(Vector2 playerWorld, entt::registry &registry, 
 
     const float pi2 = PI * 2.0F;
     const auto walls = registry.view<ecs::Wall, ecs::Transform>();
+    const auto polys = registry.view<ecs::SolidPolygon, ecs::Transform>();
 
     for (int i = 0; i < N; ++i) {
         const float a = (static_cast<float>(i) / static_cast<float>(N)) * pi2;
@@ -104,6 +106,18 @@ void buildVisibilityPolygonWorld(Vector2 playerWorld, entt::registry &registry, 
             const float tHit = rayAabb2D(playerWorld, dir, maxRadius, rect);
             if (tHit < dist) {
                 dist = tHit;
+            }
+        }
+
+        for (const auto pe : polys) {
+            const auto &poly = registry.get<ecs::SolidPolygon>(pe);
+            if (poly.vertsWorld.size() < 3) {
+                continue;
+            }
+            const float tPoly =
+                rayDistanceToPolygonEdges(playerWorld, dir, dist, poly.vertsWorld);
+            if (tPoly < dist) {
+                dist = tPoly;
             }
         }
 

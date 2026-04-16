@@ -24,6 +24,8 @@ class SettingsScene final : public Scene {
     ui::Button fpsCounterToggleButton_{};
     ui::Button manaCostToggleButton_{};
     ui::Button damageNumbersToggleButton_{};
+    ui::Button reloadCursorToggleButton_{};
+    ui::Button separateWhenFullToggleButton_{};
     ui::Button resetButton_{};
 
     bool draggingMouseSensSlider_{false};

@@ -6,6 +6,8 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 #include <raylib.h>
 #include <rlgl.h>
@@ -449,6 +451,20 @@ void GameplayScene::spawnWorld() {
     if (loaded.loadFromFile("assets/maps/default.map")) {
         map = loaded;
     }
+    loadedMap_ = map;
+    fullMapOpen_ = false;
+    anvilOpen_ = false;
+    activeAnvil_ = entt::null;
+    anvilTab_ = 0;
+    forgeSlots_.fill(-1);
+    disassembleInputIndex_ = -1;
+    disassembleOutputPool_.fill(-1);
+    disassembleOutputCount_ = 0;
+    anvilBenchDragKind_ = AnvilBenchDragKind::None;
+    anvilBenchForgeSlot_ = -1;
+    anvilBenchDisOutSlot_ = -1;
+    anvilBenchDragPoolIdx_ = -1;
+    hellhoundPrevAgitated_.clear();
 
     const int classIdx = std::clamp(selectedClass_, 0, std::max(0, characterCount() - 1));
     const CharacterClass &cls = characterAt(classIdx);
@@ -483,9 +499,27 @@ void GameplayScene::spawnWorld() {
                                   cls.levelMeleeDamageGain});
     registry_.emplace<ecs::Facing>(player_, ecs::Facing{});
     registry_.emplace<ecs::Player>(player_);
+    registry_.emplace<ecs::ChamberState>(player_, ecs::ChamberState{});
 
     spawnWalls(map);
     spawnLavas(map);
+
+    for (const SolidShapeData &sd : map.solidShapes) {
+        if (sd.verts.size() < 3) {
+            continue;
+        }
+        const auto poly = registry_.create();
+        registry_.emplace<ecs::Transform>(poly, ecs::Transform{{0.0F, 0.0F}, 0.0F});
+        registry_.emplace<ecs::SolidPolygon>(poly, ecs::SolidPolygon{sd.verts});
+        registry_.emplace<ecs::Sprite>(poly, ecs::Sprite{{48, 44, 38, 255}, 2.0F, 2.0F});
+    }
+    for (const AnvilData &an : map.anvils) {
+        const auto anv = registry_.create();
+        registry_.emplace<ecs::Transform>(anv, ecs::Transform{{an.cx, an.cy}, 0.0F});
+        registry_.emplace<ecs::Velocity>(anv, ecs::Velocity{});
+        registry_.emplace<ecs::Sprite>(anv, ecs::Sprite{{140, 110, 80, 255}, 52.0F, 36.0F});
+        registry_.emplace<ecs::Interactable>(anv, ecs::Interactable{"Anvil", false});
+    }
 
     for (const EnemySpawnData &p : map.enemies) {
         const auto e = registry_.create();
@@ -522,7 +556,8 @@ void GameplayScene::spawnWorld() {
 
     if (map.hasCasket) {
         const auto casket = registry_.create();
-        registry_.emplace<ecs::Transform>(casket, ecs::Transform{map.casketPos, 0.0F});
+        registry_.emplace<ecs::Transform>(
+            casket, ecs::Transform{{map.casket.cx, map.casket.cy}, 0.0F});
         registry_.emplace<ecs::Velocity>(casket, ecs::Velocity{});
         registry_.emplace<ecs::Sprite>(casket, ecs::Sprite{{90, 70, 55, 255}, 56.0F, 40.0F});
         registry_.emplace<ecs::Interactable>(casket, ecs::Interactable{"Old Casket", false});
@@ -993,17 +1028,43 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
             inventoryUi_.toggle();
             if (wasOpen && !inventoryUi_.isOpen()) {
                 aimScreenPos_ = input.mousePosition();
+                if (anvilOpen_) {
+                    resetAnvilWorkbench();
+                    anvilOpen_ = false;
+                    activeAnvil_ = entt::null;
+                    inventoryUi_.setPanelLayoutShift(0.0F);
+                }
             }
         }
     }
 
+    inventoryUi_.setPanelLayoutShift(anvilOpen_ ? 400.0F : 0.0F);
+
     if (inventoryUi_.isOpen()) {
         if (input.isKeyPressed(KEY_ESCAPE)) {
+            if (anvilOpen_) {
+                resetAnvilWorkbench();
+                anvilOpen_ = false;
+                activeAnvil_ = entt::null;
+                inventoryUi_.setPanelLayoutShift(0.0F);
+            }
             inventoryUi_.setOpen(false);
             aimScreenPos_ = input.mousePosition();
         } else {
-            const ui::InventoryAction invAction = inventoryUi_.update(input, inventory_);
-            if (invAction.type == ui::InventoryAction::Drop) {
+            const ui::AnvilUiLayout anvilLayout =
+                anvilOpen_ ? buildAnvilUiLayout() : ui::AnvilUiLayout{};
+            if (anvilOpen_) {
+                tickAnvilUi(input, resources, anvilLayout);
+            }
+            const ui::InventoryAction invAction = inventoryUi_.update(
+                input, inventory_, resources.settings().separateDropsWhenFull,
+                anvilOpen_ ? &anvilLayout : nullptr);
+            if (invAction.type == ui::InventoryAction::AnvilForgePlace ||
+                invAction.type == ui::InventoryAction::AnvilDisassembleInputPlace) {
+                handleInventoryAnvilAction(invAction);
+            } else if (invAction.type == ui::InventoryAction::Drop) {
+                spawnItemPickupAtPlayer(invAction.itemIndex);
+            } else if (invAction.type == ui::InventoryAction::SeparateDropWorld) {
                 spawnItemPickupAtPlayer(invAction.itemIndex);
             } else if (invAction.type == ui::InventoryAction::Use) {
                 if (invAction.useConsumableSlot >= 0) {
@@ -1062,7 +1123,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         aimScreenPos_ = input.mousePosition();
         aimScreenInit_ = true;
     }
-    if (!paused_ && !inventoryUi_.isOpen() && !aimSnappedAfterPauseEsc) {
+    if (!paused_ && !inventoryUi_.isOpen() && !fullMapOpen_ && !aimSnappedAfterPauseEsc) {
         const Vector2 d = input.mouseDelta();
         aimScreenPos_.x = std::clamp(aimScreenPos_.x + d.x * aimMouseSensitivity_, 0.0F,
                                      static_cast<float>(config::WINDOW_WIDTH));
@@ -1071,15 +1132,26 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
     }
 
     const bool invOpen = inventoryUi_.isOpen();
-    if (!invOpen) {
+    const bool worldBlocked = invOpen || fullMapOpen_;
+
+    if (!paused_ && !invOpen && input.isKeyPressed(KEY_M)) {
+        fullMapOpen_ = !fullMapOpen_;
+    }
+    if (fullMapOpen_ && input.isKeyPressed(KEY_ESCAPE)) {
+        fullMapOpen_ = false;
+    }
+
+    if (!worldBlocked) {
         ecs::input_system(registry_, input, camera_.camera(), aimScreenPos_);
         if (ecs::combat_player_ranged(registry_, input, camera_.camera(), player_, noManaFlashTimer_,
                                       aimScreenPos_)) {
-            Sound gun = resources.getSound("assets/sounds/gun_shot.wav");
-            if (IsSoundValid(gun)) {
-                const float p = 0.85F + static_cast<float>(GetRandomValue(0, 30)) / 100.0F;
-                SetSoundPitch(gun, p);
-                PlaySound(gun);
+            if (!registry_.all_of<ecs::LeadFeverEffect>(player_)) {
+                Sound gun = resources.getSound("assets/sounds/gun_shot.wav");
+                if (IsSoundValid(gun)) {
+                    const float p = 0.85F + static_cast<float>(GetRandomValue(0, 30)) / 100.0F;
+                    SetSoundPitch(gun, p);
+                    PlaySound(gun);
+                }
             }
         }
     } else if (registry_.valid(player_) && registry_.all_of<ecs::Velocity>(player_)) {
@@ -1099,8 +1171,9 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         tickAbilityCooldowns(config::FIXED_DT);
         tickLeadFeverEffect(config::FIXED_DT);
         tickSnareDash(config::FIXED_DT);
-        tickSlugAim(config::FIXED_DT);
-        if (!invOpen) {
+        tickSlugAim(config::FIXED_DT, resources);
+        tickChamberState(config::FIXED_DT);
+        if (!worldBlocked) {
             ecs::combat_player_melee(registry_, input, player_, config::FIXED_DT);
         } else if (registry_.valid(player_) && registry_.all_of<ecs::MeleeAttacker>(player_)) {
             auto &melee = registry_.get<ecs::MeleeAttacker>(player_);
@@ -1110,6 +1183,24 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
             melee.hitAppliedThisSwing = false;
         }
         ecs::enemy_ai_system(registry_, config::FIXED_DT, player_, &inventory_);
+
+        for (const auto e : registry_.view<ecs::Enemy, ecs::EnemyAI, ecs::Agitation>()) {
+            if (registry_.get<ecs::EnemyAI>(e).type != ecs::EnemyType::Hellhound) {
+                continue;
+            }
+            const bool now = registry_.get<ecs::Agitation>(e).agitated;
+            bool &prev = hellhoundPrevAgitated_[e];
+            if (now && !prev) {
+                Sound ag = resources.getSound("assets/sounds/hellhound_agro.wav");
+                if (IsSoundValid(ag)) {
+                    const float p = 0.85F + static_cast<float>(GetRandomValue(0, 30)) / 100.0F;
+                    SetSoundPitch(ag, p);
+                    PlaySound(ag);
+                }
+            }
+            prev = now;
+        }
+
         ecs::movement_system(registry_, config::FIXED_DT);
         ecs::wall_resolve_collisions(registry_);
         ecs::unit_resolve_collisions(registry_);
@@ -1189,7 +1280,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
             if (hurtGruntCooldown_ <= 0.001F && characterAt(cix).id == "undead_hunter") {
                 Sound grunt = resources.getSound("assets/sounds/undead_hunter_hurt.wav");
                 if (IsSoundValid(grunt)) {
-                    SetSoundPitch(grunt, 0.88F + static_cast<float>(GetRandomValue(0, 24)) / 100.0F);
+                    SetSoundPitch(grunt, 1.0F);
                     PlaySound(grunt);
                 }
                 hurtGruntCooldown_ = 20.0F;
@@ -1198,7 +1289,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         prevPlayerHp_ = cur;
     }
 
-    if (!invOpen && !paused_) {
+    if (!worldBlocked && !paused_) {
         if (input.isKeyPressed(KEY_C)) {
             tryUseConsumableSlot(0);
         }
@@ -1216,7 +1307,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         }
     }
 
-    if (!invOpen) {
+    if (!worldBlocked) {
         if (registry_.valid(player_) && registry_.all_of<ecs::Transform>(player_)) {
             const Vector2 ppos = registry_.get<ecs::Transform>(player_).position;
             const Vector2 wm = worldMouseFromScreen(aimScreenPos_);
@@ -1236,8 +1327,6 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
                 auto &inter = registry_.get<ecs::Interactable>(hoveredInteract_);
                 if (!inter.opened && inter.name == "Old Casket") {
                     inter.opened = true;
-                    const int armorIdx = inventory_.addItem(makeItemFromMapKind("iron_armor"));
-                    const int vileIdx = inventory_.addItem(makeItemFromMapKind("vial_pure_blood"));
 
                     const auto &ct = registry_.get<ecs::Transform>(hoveredInteract_);
                     const auto &casketSpr = registry_.get<ecs::Sprite>(hoveredInteract_);
@@ -1254,14 +1343,32 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
 
                     const float half = std::max(casketSpr.width, casketSpr.height) * 0.5F;
                     const float baseDist = half + 12.0F;
-                    const float spread = 12.0F;
+                    const float spread = 14.0F;
 
-                    const Vector2 dropA = {ct.position.x + dir.x * baseDist + perp.x * spread,
-                                             ct.position.y + dir.y * baseDist + perp.y * spread};
-                    const Vector2 dropB = {ct.position.x + dir.x * baseDist - perp.x * spread,
-                                             ct.position.y + dir.y * baseDist - perp.y * spread};
-                    spawnItemPickupAtWorld(dropA, armorIdx);
-                    spawnItemPickupAtWorld(dropB, vileIdx);
+                    int dropIdx = 0;
+                    for (const std::string &kind : loadedMap_.casket.itemSlots) {
+                        if (kind.empty() || kind == "-") {
+                            continue;
+                        }
+                        ItemData it = makeItemFromMapKind(kind);
+                        if (it.name.empty()) {
+                            continue;
+                        }
+                        const int idx = inventory_.addItem(std::move(it));
+                        const float ang = static_cast<float>(dropIdx) * 0.85F;
+                        const Vector2 drop = {
+                            ct.position.x + dir.x * baseDist + perp.x * spread * std::cosf(ang) +
+                                static_cast<float>(dropIdx) * 6.0F * dir.x,
+                            ct.position.y + dir.y * baseDist + perp.y * spread * std::cosf(ang) +
+                                static_cast<float>(dropIdx) * 6.0F * dir.y};
+                        spawnItemPickupAtWorld(drop, idx);
+                        ++dropIdx;
+                    }
+                } else if (inter.name == "Anvil") {
+                    anvilOpen_ = true;
+                    activeAnvil_ = hoveredInteract_;
+                    inventoryUi_.setOpen(true);
+                    inventoryUi_.setPanelLayoutShift(400.0F);
                 }
             }
 
@@ -1336,6 +1443,13 @@ void GameplayScene::draw(ResourceManager &resources) {
     }
     inventoryUi_.draw(resources.uiFont(), resources, w, h, inventory_, hpRatioDraw,
                       rscdRatio, rscdSeconds);
+    if (anvilOpen_) {
+        drawAnvilUi(resources, buildAnvilUiLayout());
+    }
+
+    if (fullMapOpen_) {
+        drawMinimapOverlay(true, resources);
+    }
 
     drawLootProximityPrompt(resources);
 
@@ -1504,11 +1618,11 @@ void GameplayScene::drawFogDebugOverlay(const Font &font) {
 }
 
 void GameplayScene::drawCursor(ResourceManager &resources) {
-    const Vector2 m = (!paused_ && !gameOver_ && !inventoryUi_.isOpen() && aimScreenInit_)
-                          ? aimScreenPos_
-                          : GetMousePosition();
-    if (gameOver_ || paused_ || inventoryUi_.isOpen()) {
-        drawCustomCursor(resources, CursorKind::Default, m);
+    const bool uiBlocksAim =
+        paused_ || gameOver_ || inventoryUi_.isOpen() || fullMapOpen_ || !aimScreenInit_;
+    const Vector2 m = (!uiBlocksAim) ? aimScreenPos_ : GetMousePosition();
+    if (gameOver_ || paused_ || inventoryUi_.isOpen() || fullMapOpen_) {
+        drawCustomCursor(resources, CursorKind::Default, GetMousePosition());
         return;
     }
     if (hoveringHudElement_) {
@@ -1520,6 +1634,18 @@ void GameplayScene::drawCursor(ResourceManager &resources) {
         return;
     }
     drawCustomCursor(resources, CursorKind::Aim, m);
+    if (registry_.valid(player_) && registry_.all_of<ecs::ChamberState>(player_) &&
+        resources.settings().showReloadOnCursor) {
+        const auto &ch = registry_.get<ecs::ChamberState>(player_);
+        if (ch.isReloading && ch.reloadDuration > 1.0e-4F) {
+            const float t =
+                std::clamp(ch.reloadTimer / ch.reloadDuration, 0.0F, 1.0F);
+            const float rOuter = 28.0F;
+            const float rInner = rOuter - 5.0F;
+            DrawRing(m, rInner, rOuter, -90.0F, -90.0F + 360.0F * t, 40,
+                     Color{220, 190, 120, 235});
+        }
+    }
 }
 
 void GameplayScene::drawFogOfWarLegacy() {
@@ -1683,7 +1809,7 @@ void GameplayScene::tickSnareDash(float fixedDt) {
     }
 }
 
-void GameplayScene::tickSlugAim(float fixedDt) {
+void GameplayScene::tickSlugAim(float fixedDt, ResourceManager &resources) {
     if (!registry_.valid(player_) || !registry_.all_of<ecs::SlugAimState>(player_)) {
         return;
     }
@@ -1693,7 +1819,12 @@ void GameplayScene::tickSlugAim(float fixedDt) {
     if (aim.elapsed >= aim.aimDuration - 1.0e-4F) {
         const Vector2 d = aim.aimDirection;
         registry_.remove<ecs::SlugAimState>(player_);
-        fireCalamitySlug(d);
+        fireCalamitySlug(undeadHunterAbilities().abilities[2], d);
+        Sound slugSnd = resources.getSound("assets/sounds/calamity_slug_fire.wav");
+        if (IsSoundValid(slugSnd)) {
+            SetSoundPitch(slugSnd, 1.0F);
+            PlaySound(slugSnd);
+        }
     }
 }
 
@@ -1713,7 +1844,7 @@ void GameplayScene::tickStunnedEnemies(float fixedDt) {
     }
 }
 
-void GameplayScene::spawnSnareProjectile(const Vector2 &dirWorld) {
+void GameplayScene::spawnSnareProjectile(const AbilityDef &snareDef, const Vector2 &dirWorld) {
     if (!registry_.valid(player_) || !registry_.all_of<ecs::Transform, ecs::Sprite>(player_)) {
         return;
     }
@@ -1726,21 +1857,25 @@ void GameplayScene::spawnSnareProjectile(const Vector2 &dirWorld) {
     const float halfDiag =
         std::sqrt(ps.width * ps.width + ps.height * ps.height) * 0.5F;
     const float spawnDist = halfDiag + config::PROJECTILE_RADIUS + 2.0F;
+    const float throwSpeed = std::max(1.0F, snareDef.projectileSpeed);
+    const float throwRange = std::max(1.0F, snareDef.projectileRange);
+    const float pullRadius = std::max(1.0F, snareDef.pullRadius);
+    const float stunDuration = std::max(0.0F, snareDef.stunDuration);
     const auto proj = registry_.create();
     registry_.emplace<ecs::Transform>(
         proj, ecs::Transform{{pt.position.x + d.x * spawnDist, pt.position.y + d.y * spawnDist},
                              std::atan2f(d.y, d.x)});
     registry_.emplace<ecs::Velocity>(
-        proj, ecs::Velocity{{d.x * config::SNARE_THROW_SPEED, d.y * config::SNARE_THROW_SPEED}});
+        proj, ecs::Velocity{{d.x * throwSpeed, d.y * throwSpeed}});
     registry_.emplace<ecs::Sprite>(proj, ecs::Sprite{{90, 85, 140, 255}, 14.0F, 14.0F});
     registry_.emplace<ecs::Projectile>(
-        proj, ecs::Projectile{0.0F, config::SNARE_THROW_SPEED, config::SNARE_THROW_RANGE, 0.0F, d,
-                              true, entt::null, false, 0.0F});
+        proj,
+        ecs::Projectile{0.0F, throwSpeed, throwRange, 0.0F, d, true, entt::null, false, 0.0F});
     registry_.emplace<ecs::SnareProjectile>(
-        proj, ecs::SnareProjectile{config::SNARE_PULL_RADIUS, config::SNARE_STUN_DURATION});
+        proj, ecs::SnareProjectile{pullRadius, stunDuration});
 }
 
-void GameplayScene::fireCalamitySlug(const Vector2 &dirWorld) {
+void GameplayScene::fireCalamitySlug(const AbilityDef &slugDef, const Vector2 &dirWorld) {
     if (!registry_.valid(player_) || !registry_.all_of<ecs::Transform, ecs::Sprite>(player_)) {
         return;
     }
@@ -1752,24 +1887,25 @@ void GameplayScene::fireCalamitySlug(const Vector2 &dirWorld) {
     const Vector2 d = len > 0.001F ? Vector2{dx / len, dy / len} : Vector2{1.0F, 0.0F};
     const float halfDiag =
         std::sqrt(ps.width * ps.width + ps.height * ps.height) * 0.5F;
-    const float spawnDist = halfDiag + config::SLUG_SIZE * 0.5F + 4.0F;
+    const float slugSize = std::max(2.0F, slugDef.projectileSize);
+    const float slugSpeed = std::max(1.0F, slugDef.projectileSpeed);
+    const float slugRange = std::max(1.0F, slugDef.projectileRange);
+    const float slugKnockbackSide = std::max(0.0F, slugDef.knockbackSide);
+    const float spawnDist = halfDiag + slugSize * 0.5F + 4.0F;
     const auto proj = registry_.create();
     registry_.emplace<ecs::Transform>(
         proj, ecs::Transform{{pt.position.x + d.x * spawnDist, pt.position.y + d.y * spawnDist},
                              std::atan2f(d.y, d.x)});
-    registry_.emplace<ecs::Velocity>(
-        proj, ecs::Velocity{{d.x * config::SLUG_SPEED, d.y * config::SLUG_SPEED}});
-    registry_.emplace<ecs::Sprite>(proj, ecs::Sprite{{255, 200, 80, 255}, config::SLUG_SIZE,
-                                                     config::SLUG_SIZE});
-    float slugDmg = config::SLUG_DAMAGE;
+    registry_.emplace<ecs::Velocity>(proj, ecs::Velocity{{d.x * slugSpeed, d.y * slugSpeed}});
+    registry_.emplace<ecs::Sprite>(proj, ecs::Sprite{{255, 200, 80, 255}, slugSize, slugSize});
+    float slugDmg = std::max(0.0F, slugDef.damage);
     if (registry_.valid(player_) && registry_.all_of<ecs::PlayerLevel>(player_)) {
         slugDmg += registry_.get<ecs::PlayerLevel>(player_).rangedDamageBonus;
     }
     registry_.emplace<ecs::Projectile>(
-        proj, ecs::Projectile{slugDmg, config::SLUG_SPEED, config::SLUG_MAX_RANGE, 0.0F, d, true,
-                              entt::null, true, 0.0F});
+        proj, ecs::Projectile{slugDmg, slugSpeed, slugRange, 0.0F, d, true, entt::null, true, 0.0F});
     registry_.emplace<ecs::SlugProjectile>(
-        proj, ecs::SlugProjectile{config::SLUG_KNOCKBACK_SIDE});
+        proj, ecs::SlugProjectile{slugKnockbackSide});
     registry_.emplace<ecs::PierceHitRecord>(proj, ecs::PierceHitRecord{});
 }
 
@@ -1788,8 +1924,8 @@ void GameplayScene::tryUseAbility(int abilityIndex) {
     if (ci != 0) {
         return;
     }
-    const AbilityDef &def =
-        undeadHunterAbilities().abilities[static_cast<size_t>(abilityIndex)];
+    const auto &abilities = undeadHunterAbilities().abilities;
+    const AbilityDef &def = abilities[static_cast<size_t>(abilityIndex)];
     if (abilityCdRem_[static_cast<size_t>(abilityIndex)] > 0.001F) {
         return;
     }
@@ -1802,26 +1938,31 @@ void GameplayScene::tryUseAbility(int abilityIndex) {
     abilityCdRem_[static_cast<size_t>(abilityIndex)] = def.cooldown;
 
     if (abilityIndex == 0) {
+        const float leadDuration = std::max(0.1F, def.effectDuration);
         registry_.emplace_or_replace<ecs::LeadFeverEffect>(
-            player_, ecs::LeadFeverEffect{config::LEAD_FEVER_DURATION, 0.0F});
+            player_, ecs::LeadFeverEffect{leadDuration, 0.0F});
         const std::string icon = def.iconPath;
         pushStatusHud(StatusHudKind::LeadFever, icon, {140, 220, 160, 255});
         return;
     }
     if (abilityIndex == 1) {
+        const AbilityDef &snareDef = abilities[1];
         const Vector2 forward = playerAimDirectionWorld();
-        spawnSnareProjectile(forward);
+        spawnSnareProjectile(snareDef, forward);
         const float len = std::sqrt(forward.x * forward.x + forward.y * forward.y);
         const Vector2 f = len > 0.001F ? Vector2{forward.x / len, forward.y / len}
                                        : Vector2{1.0F, 0.0F};
+        const float dashSpeed = std::max(1.0F, snareDef.dashSpeed);
+        const float dashDistance = std::max(1.0F, snareDef.dashDistance);
         registry_.emplace_or_replace<ecs::SnareDashState>(
-            player_, ecs::SnareDashState{config::SNARE_DASH_SPEED, config::SNARE_DASH_DISTANCE, 0.0F,
-                                         {-f.x, -f.y}});
+            player_, ecs::SnareDashState{dashSpeed, dashDistance, 0.0F, {-f.x, -f.y}});
         return;
     }
+    const AbilityDef &slugDef = abilities[2];
     const Vector2 aimDir = playerAimDirectionWorld();
+    const float aimDuration = std::max(0.05F, slugDef.aimDuration);
     registry_.emplace_or_replace<ecs::SlugAimState>(
-        player_, ecs::SlugAimState{config::SLUG_AIM_DURATION, 0.0F, aimDir});
+        player_, ecs::SlugAimState{aimDuration, 0.0F, aimDir});
 }
 
 void GameplayScene::drawHud(ResourceManager &resources) {
@@ -1858,12 +1999,13 @@ void GameplayScene::drawHud(ResourceManager &resources) {
     /// Grey backing uses the original layout anchor (do not resize or move the panel).
     const float hpBarTopBacking = hudBottomAll - 138.0F;
     const float icon = 28.0F;
-    const int statusIconCount = static_cast<int>(statusHudOrder_.size());
-    const float iconLift = statusIconCount > 0 ? icon + 10.0F : 0.0F;
+    const float chamberStatusY = hpBarTop - icon - 8.0F;
+    drawChamberHudIcon(resources, barX, chamberStatusY, icon);
 
     const float hudPad = 8.0F;
     const float hudLeft = margin;
-    const float hudTop = hpBarTopBacking - hudPad - iconLift;
+    /// Grey backing size does not grow when status icons are shown above the bars.
+    const float hudTop = hpBarTopBacking - hudPad;
     const float hudW = barX + barW + hudPad - hudLeft;
     const float hudH = hudBottomAll + hudPad - hudTop;
     DrawRectangle(static_cast<int>(hudLeft - 4.0F), static_cast<int>(hudTop - 4.0F),
@@ -2115,7 +2257,7 @@ void GameplayScene::drawHud(ResourceManager &resources) {
     const size_t nHud = statusHudOrder_.size();
     for (size_t j = 0; j < nHud; ++j) {
         const ActiveStatusHud &hud = statusHudOrder_[nHud - 1 - j];
-        const float ix = barX + static_cast<float>(j) * (icon + 6.0F);
+        const float ix = barX + static_cast<float>(j) * (icon + 10.0F);
         const float iy = statusY;
         float tRem = 1.0F;
         Color ringCol{255, 220, 180, 255};
@@ -2393,6 +2535,8 @@ void GameplayScene::drawHud(ResourceManager &resources) {
             }
         }
     }
+
+    drawMinimapOverlay(false, resources);
 }
 
 void GameplayScene::drawFlashMessages(ResourceManager &resources) {
@@ -2417,7 +2561,7 @@ void GameplayScene::drawFlashMessages(ResourceManager &resources) {
 }
 
 void GameplayScene::drawLootPickupHighlight([[maybe_unused]] ResourceManager &resources) {
-    if (inventoryUi_.isOpen() || paused_ || gameOver_) {
+    if (inventoryUi_.isOpen() || paused_ || gameOver_ || fullMapOpen_) {
         return;
     }
     if (!registry_.valid(hoveredPickup_) || !registry_.all_of<ecs::ItemPickup, ecs::Transform,
@@ -2436,7 +2580,7 @@ void GameplayScene::drawLootPickupHighlight([[maybe_unused]] ResourceManager &re
 }
 
 void GameplayScene::drawLootProximityPrompt(ResourceManager &resources) {
-    if (inventoryUi_.isOpen() || paused_ || gameOver_) {
+    if (inventoryUi_.isOpen() || paused_ || gameOver_ || fullMapOpen_) {
         return;
     }
     const Font &font = resources.uiFont();
@@ -2532,6 +2676,657 @@ void GameplayScene::drawGameOverScreen(ResourceManager &resources) {
                       ui::theme::BTN_BORDER);
     gameOverMenuButton_.draw(font, 24.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER,
                              RAYWHITE, ui::theme::BTN_BORDER);
+}
+
+void GameplayScene::tickChamberState(float fixedDt) {
+    if (!registry_.valid(player_) || !registry_.all_of<ecs::ChamberState>(player_)) {
+        return;
+    }
+    auto &ch = registry_.get<ecs::ChamberState>(player_);
+    if (ch.isReloading) {
+        ch.reloadTimer += fixedDt;
+        if (ch.reloadTimer >= ch.reloadDuration - 1.0e-4F) {
+            ch.shotsRemaining = ch.maxShots;
+            ch.isReloading = false;
+            ch.reloadTimer = 0.0F;
+            ch.idleTimer = 0.0F;
+        }
+        return;
+    }
+    if (ch.shotsRemaining < ch.maxShots) {
+        ch.idleTimer += fixedDt;
+        if (ch.idleTimer >= ch.idleReloadThreshold - 1.0e-4F) {
+            ch.shotsRemaining = ch.maxShots;
+            ch.idleTimer = 0.0F;
+        }
+    } else {
+        ch.idleTimer = 0.0F;
+    }
+}
+
+void GameplayScene::drawChamberHudIcon(ResourceManager &resources, float barX, float statusY,
+                                        float icon) {
+    if (!registry_.valid(player_) || !registry_.all_of<ecs::ChamberState>(player_)) {
+        return;
+    }
+    const auto &ch = registry_.get<ecs::ChamberState>(player_);
+    const float ix = barX - icon - 14.0F;
+    const float iy = statusY;
+    DrawRectangle(static_cast<int>(ix), static_cast<int>(iy), static_cast<int>(icon),
+                  static_cast<int>(icon), Color{55, 50, 45, 255});
+    DrawRectangleLinesEx({ix, iy, icon, icon}, 3.5F, Color{220, 190, 120, 255});
+    const Font &font = resources.uiFont();
+    char buf[8];
+    std::snprintf(buf, sizeof(buf), "%d", ch.shotsRemaining);
+    const float fs = 18.0F;
+    const Vector2 d = MeasureTextEx(font, buf, fs, 1.0F);
+    DrawTextEx(font, buf, {ix + (icon - d.x) * 0.5F, iy + (icon - d.y) * 0.5F}, fs, 1.0F,
+               RAYWHITE);
+    const Texture2D ph = resources.getTexture("assets/textures/items/vial_raw_spirit_icon.png");
+    if (ph.id != 0) {
+        DrawTexturePro(
+            ph,
+            {0.0F, 0.0F, static_cast<float>(ph.width), static_cast<float>(ph.height)},
+            {ix + 2.0F, iy + 2.0F, icon - 4.0F, icon - 4.0F}, {0.0F, 0.0F}, 0.0F,
+            Fade(WHITE, 0.22F));
+    }
+}
+
+void GameplayScene::drawMinimapOverlay(bool fullScreen, ResourceManager &resources) {
+    (void)resources;
+    float minX = 1.0e9F;
+    float maxX = -1.0e9F;
+    float minY = 1.0e9F;
+    float maxY = -1.0e9F;
+    auto expand = [&](float x, float y) {
+        minX = std::min(minX, x);
+        maxX = std::max(maxX, x);
+        minY = std::min(minY, y);
+        maxY = std::max(maxY, y);
+    };
+    for (const WallData &w : loadedMap_.walls) {
+        expand(w.cx - w.halfW, w.cy - w.halfH);
+        expand(w.cx + w.halfW, w.cy + w.halfH);
+    }
+    for (const LavaData &lv : loadedMap_.lavas) {
+        expand(lv.cx - lv.halfW, lv.cy - lv.halfH);
+        expand(lv.cx + lv.halfW, lv.cy + lv.halfH);
+    }
+    for (const SolidShapeData &sd : loadedMap_.solidShapes) {
+        for (const Vector2 &v : sd.verts) {
+            expand(v.x, v.y);
+        }
+    }
+    if (registry_.valid(player_) && registry_.all_of<ecs::Transform>(player_)) {
+        const Vector2 p = registry_.get<ecs::Transform>(player_).position;
+        expand(p.x, p.y);
+    }
+    if (minX >= maxX || minY >= maxY) {
+        return;
+    }
+    const float pad = 120.0F;
+    minX -= pad;
+    maxX += pad;
+    minY -= pad;
+    maxY += pad;
+    const float worldW = maxX - minX;
+    const float worldH = maxY - minY;
+
+    const int sw = config::WINDOW_WIDTH;
+    const int sh = config::WINDOW_HEIGHT;
+    const float mapPx = fullScreen ? static_cast<float>(sw) * 0.72F : 200.0F;
+    const float mapPy = fullScreen ? static_cast<float>(sh) * 0.72F : 200.0F;
+    const float mapX = fullScreen ? (static_cast<float>(sw) - mapPx) * 0.5F : 16.0F;
+    const float mapY = fullScreen ? (static_cast<float>(sh) - mapPy) * 0.5F : 16.0F;
+
+    if (fullScreen) {
+        DrawRectangle(0, 0, sw, sh, Fade(BLACK, 0.55F));
+    }
+
+    DrawRectangle(static_cast<int>(mapX), static_cast<int>(mapY), static_cast<int>(mapPx),
+                  static_cast<int>(mapPy), Fade({10, 10, 14, 255}, fullScreen ? 0.92F : 0.88F));
+    DrawRectangleLinesEx({mapX, mapY, mapPx, mapPy}, 2.0F, {90, 80, 70, 255});
+
+    auto toMini = [&](Vector2 world) -> Vector2 {
+        const float nx = (world.x - minX) / std::max(1.0F, worldW);
+        const float ny = (world.y - minY) / std::max(1.0F, worldH);
+        return {mapX + nx * mapPx, mapY + ny * mapPy};
+    };
+
+    for (const WallData &w : loadedMap_.walls) {
+        const Vector2 a = toMini({w.cx - w.halfW, w.cy - w.halfH});
+        const Vector2 b = toMini({w.cx + w.halfW, w.cy + w.halfH});
+        const float rw = std::max(2.0F, std::fabs(b.x - a.x));
+        const float rh = std::max(2.0F, std::fabs(b.y - a.y));
+        DrawRectangle(static_cast<int>(std::min(a.x, b.x)), static_cast<int>(std::min(a.y, b.y)),
+                      static_cast<int>(rw), static_cast<int>(rh), {70, 62, 55, 220});
+    }
+    for (const LavaData &lv : loadedMap_.lavas) {
+        const Vector2 a = toMini({lv.cx - lv.halfW, lv.cy - lv.halfH});
+        const Vector2 b = toMini({lv.cx + lv.halfW, lv.cy + lv.halfH});
+        const float rw = std::max(2.0F, std::fabs(b.x - a.x));
+        const float rh = std::max(2.0F, std::fabs(b.y - a.y));
+        DrawRectangle(static_cast<int>(std::min(a.x, b.x)), static_cast<int>(std::min(a.y, b.y)),
+                      static_cast<int>(rw), static_cast<int>(rh), {180, 70, 30, 200});
+    }
+
+    Vector2 fogOrigin{0.0F, 0.0F};
+    float fogRadius = config::FOG_OF_WAR_RADIUS;
+    if (registry_.valid(player_) && registry_.all_of<ecs::Transform>(player_)) {
+        fogOrigin = registry_.get<ecs::Transform>(player_).position;
+        if (registry_.all_of<ecs::PlayerMoveStats>(player_)) {
+            fogRadius = registry_.get<ecs::PlayerMoveStats>(player_).visionRange;
+        }
+    }
+
+    for (const auto e : registry_.view<ecs::Enemy, ecs::Transform>()) {
+        const Vector2 wp = registry_.get<ecs::Transform>(e).position;
+        if (!ecs::visible_to_player(registry_, fogOrigin, wp, fogRadius)) {
+            continue;
+        }
+        const Vector2 m = toMini(wp);
+        DrawCircleV(m, 4.0F, {220, 70, 70, 255});
+    }
+
+    if (loadedMap_.hasCasket) {
+        const Vector2 m = toMini({loadedMap_.casket.cx, loadedMap_.casket.cy});
+        DrawCircleV(m, 5.0F, {160, 120, 80, 255});
+    }
+    for (const AnvilData &an : loadedMap_.anvils) {
+        const Vector2 m = toMini({an.cx, an.cy});
+        DrawRectangle(static_cast<int>(m.x - 4), static_cast<int>(m.y - 4), 8, 8,
+                      {200, 180, 120, 255});
+    }
+
+    if (registry_.valid(player_) && registry_.all_of<ecs::Transform>(player_)) {
+        const Vector2 m = toMini(registry_.get<ecs::Transform>(player_).position);
+        DrawCircleV(m, 5.0F, {120, 200, 255, 255});
+    }
+
+    if (fullScreen) {
+        const Font &font = resources.uiFont();
+        DrawTextEx(font, "Map (M / Esc to close)", {mapX + 8.0F, mapY + 8.0F}, 18.0F, 1.0F,
+                   Fade(RAYWHITE, 0.85F));
+    }
+}
+
+void GameplayScene::resetAnvilWorkbench() {
+    anvilBenchDragKind_ = AnvilBenchDragKind::None;
+    anvilBenchForgeSlot_ = -1;
+    anvilBenchDisOutSlot_ = -1;
+    if (anvilBenchDragPoolIdx_ >= 0) {
+        tryReturnPoolItemToBagOrDrop(anvilBenchDragPoolIdx_);
+        anvilBenchDragPoolIdx_ = -1;
+    }
+    clearDisassembleOutputPool();
+    for (int i = 0; i < static_cast<int>(forgeSlots_.size()); ++i) {
+        const int idx = forgeSlots_[static_cast<size_t>(i)];
+        if (idx < 0) {
+            continue;
+        }
+        const int bag = inventory_.firstEmptyBagSlot();
+        if (bag >= 0) {
+            inventory_.bagSlots[static_cast<size_t>(bag)] = idx;
+        } else {
+            spawnItemPickupAtPlayer(idx);
+        }
+        forgeSlots_[static_cast<size_t>(i)] = -1;
+    }
+    if (disassembleInputIndex_ >= 0 &&
+        disassembleInputIndex_ < static_cast<int>(inventory_.items.size())) {
+        const int idx = disassembleInputIndex_;
+        const int bag = inventory_.firstEmptyBagSlot();
+        if (bag >= 0) {
+            inventory_.bagSlots[static_cast<size_t>(bag)] = idx;
+        } else {
+            spawnItemPickupAtPlayer(idx);
+        }
+    }
+    disassembleInputIndex_ = -1;
+}
+
+bool GameplayScene::tryReturnPoolItemToBagOrDrop(int poolIdx) {
+    if (poolIdx < 0 || poolIdx >= static_cast<int>(inventory_.items.size())) {
+        return false;
+    }
+    const int bag = inventory_.firstEmptyBagSlot();
+    if (bag >= 0) {
+        inventory_.bagSlots[static_cast<size_t>(bag)] = poolIdx;
+        return true;
+    }
+    spawnItemPickupAtPlayer(poolIdx);
+    return true;
+}
+
+void GameplayScene::clearDisassembleOutputPool() {
+    for (int i = 0; i < disassembleOutputCount_; ++i) {
+        const int idx = disassembleOutputPool_[static_cast<size_t>(i)];
+        if (idx >= 0) {
+            tryReturnPoolItemToBagOrDrop(idx);
+        }
+        disassembleOutputPool_[static_cast<size_t>(i)] = -1;
+    }
+    disassembleOutputCount_ = 0;
+}
+
+void GameplayScene::applyAnvilForgeSlotPlace(int slot, int poolIdx) {
+    if (slot < 0 || slot >= static_cast<int>(forgeSlots_.size())) {
+        return;
+    }
+    if (poolIdx < 0 || poolIdx >= static_cast<int>(inventory_.items.size())) {
+        return;
+    }
+    const int prev = forgeSlots_[static_cast<size_t>(slot)];
+    if (prev >= 0 && prev != poolIdx) {
+        tryReturnPoolItemToBagOrDrop(prev);
+    }
+    forgeSlots_[static_cast<size_t>(slot)] = poolIdx;
+}
+
+void GameplayScene::handleInventoryAnvilAction(const ui::InventoryAction &action) {
+    if (action.type == ui::InventoryAction::AnvilForgePlace) {
+        applyAnvilForgeSlotPlace(action.anvilSlot, action.itemIndex);
+    } else if (action.type == ui::InventoryAction::AnvilDisassembleInputPlace) {
+        if (disassembleInputIndex_ >= 0 &&
+            disassembleInputIndex_ < static_cast<int>(inventory_.items.size())) {
+            tryReturnPoolItemToBagOrDrop(disassembleInputIndex_);
+        }
+        disassembleInputIndex_ = action.itemIndex;
+        clearDisassembleOutputPool();
+    }
+}
+
+void GameplayScene::commitDisassembleRecipe() {
+    const auto &drecipes = disassembleRecipes();
+    if (drecipes.empty() || disassembleInputIndex_ < 0 ||
+        disassembleInputIndex_ >= static_cast<int>(inventory_.items.size())) {
+        return;
+    }
+    if (inventory_.items[static_cast<size_t>(disassembleInputIndex_)].catalogId != drecipes[0].sourceId) {
+        return;
+    }
+    clearDisassembleOutputPool();
+    const int stack =
+        inventory_.items[static_cast<size_t>(disassembleInputIndex_)].stackCount;
+    const int inPool = disassembleInputIndex_;
+    inventory_.removeItemAtIndex(inPool);
+    disassembleInputIndex_ = -1;
+    disassembleOutputCount_ = 0;
+    for (const CraftIngredient &outg : drecipes[0].outputs) {
+        for (int k = 0; k < outg.count * stack; ++k) {
+            ItemData piece = makeItemFromMapKind(outg.itemId);
+            if (piece.name.empty()) {
+                continue;
+            }
+            piece.stackCount = 1;
+            const int ni = inventory_.addItem(std::move(piece));
+            if (disassembleOutputCount_ < static_cast<int>(disassembleOutputPool_.size())) {
+                disassembleOutputPool_[static_cast<size_t>(disassembleOutputCount_)] = ni;
+                ++disassembleOutputCount_;
+            } else {
+                spawnItemPickupAtPlayer(ni);
+            }
+        }
+    }
+}
+
+ui::AnvilUiLayout GameplayScene::buildAnvilUiLayout() const {
+    ui::AnvilUiLayout L{};
+    if (!anvilOpen_) {
+        return L;
+    }
+    L.active = true;
+    L.forgeTab = anvilTab_ == 0;
+    constexpr float panelX = 40.0F;
+    constexpr float panelY = 80.0F;
+    constexpr float panelW = 300.0F;
+    constexpr float panelH = 520.0F;
+    L.panelBounds = {panelX, panelY, panelW, panelH};
+    const float tabH = 36.0F;
+    const float tabY = panelY + 44.0F;
+    L.tabForgeRect = {panelX + 8.0F, tabY, panelW * 0.5F - 12.0F, tabH};
+    L.tabDisRect = {panelX + panelW * 0.5F + 4.0F, tabY, panelW * 0.5F - 12.0F, tabH};
+    const float contentY = tabY + tabH + 16.0F;
+    if (L.forgeTab) {
+        const auto &recipes = forgeRecipes();
+        if (!recipes.empty()) {
+            const size_t nIn = recipes[0].inputs.size();
+            L.forgeInputCount = static_cast<int>(std::min<size_t>(nIn, L.forgeInputRects.size()));
+            const float gap = 10.0F;
+            const float innerW = panelW - 32.0F;
+            const float slotW =
+                L.forgeInputCount > 0 ? (innerW - gap * static_cast<float>(L.forgeInputCount - 1)) /
+                                            static_cast<float>(L.forgeInputCount)
+                                      : 0.0F;
+            float x = panelX + 16.0F;
+            for (int i = 0; i < L.forgeInputCount; ++i) {
+                L.forgeInputRects[static_cast<size_t>(i)] = {x, contentY, slotW, 78.0F};
+                x += slotW + gap;
+            }
+        }
+        L.forgeOutputRect = {panelX + panelW * 0.5F - 50.0F, contentY + 200.0F, 100.0F, 72.0F};
+    } else {
+        L.disInputRect = {panelX + 40.0F, contentY, panelW - 80.0F, 78.0F};
+        L.disBreakRect = {panelX + 40.0F, contentY + 200.0F, panelW - 80.0F, 40.0F};
+        const float outY = contentY + 260.0F;
+        const float outSlotW = 100.0F;
+        const float outGap = 8.0F;
+        L.disOutputCount = std::min(disassembleOutputCount_, static_cast<int>(L.disOutputRects.size()));
+        float ox = panelX + 20.0F;
+        for (int i = 0; i < L.disOutputCount; ++i) {
+            L.disOutputRects[static_cast<size_t>(i)] = {ox, outY, outSlotW, 72.0F};
+            ox += outSlotW + outGap;
+        }
+    }
+    return L;
+}
+
+namespace {
+
+[[nodiscard]] bool forgeSlotsMatchRecipe(const std::array<int, 6> &forgeSlots,
+                                         const ForgeRecipe &recipe, const InventoryState &inv) {
+    const size_t n = recipe.inputs.size();
+    if (n == 0U || n > forgeSlots.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < n; ++i) {
+        const int idx = forgeSlots[static_cast<size_t>(i)];
+        if (idx < 0 || idx >= static_cast<int>(inv.items.size())) {
+            return false;
+        }
+        const auto &it = inv.items[static_cast<size_t>(idx)];
+        if (it.catalogId != recipe.inputs[i].itemId) {
+            return false;
+        }
+        if (it.stackCount != recipe.inputs[i].count) {
+            return false;
+        }
+    }
+    for (size_t i = n; i < forgeSlots.size(); ++i) {
+        if (forgeSlots[static_cast<size_t>(i)] >= 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+void GameplayScene::tickAnvilUi(InputManager &input, ResourceManager &resources,
+                                const ui::AnvilUiLayout &lay) {
+    (void)resources;
+    if (!anvilOpen_) {
+        return;
+    }
+    const int sw = config::WINDOW_WIDTH;
+    const int sh = config::WINDOW_HEIGHT;
+    const Vector2 mouse = input.mousePosition();
+    const bool click = input.isMouseButtonPressed(MOUSE_BUTTON_LEFT);
+    const bool release = input.isMouseButtonReleased(MOUSE_BUTTON_LEFT);
+    const bool rightClick = input.isMouseButtonPressed(MOUSE_BUTTON_RIGHT);
+
+    auto cancelBenchDrag = [&]() {
+        if (anvilBenchDragKind_ == AnvilBenchDragKind::ForgeSlot && anvilBenchDragPoolIdx_ >= 0 &&
+            anvilBenchForgeSlot_ >= 0 &&
+            anvilBenchForgeSlot_ < static_cast<int>(forgeSlots_.size())) {
+            forgeSlots_[static_cast<size_t>(anvilBenchForgeSlot_)] = anvilBenchDragPoolIdx_;
+        } else if (anvilBenchDragKind_ == AnvilBenchDragKind::DisOut && anvilBenchDragPoolIdx_ >= 0 &&
+                   anvilBenchDisOutSlot_ >= 0 &&
+                   anvilBenchDisOutSlot_ < static_cast<int>(disassembleOutputPool_.size())) {
+            disassembleOutputPool_[static_cast<size_t>(anvilBenchDisOutSlot_)] =
+                anvilBenchDragPoolIdx_;
+        }
+        anvilBenchDragKind_ = AnvilBenchDragKind::None;
+        anvilBenchForgeSlot_ = -1;
+        anvilBenchDisOutSlot_ = -1;
+        anvilBenchDragPoolIdx_ = -1;
+    };
+
+    if (click && lay.active) {
+        if (CheckCollisionPointRec(mouse, lay.tabForgeRect)) {
+            if (anvilTab_ != 0) {
+                cancelBenchDrag();
+                anvilTab_ = 0;
+            }
+        } else if (CheckCollisionPointRec(mouse, lay.tabDisRect)) {
+            if (anvilTab_ != 1) {
+                cancelBenchDrag();
+                anvilTab_ = 1;
+            }
+        }
+    }
+
+    if (rightClick && lay.forgeTab && anvilBenchDragKind_ == AnvilBenchDragKind::None &&
+        !inventoryUi_.isDragging()) {
+        for (int i = 0; i < lay.forgeInputCount; ++i) {
+            const Rectangle r = lay.forgeInputRects[static_cast<size_t>(i)];
+            if (!CheckCollisionPointRec(mouse, r)) {
+                continue;
+            }
+            const int idx = forgeSlots_[static_cast<size_t>(i)];
+            if (idx < 0) {
+                continue;
+            }
+            forgeSlots_[static_cast<size_t>(i)] = -1;
+            tryReturnPoolItemToBagOrDrop(idx);
+            break;
+        }
+    }
+
+    if (release && anvilBenchDragKind_ != AnvilBenchDragKind::None) {
+        const int poolIdx = anvilBenchDragPoolIdx_;
+        if (poolIdx >= 0) {
+            bool cleared = false;
+            const int bagHit = inventoryUi_.hitTestBagSlot(mouse, sw, sh);
+            if (bagHit >= 0 && inventory_.bagSlots[static_cast<size_t>(bagHit)] < 0) {
+                inventory_.bagSlots[static_cast<size_t>(bagHit)] = poolIdx;
+                cleared = true;
+            } else if (anvilBenchDragKind_ == AnvilBenchDragKind::ForgeSlot && lay.forgeTab) {
+                for (int i = 0; i < lay.forgeInputCount; ++i) {
+                    if (CheckCollisionPointRec(mouse, lay.forgeInputRects[static_cast<size_t>(i)])) {
+                        if (forgeSlots_[static_cast<size_t>(i)] < 0) {
+                            forgeSlots_[static_cast<size_t>(i)] = poolIdx;
+                            cleared = true;
+                        }
+                        break;
+                    }
+                }
+            } else if (anvilBenchDragKind_ == AnvilBenchDragKind::DisOut) {
+                for (int i = 0; i < lay.disOutputCount; ++i) {
+                    if (CheckCollisionPointRec(mouse, lay.disOutputRects[static_cast<size_t>(i)])) {
+                        if (disassembleOutputPool_[static_cast<size_t>(i)] < 0) {
+                            disassembleOutputPool_[static_cast<size_t>(i)] = poolIdx;
+                            cleared = true;
+                        }
+                        break;
+                    }
+                }
+            }
+            if (cleared) {
+                anvilBenchDragKind_ = AnvilBenchDragKind::None;
+                anvilBenchForgeSlot_ = -1;
+                anvilBenchDisOutSlot_ = -1;
+                anvilBenchDragPoolIdx_ = -1;
+            } else {
+                cancelBenchDrag();
+            }
+        } else {
+            cancelBenchDrag();
+        }
+    }
+
+    if (click && !inventoryUi_.isDragging() && anvilBenchDragKind_ == AnvilBenchDragKind::None) {
+        if (lay.forgeTab) {
+            bool startedBenchDrag = false;
+            for (int i = 0; i < lay.forgeInputCount; ++i) {
+                const Rectangle r = lay.forgeInputRects[static_cast<size_t>(i)];
+                if (!CheckCollisionPointRec(mouse, r)) {
+                    continue;
+                }
+                const int idx = forgeSlots_[static_cast<size_t>(i)];
+                if (idx < 0) {
+                    continue;
+                }
+                forgeSlots_[static_cast<size_t>(i)] = -1;
+                anvilBenchDragKind_ = AnvilBenchDragKind::ForgeSlot;
+                anvilBenchForgeSlot_ = i;
+                anvilBenchDragPoolIdx_ = idx;
+                startedBenchDrag = true;
+                break;
+            }
+            const auto &recipes = forgeRecipes();
+            if (!startedBenchDrag && !recipes.empty() &&
+                forgeSlotsMatchRecipe(forgeSlots_, recipes[0], inventory_) &&
+                CheckCollisionPointRec(mouse, lay.forgeOutputRect)) {
+                ItemData out = makeItemFromMapKind(recipes[0].outputId);
+                if (!out.name.empty()) {
+                    const size_t nIn = recipes[0].inputs.size();
+                    std::vector<int> removeIdx;
+                    removeIdx.reserve(nIn);
+                    for (size_t k = 0; k < nIn; ++k) {
+                        removeIdx.push_back(forgeSlots_[static_cast<size_t>(k)]);
+                    }
+                    forgeSlots_.fill(-1);
+                    std::sort(removeIdx.begin(), removeIdx.end());
+                    for (auto it = removeIdx.rbegin(); it != removeIdx.rend(); ++it) {
+                        if (*it >= 0 && *it < static_cast<int>(inventory_.items.size())) {
+                            inventory_.removeItemAtIndex(*it);
+                        }
+                    }
+                    const int newIdx = inventory_.addItem(std::move(out));
+                    const int bag = inventory_.firstEmptyBagSlot();
+                    if (bag >= 0) {
+                        inventory_.bagSlots[static_cast<size_t>(bag)] = newIdx;
+                    } else {
+                        spawnItemPickupAtPlayer(newIdx);
+                    }
+                }
+            }
+        } else {
+            if (disassembleInputIndex_ >= 0 &&
+                CheckCollisionPointRec(mouse, lay.disInputRect) &&
+                disassembleInputIndex_ < static_cast<int>(inventory_.items.size())) {
+                const int idx = disassembleInputIndex_;
+                disassembleInputIndex_ = -1;
+                tryReturnPoolItemToBagOrDrop(idx);
+            }
+            if (CheckCollisionPointRec(mouse, lay.disBreakRect)) {
+                commitDisassembleRecipe();
+            }
+            for (int i = 0; i < lay.disOutputCount; ++i) {
+                const Rectangle r = lay.disOutputRects[static_cast<size_t>(i)];
+                if (!CheckCollisionPointRec(mouse, r)) {
+                    continue;
+                }
+                const int idx = disassembleOutputPool_[static_cast<size_t>(i)];
+                if (idx < 0) {
+                    continue;
+                }
+                disassembleOutputPool_[static_cast<size_t>(i)] = -1;
+                anvilBenchDragKind_ = AnvilBenchDragKind::DisOut;
+                anvilBenchDisOutSlot_ = i;
+                anvilBenchDragPoolIdx_ = idx;
+                break;
+            }
+        }
+    }
+}
+
+void GameplayScene::drawAnvilUi(ResourceManager &resources, const ui::AnvilUiLayout &lay) {
+    const Font &font = resources.uiFont();
+    constexpr float panelX = 40.0F;
+    constexpr float panelY = 80.0F;
+    constexpr float panelW = 300.0F;
+    constexpr float panelH = 520.0F;
+    Color panelFill = ui::theme::PANEL_FILL;
+    panelFill.a = 250;
+    DrawRectangle(static_cast<int>(panelX), static_cast<int>(panelY), static_cast<int>(panelW),
+                  static_cast<int>(panelH), panelFill);
+    DrawRectangleLinesEx({panelX, panelY, panelW, panelH}, 2.0F, ui::theme::PANEL_BORDER);
+    DrawTextEx(font, "Anvil", {panelX + 12.0F, panelY + 10.0F}, 26.0F, 1.0F, RAYWHITE);
+
+    DrawRectangleRec(lay.tabForgeRect, anvilTab_ == 0 ? ui::theme::BTN_HOVER : ui::theme::SLOT_FILL);
+    DrawRectangleRec(lay.tabDisRect, anvilTab_ == 1 ? ui::theme::BTN_HOVER : ui::theme::SLOT_FILL);
+    DrawRectangleLinesEx(lay.tabForgeRect, 1.0F, ui::theme::BTN_BORDER);
+    DrawRectangleLinesEx(lay.tabDisRect, 1.0F, ui::theme::BTN_BORDER);
+    DrawTextEx(font, "Forge", {lay.tabForgeRect.x + 18.0F, lay.tabForgeRect.y + 8.0F}, 18.0F, 1.0F,
+               RAYWHITE);
+    DrawTextEx(font, "Disassemble", {lay.tabDisRect.x + 8.0F, lay.tabDisRect.y + 8.0F}, 18.0F, 1.0F,
+               RAYWHITE);
+
+    if (lay.forgeTab) {
+        for (int i = 0; i < lay.forgeInputCount; ++i) {
+            const Rectangle r = lay.forgeInputRects[static_cast<size_t>(i)];
+            DrawRectangleLinesEx(r, 1.5F, ui::theme::SLOT_BORDER);
+            const int idx = forgeSlots_[static_cast<size_t>(i)];
+            if (idx >= 0 && idx < static_cast<int>(inventory_.items.size())) {
+                const bool ghost =
+                    anvilBenchDragKind_ == AnvilBenchDragKind::ForgeSlot && anvilBenchForgeSlot_ == i;
+                ui::InventoryUI::drawItemIcon(inventory_.items[static_cast<size_t>(idx)], resources, r,
+                                                ghost ? Fade(WHITE, 0.35F) : WHITE);
+            }
+        }
+        DrawTextEx(font, "Drag from inventory into inputs. RMB slot: return to bag.",
+                   {panelX + 12.0F, lay.forgeInputRects[0].y + 86.0F}, 13.0F, 1.0F,
+                   ui::theme::LABEL_TEXT);
+
+        const float midX = panelX + panelW * 0.5F;
+        const float arrowY = lay.forgeInputRects[0].y + 110.0F;
+        DrawTriangle({midX, arrowY + 14.0F}, {midX - 10.0F, arrowY}, {midX + 10.0F, arrowY},
+                     ui::theme::LABEL_TEXT);
+
+        DrawRectangleLinesEx(lay.forgeOutputRect, 2.0F, ui::theme::BTN_BORDER);
+        const auto &recipes = forgeRecipes();
+        if (!recipes.empty() && forgeSlotsMatchRecipe(forgeSlots_, recipes[0], inventory_)) {
+            const ItemData pv = makeItemFromMapKind(recipes[0].outputId);
+            ui::InventoryUI::drawItemIcon(pv, resources, lay.forgeOutputRect, WHITE);
+            DrawTextEx(font, "Click output to craft", {panelX + 16.0F, lay.forgeOutputRect.y + 78.0F},
+                       13.0F, 1.0F, ui::theme::MUTED_TEXT);
+        } else {
+            DrawTextEx(font, "Match recipe in inputs", {panelX + 16.0F, lay.forgeOutputRect.y + 28.0F},
+                       14.0F, 1.0F, ui::theme::MUTED_TEXT);
+        }
+    } else {
+        DrawRectangleLinesEx(lay.disInputRect, 1.5F, ui::theme::SLOT_BORDER);
+        if (disassembleInputIndex_ >= 0 &&
+            disassembleInputIndex_ < static_cast<int>(inventory_.items.size())) {
+            ui::InventoryUI::drawItemIcon(
+                inventory_.items[static_cast<size_t>(disassembleInputIndex_)], resources,
+                lay.disInputRect, WHITE);
+        }
+        DrawTextEx(font, "Drag gear here. Click input to return.", {panelX + 12.0F, lay.disInputRect.y + 86.0F},
+                   13.0F, 1.0F, ui::theme::LABEL_TEXT);
+
+        DrawRectangleRec(lay.disBreakRect, ui::theme::BTN_FILL);
+        DrawRectangleLinesEx(lay.disBreakRect, 1.0F, ui::theme::BTN_BORDER);
+        DrawTextEx(font, "Break down", {lay.disBreakRect.x + lay.disBreakRect.width * 0.5F - 52.0F,
+                                        lay.disBreakRect.y + 10.0F},
+                   18.0F, 1.0F, RAYWHITE);
+
+        for (int i = 0; i < lay.disOutputCount; ++i) {
+            const Rectangle r = lay.disOutputRects[static_cast<size_t>(i)];
+            DrawRectangleLinesEx(r, 1.5F, ui::theme::SLOT_BORDER);
+            const int pidx = disassembleOutputPool_[static_cast<size_t>(i)];
+            if (pidx >= 0 && pidx < static_cast<int>(inventory_.items.size())) {
+                const bool ghost = anvilBenchDragKind_ == AnvilBenchDragKind::DisOut &&
+                                   anvilBenchDisOutSlot_ == i;
+                ui::InventoryUI::drawItemIcon(inventory_.items[static_cast<size_t>(pidx)], resources, r,
+                                                ghost ? Fade(WHITE, 0.35F) : WHITE);
+            }
+        }
+        if (disassembleOutputCount_ > 0) {
+            DrawTextEx(font, "Drag outputs to inventory", {panelX + 12.0F, lay.disOutputRects[0].y + 78.0F},
+                       13.0F, 1.0F, ui::theme::MUTED_TEXT);
+        }
+    }
+
+    if (anvilBenchDragKind_ != AnvilBenchDragKind::None && anvilBenchDragPoolIdx_ >= 0 &&
+        anvilBenchDragPoolIdx_ < static_cast<int>(inventory_.items.size())) {
+        const Vector2 m = GetMousePosition();
+        const Rectangle ghost{m.x - 36.0F, m.y - 36.0F, 72.0F, 72.0F};
+        ui::InventoryUI::drawItemIcon(inventory_.items[static_cast<size_t>(anvilBenchDragPoolIdx_)],
+                                      resources, ghost, Fade(WHITE, 0.9F));
+    }
 }
 
 void GameplayScene::drawPauseOverlay(ResourceManager &resources) {

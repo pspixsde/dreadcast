@@ -38,11 +38,11 @@ constexpr float kBagGridLeft = kInvPaddingX + kEquipColumnInnerW + kColumnGap;
 /// Top of slot rows (aligned: armor row = bag row 0).
 constexpr float kSlotGridTopY = 80.0F;
 
-Rectangle makeEquipSlotRect(int screenW, int screenH, int equipIndex) {
+Rectangle makeEquipSlotRect(int screenW, int screenH, int equipIndex, float layoutShiftX) {
     (void)screenW;
     const float panelW = kInvPanelW;
     const float panelH = kInvPanelH;
-    const float px = (static_cast<float>(screenW) - panelW) * 0.5F;
+    const float px = (static_cast<float>(screenW) - panelW) * 0.5F + layoutShiftX;
     const float py = (static_cast<float>(screenH) - panelH) * 0.5F;
     const float colLeft = px + kInvPaddingX;
     const float y0 = py + kSlotGridTopY;
@@ -67,10 +67,11 @@ Rectangle makeEquipSlotRect(int screenW, int screenH, int equipIndex) {
     return {0.0F, 0.0F, 0.0F, 0.0F};
 }
 
-Rectangle makeConsumableSlotRect(int screenW, int screenH, int consumableIndex) {
+Rectangle makeConsumableSlotRect(int screenW, int screenH, int consumableIndex,
+                                  float layoutShiftX) {
     const float panelW = kInvPanelW;
     const float panelH = kInvPanelH;
-    const float px = (static_cast<float>(screenW) - panelW) * 0.5F;
+    const float px = (static_cast<float>(screenW) - panelW) * 0.5F + layoutShiftX;
     const float py = (static_cast<float>(screenH) - panelH) * 0.5F;
     const float colLeft = px + kInvPaddingX;
     const float y0 = py + kSlotGridTopY;
@@ -82,10 +83,10 @@ Rectangle makeConsumableSlotRect(int screenW, int screenH, int consumableIndex) 
     return {x, afterEquip, kConsumableSlotW, kConsumableSlotH};
 }
 
-Rectangle makeBagSlotRect(int screenW, int screenH, int bagIndex) {
+Rectangle makeBagSlotRect(int screenW, int screenH, int bagIndex, float layoutShiftX) {
     const float panelW = kInvPanelW;
     const float panelH = kInvPanelH;
-    const float px = (static_cast<float>(screenW) - panelW) * 0.5F;
+    const float px = (static_cast<float>(screenW) - panelW) * 0.5F + layoutShiftX;
     const float py = (static_cast<float>(screenH) - panelH) * 0.5F;
     const float col0 = px + kBagGridLeft;
     const int row = bagIndex / 3;
@@ -95,47 +96,48 @@ Rectangle makeBagSlotRect(int screenW, int screenH, int bagIndex) {
             kBagSlotH};
 }
 
-Rectangle makeInventoryPanelRect(int screenW, int screenH) {
+Rectangle makeInventoryPanelRect(int screenW, int screenH, float layoutShiftX) {
     const float panelW = kInvPanelW;
     const float panelH = kInvPanelH;
-    const float px = (static_cast<float>(screenW) - panelW) * 0.5F;
+    const float px = (static_cast<float>(screenW) - panelW) * 0.5F + layoutShiftX;
     const float py = (static_cast<float>(screenH) - panelH) * 0.5F;
     return {px, py, panelW, panelH};
 }
 
-Rectangle makeRarityPanelRect(int screenW, int screenH) {
-    const Rectangle inv = makeInventoryPanelRect(screenW, screenH);
+Rectangle makeRarityPanelRect(int screenW, int screenH, float layoutShiftX) {
+    const Rectangle inv = makeInventoryPanelRect(screenW, screenH, layoutShiftX);
     const float w = std::min(620.0F, inv.width - 48.0F);
     const float h = std::min(500.0F, inv.height - 32.0F);
     return {inv.x + (inv.width - w) * 0.5F, inv.y + (inv.height - h) * 0.5F, w, h};
 }
 
-Vector2 infoIconCenter(int screenW, int screenH) {
-    const Rectangle inv = makeInventoryPanelRect(screenW, screenH);
+Vector2 infoIconCenter(int screenW, int screenH, float layoutShiftX) {
+    const Rectangle inv = makeInventoryPanelRect(screenW, screenH, layoutShiftX);
     return {inv.x + inv.width - 30.0F, inv.y + 28.0F};
 }
 
-int hitTestBag(int screenW, int screenH, Vector2 mouse) {
+int hitTestBag(int screenW, int screenH, Vector2 mouse, float layoutShiftX) {
     for (int i = 0; i < dreadcast::BAG_SLOT_COUNT; ++i) {
-        if (CheckCollisionPointRec(mouse, makeBagSlotRect(screenW, screenH, i))) {
+        if (CheckCollisionPointRec(mouse, makeBagSlotRect(screenW, screenH, i, layoutShiftX))) {
             return i;
         }
     }
     return -1;
 }
 
-int hitTestEquip(int screenW, int screenH, Vector2 mouse) {
+int hitTestEquip(int screenW, int screenH, Vector2 mouse, float layoutShiftX) {
     for (int i = 0; i < static_cast<int>(EquipSlot::COUNT); ++i) {
-        if (CheckCollisionPointRec(mouse, makeEquipSlotRect(screenW, screenH, i))) {
+        if (CheckCollisionPointRec(mouse, makeEquipSlotRect(screenW, screenH, i, layoutShiftX))) {
             return i;
         }
     }
     return -1;
 }
 
-int hitTestConsumable(int screenW, int screenH, Vector2 mouse) {
+int hitTestConsumable(int screenW, int screenH, Vector2 mouse, float layoutShiftX) {
     for (int i = 0; i < dreadcast::CONSUMABLE_SLOT_COUNT; ++i) {
-        if (CheckCollisionPointRec(mouse, makeConsumableSlotRect(screenW, screenH, i))) {
+        if (CheckCollisionPointRec(mouse,
+                                    makeConsumableSlotRect(screenW, screenH, i, layoutShiftX))) {
             return i;
         }
     }
@@ -336,7 +338,8 @@ void InventoryUI::swapBagSlots(InventoryState &inv, int a, int b) {
     std::swap(inv.bagSlots[static_cast<size_t>(a)], inv.bagSlots[static_cast<size_t>(b)]);
 }
 
-InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
+InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv,
+                                    bool separateDropsWhenFull, const AnvilUiLayout *anvilLayout) {
     InventoryAction action{};
     if (!open_) {
         dragging_ = false;
@@ -353,9 +356,9 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
     const bool leftRelease = input.isMouseButtonReleased(MOUSE_BUTTON_LEFT);
     const bool rightPress = input.isMouseButtonPressed(MOUSE_BUTTON_RIGHT);
 
-    const Rectangle invPanel = makeInventoryPanelRect(sw, sh);
-    const Rectangle rarityPanel = makeRarityPanelRect(sw, sh);
-    const Vector2 infoCenter = infoIconCenter(sw, sh);
+    const Rectangle invPanel = makeInventoryPanelRect(sw, sh, panelLayoutShiftX_);
+    const Rectangle rarityPanel = makeRarityPanelRect(sw, sh, panelLayoutShiftX_);
+    const Vector2 infoCenter = infoIconCenter(sw, sh, panelLayoutShiftX_);
     const float infoR = 16.0F;
 
     if (leftPress && CheckCollisionPointCircle(mouse, infoCenter, infoR)) {
@@ -477,6 +480,33 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
                 return action;
             }
 
+            if (contextShowSeparate_ && CheckCollisionPointRec(mouse, contextOpt3_)) {
+                const int srcPool = contextItemIndex_;
+                const int bagSlot = contextBagSlot_;
+                if (srcPool >= 0 && srcPool < static_cast<int>(inv.items.size()) && bagSlot >= 0) {
+                    auto &srcIt = inv.items[static_cast<size_t>(srcPool)];
+                    if (srcIt.isStackable && srcIt.stackCount >= 2) {
+                        ItemData one = srcIt;
+                        one.stackCount = 1;
+                        --srcIt.stackCount;
+                        const int newIdx = inv.addItem(std::move(one));
+                        const int empty = inv.firstEmptyBagSlot();
+                        if (empty >= 0) {
+                            inv.bagSlots[static_cast<size_t>(empty)] = newIdx;
+                        } else if (separateDropsWhenFull) {
+                            action.type = InventoryAction::SeparateDropWorld;
+                            action.itemIndex = newIdx;
+                        } else {
+                            // Revert: could not place split stack
+                            inv.items.pop_back();
+                            ++srcIt.stackCount;
+                        }
+                    }
+                }
+                contextOpen_ = false;
+                return action;
+            }
+
             if (!CheckCollisionPointRec(mouse, contextRect_)) {
                 contextOpen_ = false;
             }
@@ -490,7 +520,7 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
     }
 
     if (rightPress && !dragging_) {
-        const int bagHit = hitTestBag(sw, sh, mouse);
+        const int bagHit = hitTestBag(sw, sh, mouse, panelLayoutShiftX_);
         if (bagHit >= 0) {
             const int idx = inv.bagSlots[static_cast<size_t>(bagHit)];
             if (idx >= 0) {
@@ -499,7 +529,12 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
                 const bool isConsumable = idx >= 0 &&
                                            idx < static_cast<int>(inv.items.size()) &&
                                            inv.items[static_cast<size_t>(idx)].isConsumable;
-                const float menuH = rowH * (isConsumable ? 3.0F : 2.0F) + 10.0F;
+                const bool canSeparate =
+                    isConsumable && inv.items[static_cast<size_t>(idx)].isStackable &&
+                    inv.items[static_cast<size_t>(idx)].stackCount >= 2;
+                contextShowSeparate_ = canSeparate;
+                const int menuRows = isConsumable ? (canSeparate ? 4 : 3) : 2;
+                const float menuH = rowH * static_cast<float>(menuRows) + 10.0F;
                 contextRect_ = {mouse.x, mouse.y, menuW, menuH};
                 clampRectToScreen(contextRect_, sw, sh);
                 contextOpt0_ = {contextRect_.x + 4.0F, contextRect_.y + 4.0F,
@@ -507,6 +542,7 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
                 contextOpt1_ = {contextRect_.x + 4.0F, contextRect_.y + 5.0F + rowH,
                                 contextRect_.width - 8.0F, rowH};
                 contextOpt2_ = {0, 0, 0, 0};
+                contextOpt3_ = {0, 0, 0, 0};
                 contextItemIndex_ = idx;
                 contextBagSlot_ = bagHit;
                 contextEquipSlot_ = -1;
@@ -516,13 +552,17 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
                 if (isConsumable) {
                     contextOpt2_ = {contextRect_.x + 4.0F, contextRect_.y + 5.0F + rowH * 2.0F,
                                     contextRect_.width - 8.0F, rowH};
+                    if (canSeparate) {
+                        contextOpt3_ = {contextRect_.x + 4.0F, contextRect_.y + 5.0F + rowH * 3.0F,
+                                        contextRect_.width - 8.0F, rowH};
+                    }
                 }
                 contextOpen_ = true;
             }
             return action;
         }
 
-        const int eqHit = hitTestEquip(sw, sh, mouse);
+        const int eqHit = hitTestEquip(sw, sh, mouse, panelLayoutShiftX_);
         if (eqHit >= 0) {
             const int idx = inv.equipped[static_cast<size_t>(eqHit)];
             if (idx >= 0) {
@@ -546,7 +586,7 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
             }
         }
 
-        const int consHit = hitTestConsumable(sw, sh, mouse);
+        const int consHit = hitTestConsumable(sw, sh, mouse, panelLayoutShiftX_);
         if (consHit >= 0) {
             const int idx = inv.consumableSlots[static_cast<size_t>(consHit)];
             if (idx >= 0) {
@@ -576,7 +616,7 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
     if (leftPress && !dragging_) {
         const bool shiftHeld = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
         if (shiftHeld) {
-            const int eqShift = hitTestEquip(sw, sh, mouse);
+            const int eqShift = hitTestEquip(sw, sh, mouse, panelLayoutShiftX_);
             if (eqShift >= 0) {
                 const int eqIdx = inv.equipped[static_cast<size_t>(eqShift)];
                 if (eqIdx >= 0) {
@@ -584,7 +624,7 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
                 }
                 return action;
             }
-            const int consShift = hitTestConsumable(sw, sh, mouse);
+            const int consShift = hitTestConsumable(sw, sh, mouse, panelLayoutShiftX_);
             if (consShift >= 0) {
                 const int cIdx = inv.consumableSlots[static_cast<size_t>(consShift)];
                 if (cIdx >= 0) {
@@ -592,7 +632,7 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
                 }
                 return action;
             }
-            const int b = hitTestBag(sw, sh, mouse);
+            const int b = hitTestBag(sw, sh, mouse, panelLayoutShiftX_);
             if (b >= 0) {
                 const int idx = inv.bagSlots[static_cast<size_t>(b)];
                 if (idx >= 0 && idx < static_cast<int>(inv.items.size())) {
@@ -605,7 +645,7 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
             }
             return action;
         }
-        const int b = hitTestBag(sw, sh, mouse);
+        const int b = hitTestBag(sw, sh, mouse, panelLayoutShiftX_);
         if (b >= 0) {
             const int idx = inv.bagSlots[static_cast<size_t>(b)];
             if (idx >= 0) {
@@ -615,7 +655,7 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
                 dragSourceEquip_ = -1;
             }
         } else {
-            const int e = hitTestEquip(sw, sh, mouse);
+            const int e = hitTestEquip(sw, sh, mouse, panelLayoutShiftX_);
             if (e >= 0) {
                 const int idx = inv.equipped[static_cast<size_t>(e)];
                 if (idx >= 0) {
@@ -626,7 +666,7 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
                     dragSourceConsumable_ = -1;
                 }
             } else {
-                const int c = hitTestConsumable(sw, sh, mouse);
+                const int c = hitTestConsumable(sw, sh, mouse, panelLayoutShiftX_);
                 if (c >= 0) {
                     const int idx = inv.consumableSlots[static_cast<size_t>(c)];
                     if (idx >= 0) {
@@ -644,11 +684,72 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
 
     if (leftRelease && dragging_) {
         dragging_ = false;
-        const int bagHit = hitTestBag(sw, sh, mouse);
-        const int eqHit = hitTestEquip(sw, sh, mouse);
-        const int consHit = hitTestConsumable(sw, sh, mouse);
+        const int bagHit = hitTestBag(sw, sh, mouse, panelLayoutShiftX_);
+        const int eqHit = hitTestEquip(sw, sh, mouse, panelLayoutShiftX_);
+        const int consHit = hitTestConsumable(sw, sh, mouse, panelLayoutShiftX_);
 
-        const bool outsidePanel = !CheckCollisionPointRec(mouse, invPanel);
+        const bool overAnvilWorkbench =
+            anvilLayout != nullptr && anvilLayout->active && anvilLayout->panelBounds.width > 0.0F &&
+            CheckCollisionPointRec(mouse, anvilLayout->panelBounds);
+        const bool outsidePanel =
+            !CheckCollisionPointRec(mouse, invPanel) && !overAnvilWorkbench;
+
+        if (anvilLayout != nullptr && anvilLayout->active) {
+            if (anvilLayout->forgeTab) {
+                for (int i = 0; i < anvilLayout->forgeInputCount; ++i) {
+                    if (!CheckCollisionPointRec(mouse,
+                                                anvilLayout->forgeInputRects[static_cast<size_t>(i)])) {
+                        continue;
+                    }
+                    if (dragSourceBag_ >= 0 || dragSourceEquip_ >= 0 || dragSourceConsumable_ >= 0) {
+                        action.type = InventoryAction::AnvilForgePlace;
+                        action.anvilSlot = i;
+                        action.itemIndex = dragItemIndex_;
+                        action.bagSlot = dragSourceBag_;
+                        action.dropFromEquipped = dragSourceEquip_ >= 0;
+                        if (dragSourceEquip_ >= 0) {
+                            action.equipSlot = static_cast<EquipSlot>(dragSourceEquip_);
+                        }
+                        action.useConsumableSlot = dragSourceConsumable_;
+                        if (dragSourceBag_ >= 0) {
+                            inv.bagSlots[static_cast<size_t>(dragSourceBag_)] = -1;
+                        } else if (dragSourceEquip_ >= 0) {
+                            inv.equipped[static_cast<size_t>(dragSourceEquip_)] = -1;
+                        } else if (dragSourceConsumable_ >= 0) {
+                            inv.consumableSlots[static_cast<size_t>(dragSourceConsumable_)] = -1;
+                        }
+                        dragSourceBag_ = -1;
+                        dragSourceEquip_ = -1;
+                        dragSourceConsumable_ = -1;
+                        dragItemIndex_ = -1;
+                        return action;
+                    }
+                }
+            } else if (CheckCollisionPointRec(mouse, anvilLayout->disInputRect)) {
+                if (dragSourceBag_ >= 0 || dragSourceEquip_ >= 0 || dragSourceConsumable_ >= 0) {
+                    action.type = InventoryAction::AnvilDisassembleInputPlace;
+                    action.itemIndex = dragItemIndex_;
+                    action.bagSlot = dragSourceBag_;
+                    action.dropFromEquipped = dragSourceEquip_ >= 0;
+                    if (dragSourceEquip_ >= 0) {
+                        action.equipSlot = static_cast<EquipSlot>(dragSourceEquip_);
+                    }
+                    action.useConsumableSlot = dragSourceConsumable_;
+                    if (dragSourceBag_ >= 0) {
+                        inv.bagSlots[static_cast<size_t>(dragSourceBag_)] = -1;
+                    } else if (dragSourceEquip_ >= 0) {
+                        inv.equipped[static_cast<size_t>(dragSourceEquip_)] = -1;
+                    } else if (dragSourceConsumable_ >= 0) {
+                        inv.consumableSlots[static_cast<size_t>(dragSourceConsumable_)] = -1;
+                    }
+                    dragSourceBag_ = -1;
+                    dragSourceEquip_ = -1;
+                    dragSourceConsumable_ = -1;
+                    dragItemIndex_ = -1;
+                    return action;
+                }
+            }
+        }
 
         if (dragSourceBag_ >= 0) {
             if (eqHit >= 0) {
@@ -657,7 +758,28 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv) {
                     tryEquipFromBag(inv, dragSourceBag_);
                 }
             } else if (bagHit >= 0 && bagHit != dragSourceBag_) {
-                swapBagSlots(inv, dragSourceBag_, bagHit);
+                const int dstPool = inv.bagSlots[static_cast<size_t>(bagHit)];
+                const int srcPool = dragItemIndex_;
+                if (dstPool >= 0 && srcPool >= 0 &&
+                    inv.items[static_cast<size_t>(srcPool)].canStackWith(
+                        inv.items[static_cast<size_t>(dstPool)])) {
+                    auto &dstIt = inv.items[static_cast<size_t>(dstPool)];
+                    auto &srcIt = inv.items[static_cast<size_t>(srcPool)];
+                    const int space = dstIt.maxStack - dstIt.stackCount;
+                    const int move = std::min(space, srcIt.stackCount);
+                    if (move > 0) {
+                        dstIt.stackCount += move;
+                        srcIt.stackCount -= move;
+                        if (srcIt.stackCount <= 0) {
+                            inv.removeItemAtIndex(srcPool);
+                            inv.bagSlots[static_cast<size_t>(dragSourceBag_)] = -1;
+                        }
+                    } else {
+                        swapBagSlots(inv, dragSourceBag_, bagHit);
+                    }
+                } else {
+                    swapBagSlots(inv, dragSourceBag_, bagHit);
+                }
             } else if (consHit >= 0 &&
                        inv.items[static_cast<size_t>(dragItemIndex_)].isConsumable) {
                 const int prev = inv.consumableSlots[static_cast<size_t>(consHit)];
@@ -724,7 +846,7 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
         return;
     }
 
-    const Rectangle panel = makeInventoryPanelRect(screenW, screenH);
+    const Rectangle panel = makeInventoryPanelRect(screenW, screenH, panelLayoutShiftX_);
     const float panelW = panel.width;
     const float panelH = panel.height;
     const float px = panel.x;
@@ -759,7 +881,7 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
         "assets/textures/ui/ring_slot.png",
     };
     for (int i = 0; i < static_cast<int>(EquipSlot::COUNT); ++i) {
-        const Rectangle r = makeEquipSlotRect(screenW, screenH, i);
+        const Rectangle r = makeEquipSlotRect(screenW, screenH, i, panelLayoutShiftX_);
         const int idx = inv.equipped[static_cast<size_t>(i)];
         const dreadcast::ItemData *pit =
             (idx >= 0 && idx < static_cast<int>(inv.items.size()))
@@ -803,7 +925,7 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
     }
 
     for (int i = 0; i < dreadcast::CONSUMABLE_SLOT_COUNT; ++i) {
-        const Rectangle r = makeConsumableSlotRect(screenW, screenH, i);
+        const Rectangle r = makeConsumableSlotRect(screenW, screenH, i, panelLayoutShiftX_);
         const int idx = inv.consumableSlots[static_cast<size_t>(i)];
         const dreadcast::ItemData *pit =
             (idx >= 0 && idx < static_cast<int>(inv.items.size()))
@@ -837,7 +959,7 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
     }
 
     for (int i = 0; i < dreadcast::BAG_SLOT_COUNT; ++i) {
-        const Rectangle r = makeBagSlotRect(screenW, screenH, i);
+        const Rectangle r = makeBagSlotRect(screenW, screenH, i, panelLayoutShiftX_);
         const int idx = inv.bagSlots[static_cast<size_t>(i)];
         const dreadcast::ItemData *pit =
             (idx >= 0 && idx < static_cast<int>(inv.items.size()))
@@ -905,6 +1027,13 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
             DrawTextEx(font, o2, {contextOpt2_.x + 8.0F, contextOpt2_.y + 6.0F}, optFont, 1.0F,
                        RAYWHITE);
         }
+        if (contextShowSeparate_) {
+            const Color h3 = CheckCollisionPointRec(m, contextOpt3_) ? ui::theme::BTN_HOVER
+                                                                     : ui::theme::SLOT_FILL;
+            DrawRectangleRec(contextOpt3_, h3);
+            DrawTextEx(font, "Separate", {contextOpt3_.x + 8.0F, contextOpt3_.y + 6.0F}, optFont,
+                       1.0F, RAYWHITE);
+        }
     }
 
     if (dragging_ && dragItemIndex_ >= 0 &&
@@ -931,7 +1060,7 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
 
     const Vector2 mouse = GetMousePosition();
 
-    const Vector2 infoCenter = infoIconCenter(screenW, screenH);
+    const Vector2 infoCenter = infoIconCenter(screenW, screenH, panelLayoutShiftX_);
     const float infoR = 14.0F;
     const bool infoHover = CheckCollisionPointCircle(mouse, infoCenter, infoR + 2.0F);
     DrawCircleV(infoCenter, infoR, Fade(ui::theme::SLOT_FILL, infoHover ? 220 : 160));
@@ -949,7 +1078,7 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
                1.0F, infoHover ? RAYWHITE : ui::theme::LABEL_TEXT);
 
     if (rarityInfoOpen_) {
-        const Rectangle rp = makeRarityPanelRect(screenW, screenH);
+        const Rectangle rp = makeRarityPanelRect(screenW, screenH, panelLayoutShiftX_);
         DrawRectangleRec(rp, Fade(ui::theme::PANEL_FILL, 248));
         DrawRectangleLinesEx(rp, 2.0F, ui::theme::PANEL_BORDER);
         DrawTextEx(font, "Item Rarity", {rp.x + 16.0F, rp.y + 12.0F}, 28.0F, 1.0F, RAYWHITE);
@@ -999,15 +1128,15 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
     }
 
     int tipIdx = -1;
-    const int eqHit = hitTestEquip(screenW, screenH, mouse);
+    const int eqHit = hitTestEquip(screenW, screenH, mouse, panelLayoutShiftX_);
     if (eqHit >= 0) {
         tipIdx = inv.equipped[static_cast<size_t>(eqHit)];
     } else {
-        const int bagHit = hitTestBag(screenW, screenH, mouse);
+        const int bagHit = hitTestBag(screenW, screenH, mouse, panelLayoutShiftX_);
         if (bagHit >= 0) {
             tipIdx = inv.bagSlots[static_cast<size_t>(bagHit)];
         } else {
-            const int consHit = hitTestConsumable(screenW, screenH, mouse);
+            const int consHit = hitTestConsumable(screenW, screenH, mouse, panelLayoutShiftX_);
             if (consHit >= 0) {
                 tipIdx = inv.consumableSlots[static_cast<size_t>(consHit)];
             }
@@ -1102,6 +1231,13 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
                        ui::theme::MUTED_TEXT);
         }
     }
+}
+
+int InventoryUI::hitTestBagSlot(Vector2 mouse, int screenW, int screenH) const {
+    if (!open_) {
+        return -1;
+    }
+    return hitTestBag(screenW, screenH, mouse, panelLayoutShiftX_);
 }
 
 } // namespace dreadcast::ui

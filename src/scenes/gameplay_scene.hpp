@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <entt/entt.hpp>
 #include <raylib.h>
 
@@ -17,6 +18,8 @@
 #include "ui/inventory_ui.hpp"
 
 namespace dreadcast {
+
+struct AbilityDef;
 
 struct FloatingNumber {
     Vector2 worldPos{};
@@ -73,11 +76,11 @@ class GameplayScene final : public Scene {
     void tryUseAbility(int abilityIndex);
     void tickAbilityCooldowns(float fixedDt);
     void tickLeadFeverEffect(float fixedDt);
-    void tickSlugAim(float fixedDt);
+    void tickSlugAim(float fixedDt, ResourceManager &resources);
     void tickSnareDash(float fixedDt);
     void tickStunnedEnemies(float fixedDt);
-    void spawnSnareProjectile(const Vector2 &dirWorld);
-    void fireCalamitySlug(const Vector2 &dirWorld);
+    void spawnSnareProjectile(const AbilityDef &snareDef, const Vector2 &dirWorld);
+    void fireCalamitySlug(const AbilityDef &slugDef, const Vector2 &dirWorld);
     [[nodiscard]] Vector2 playerAimDirectionWorld() const;
 
     void drawHud(ResourceManager &resources);
@@ -89,6 +92,18 @@ class GameplayScene final : public Scene {
     void drawDamageVignette();
     void drawFloatingCombatNumbers(ResourceManager &resources);
     void tickFloatingNumbers(float frameDt);
+    void tickChamberState(float fixedDt);
+    void drawChamberHudIcon(ResourceManager &resources, float barX, float statusY, float icon);
+    void drawMinimapOverlay(bool fullScreen, ResourceManager &resources);
+    void tickAnvilUi(InputManager &input, ResourceManager &resources, const ui::AnvilUiLayout &layout);
+    void drawAnvilUi(ResourceManager &resources, const ui::AnvilUiLayout &layout);
+    void resetAnvilWorkbench();
+    [[nodiscard]] ui::AnvilUiLayout buildAnvilUiLayout() const;
+    void handleInventoryAnvilAction(const ui::InventoryAction &action);
+    void applyAnvilForgeSlotPlace(int slot, int poolIdx);
+    bool tryReturnPoolItemToBagOrDrop(int poolIdx);
+    void clearDisassembleOutputPool();
+    void commitDisassembleRecipe();
     void drawFogOfWarLegacy();
     void initFogResources();
     void unloadFogResources();
@@ -135,6 +150,26 @@ class GameplayScene final : public Scene {
     bool hoveringHudElement_{false};
     std::vector<FloatingNumber> floatingNumbers_{};
     std::unordered_map<entt::entity, float> hpBeforeFixedStep_{};
+    std::unordered_map<entt::entity, bool> hellhoundPrevAgitated_{};
+
+    MapData loadedMap_{};
+    bool fullMapOpen_{false};
+
+    bool anvilOpen_{false};
+    entt::entity activeAnvil_{entt::null};
+    int anvilTab_{0}; // 0 Forge, 1 Disassemble
+    /// Pool indices placed in forge (-1 empty); up to 6 cells for future recipes.
+    std::array<int, 6> forgeSlots_{};
+    int disassembleInputIndex_{-1};
+    /// Pending disassemble outputs (pool indices, not in bag) until dragged to inventory.
+    std::array<int, 6> disassembleOutputPool_{};
+    int disassembleOutputCount_{0};
+
+    enum class AnvilBenchDragKind { None, ForgeSlot, DisOut };
+    AnvilBenchDragKind anvilBenchDragKind_{AnvilBenchDragKind::None};
+    int anvilBenchForgeSlot_{-1};
+    int anvilBenchDisOutSlot_{-1};
+    int anvilBenchDragPoolIdx_{-1};
 
     int selectedClass_{0};
     int enemiesSlain_{0};

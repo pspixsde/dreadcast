@@ -27,8 +27,10 @@ inline constexpr int UI_FONT_BASE_SIZE = 96;
 /// 0.25 → 4× smaller than full size (~32 px); tune if needed.
 inline constexpr float CURSOR_DISPLAY_SCALE = 0.35F;
 
-inline constexpr float MANA_COST_SHOT = 10.0F;
-inline constexpr float PROJECTILE_DAMAGE = 10.0F;
+inline constexpr float PROJECTILE_DAMAGE = 15.0F;
+inline constexpr int CHAMBER_MAX_SHOTS = 6;
+inline constexpr float CHAMBER_RELOAD_TIME = 2.0F;
+inline constexpr float CHAMBER_IDLE_RELOAD_TIME = 3.0F;
 inline constexpr float PROJECTILE_SPEED = 600.0F;
 inline constexpr float PROJECTILE_MAX_RANGE = 800.0F;
 inline constexpr float PROJECTILE_RADIUS = 5.0F;
@@ -114,35 +116,6 @@ inline constexpr float LAVA_DAMAGE_INTERVAL = 0.5F;
 inline constexpr float RAW_SPIRIT_MANA_TOTAL = 50.0F;
 inline constexpr float RAW_SPIRIT_DURATION = 6.0F;
 
-// Lead Fever (ability 1)
-inline constexpr float LEAD_FEVER_DURATION = 6.0F;
-inline constexpr float LEAD_FEVER_MANA_COST = 25.0F;
-inline constexpr float LEAD_FEVER_COOLDOWN = 20.0F;
-inline constexpr int LEAD_FEVER_PELLET_COUNT = 4;
-/// Extra random angular jitter per pellet (radians), on top of the base fan spread.
-inline constexpr float LEAD_FEVER_SCATTER_RANDOM = 0.18F;
-inline constexpr float LEAD_FEVER_KNOCKBACK = 250.0F;
-inline constexpr float LEAD_FEVER_SCATTER_ANGLE = 0.35F;
-
-// Deadlight Snare (ability 2)
-inline constexpr float SNARE_MANA_COST = 20.0F;
-inline constexpr float SNARE_COOLDOWN = 20.0F;
-inline constexpr float SNARE_THROW_SPEED = 500.0F;
-inline constexpr float SNARE_THROW_RANGE = 350.0F;
-inline constexpr float SNARE_PULL_RADIUS = 100.0F;
-inline constexpr float SNARE_STUN_DURATION = 2.0F;
-inline constexpr float SNARE_DASH_DISTANCE = 150.0F;
-inline constexpr float SNARE_DASH_SPEED = 800.0F;
-
-// Calamity Slug (ability 3)
-inline constexpr float SLUG_MANA_COST = 30.0F;
-inline constexpr float SLUG_COOLDOWN = 25.0F;
-inline constexpr float SLUG_AIM_DURATION = 1.0F;
-inline constexpr float SLUG_DAMAGE = 50.0F;
-inline constexpr float SLUG_SPEED = PROJECTILE_SPEED * 2.0F;
-inline constexpr float SLUG_SIZE = 20.0F;
-inline constexpr float SLUG_KNOCKBACK_SIDE = 400.0F;
-inline constexpr float SLUG_MAX_RANGE = 1200.0F;
 /// Angular samples for world-space vision polygon (ray cast per direction).
 inline constexpr int FOG_VISIBILITY_SAMPLES = 360;
 
