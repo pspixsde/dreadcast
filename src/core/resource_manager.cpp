@@ -45,6 +45,8 @@ bool GameSettings::saveToFile(const std::string &path) const {
     out << "showFpsCounter=" << (showFpsCounter ? 1 : 0) << '\n';
     out << "showAbilityManaCost=" << (showAbilityManaCost ? 1 : 0) << '\n';
     out << "showDamageNumbers=" << (showDamageNumbers ? 1 : 0) << '\n';
+    out << "showReloadOnCursor=" << (showReloadOnCursor ? 1 : 0) << '\n';
+    out << "separateDropsWhenFull=" << (separateDropsWhenFull ? 1 : 0) << '\n';
     return out.good();
 }
 
@@ -84,6 +86,16 @@ void GameSettings::loadFromFile(const std::string &path) {
             int i = 0;
             if (vs >> i) {
                 showDamageNumbers = (i != 0);
+            }
+        } else if (key == "showReloadOnCursor") {
+            int i = 0;
+            if (vs >> i) {
+                showReloadOnCursor = (i != 0);
+            }
+        } else if (key == "separateDropsWhenFull") {
+            int i = 0;
+            if (vs >> i) {
+                separateDropsWhenFull = (i != 0);
             }
         }
     }

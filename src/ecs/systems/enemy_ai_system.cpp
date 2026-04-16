@@ -8,6 +8,7 @@
 
 #include "config.hpp"
 #include "core/iso_utils.hpp"
+#include "core/poly_helpers.hpp"
 #include "core/types.hpp"
 #include "ecs/components.hpp"
 #include "game/items.hpp"
@@ -57,6 +58,14 @@ bool hasLineOfSight(entt::registry &registry, Vector2 from, Vector2 to) {
         const auto &t = registry.get<Transform>(w);
         const auto &wall = registry.get<Wall>(w);
         if (segmentIntersectsRect(from, to, wallRect(t, wall))) {
+            return false;
+        }
+    }
+    const auto polys = registry.view<SolidPolygon, Transform>();
+    for (const auto pe : polys) {
+        const auto &poly = registry.get<SolidPolygon>(pe);
+        if (poly.vertsWorld.size() >= 3 &&
+            dreadcast::segmentIntersectsPolygonEdges(from, to, poly.vertsWorld)) {
             return false;
         }
     }

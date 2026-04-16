@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <string>
 #include <vector>
 
@@ -22,9 +23,10 @@ class EditorScene final : public Scene {
 
   private:
     enum class Tool { Select, PlaceWall, PlaceLava, PlaceEnemy, PlaceCasket, SetPlayerSpawn,
-                      PlaceItem };
+                      PlaceItem, PlaceSolid, PlaceAnvil };
     enum class EditorTab { Elements, Items, Units };
-    enum class SelectedType { None, Wall, Lava, Enemy, Casket, PlayerSpawn, Item };
+    enum class SelectedType { None, Wall, Lava, Enemy, Casket, PlayerSpawn, Item, SolidShape,
+                              Anvil };
 
     enum class ResizeHandle { None, Left, Right, Top, Bottom };
 
@@ -65,6 +67,9 @@ class EditorScene final : public Scene {
     void drawUnsavedChangesModal(const Font &font, Vector2 mouse);
     void pasteFromClipboard(const Vector2 &worldMouse);
     void copySelectionToClipboard();
+    void drawCasketLootPanel(const Font &font, Vector2 mouse);
+    void handleCasketLootPanelClick(const Vector2 &mouse, bool click, bool &uiConsumedClick);
+    [[nodiscard]] Rectangle casketLootPanelRect() const;
 
     GameCamera camera_{};
     FixedStepTimer fixedTimer_{1.0F / 60.0F};
@@ -101,8 +106,19 @@ class EditorScene final : public Scene {
     LavaData clipboardLava_{};
     EnemySpawnData clipboardEnemy_{};
     ItemSpawnData clipboardItem_{};
-    Vector2 clipboardCasketPos_{};
-    bool clipboardHasCasket_{false};
+    CasketData clipboardCasket_{};
+
+    /// Vertices for in-progress solid polygon (PlaceSolid tool).
+    std::vector<Vector2> solidDraftVerts_{};
+    /// While dragging a placed solid, original verts and centroid at grab time.
+    std::vector<Vector2> solidMoveSnapshot_{};
+    Vector2 solidMoveCenterStart_{0.0F, 0.0F};
+    bool solidMoveActive_{false};
+
+    /// World-space segment to visualize magnetic edge snap (wall/lava resize).
+    bool snapGuideActive_{false};
+    Vector2 snapGuideA_{0.0F, 0.0F};
+    Vector2 snapGuideB_{0.0F, 0.0F};
 
     float statusTimer_{0.0F};
     const char *statusText_{"Ready"};

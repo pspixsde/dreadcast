@@ -7,21 +7,38 @@
       "description": "Overload your gun for 6s: ranged attacks fire 4 pellets in a loose, random scatter that knock enemies back (full damage per pellet).\nMana: 25  Cooldown: 20s",
       "iconPath": "assets/textures/abilities/lead_fever.png",
       "manaCost": 25,
-      "cooldown": 20
+      "cooldown": 20,
+      "effectDuration": 6,
+      "pelletCount": 4,
+      "scatterAngle": 0.35,
+      "scatterRandom": 0.18,
+      "knockback": 250
     },
     {
       "name": "Deadlight Snare",
       "description": "Throw a trap net forward and dash backward. On hit, pulls nearby enemies together and stuns them for 2s.\nMana: 20  Cooldown: 20s",
       "iconPath": "assets/textures/abilities/deadlight_snare.png",
       "manaCost": 20,
-      "cooldown": 20
+      "cooldown": 20,
+      "projectileSpeed": 500,
+      "projectileRange": 350,
+      "pullRadius": 100,
+      "stunDuration": 2,
+      "dashDistance": 150,
+      "dashSpeed": 800
     },
     {
       "name": "Calamity Slug",
       "description": "Channel 1s, then fire a huge piercing slug (50 damage) that knocks survivors sideways.\nMana: 30  Cooldown: 25s",
       "iconPath": "assets/textures/abilities/calamity_slug.png",
       "manaCost": 30,
-      "cooldown": 25
+      "cooldown": 25,
+      "aimDuration": 1,
+      "damage": 50,
+      "projectileSpeed": 2000,
+      "projectileRange": 1200,
+      "projectileSize": 20,
+      "knockbackSide": 400
     }
   ]
 }

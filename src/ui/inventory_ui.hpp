@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+
 #include <raylib.h>
 
 #include "core/input.hpp"
@@ -16,14 +18,40 @@ namespace dreadcast::ui {
 inline constexpr float ITEM_ICON_DRAW_H = 72.0F;
 inline constexpr float ITEM_ICON_DRAW_W = ITEM_ICON_DRAW_H * 7.0F / 5.0F;
 
+/// Screen layout for anvil workbench hit-testing (built by `GameplayScene` each frame).
+struct AnvilUiLayout {
+    bool active{false};
+    bool forgeTab{true};
+    /// Whole anvil panel — releases here do not count as “drop to world”.
+    Rectangle panelBounds{0.0F, 0.0F, 0.0F, 0.0F};
+    Rectangle tabForgeRect{0.0F, 0.0F, 0.0F, 0.0F};
+    Rectangle tabDisRect{0.0F, 0.0F, 0.0F, 0.0F};
+    int forgeInputCount{0};
+    std::array<Rectangle, 6> forgeInputRects{};
+    Rectangle forgeOutputRect{0.0F, 0.0F, 0.0F, 0.0F};
+    Rectangle disInputRect{0.0F, 0.0F, 0.0F, 0.0F};
+    Rectangle disBreakRect{0.0F, 0.0F, 0.0F, 0.0F};
+    int disOutputCount{0};
+    std::array<Rectangle, 6> disOutputRects{};
+};
+
 /// Result of inventory interaction (e.g. drop item to ground).
 struct InventoryAction {
-    enum Type { None, Drop, Use };
+    enum Type {
+        None,
+        Drop,
+        Use,
+        SeparateDropWorld,
+        AnvilForgePlace,
+        AnvilDisassembleInputPlace,
+    };
     Type type{Type::None};
     int itemIndex{-1};
     bool dropFromEquipped{false};
     int bagSlot{-1};
     EquipSlot equipSlot{EquipSlot::Armor};
+    /// Forge input slot index when `type == AnvilForgePlace`.
+    int anvilSlot{-1};
 
     // Consumable usage (vials etc.)
     int useBagSlot{-1};          // which bag slot to consume from (carried)
@@ -47,6 +75,9 @@ class InventoryUI {
         }
     }
     [[nodiscard]] bool isOpen() const { return open_; }
+    /// Shifts the inventory panel right (e.g. when Anvil UI is open on the left).
+    void setPanelLayoutShift(float shiftX) { panelLayoutShiftX_ = shiftX; }
+
     void setOpen(bool v) {
         open_ = v;
         if (open_) {
@@ -61,7 +92,8 @@ class InventoryUI {
         }
     }
 
-    InventoryAction update(InputManager &input, InventoryState &inv);
+    InventoryAction update(InputManager &input, InventoryState &inv, bool separateDropsWhenFull,
+                           const AnvilUiLayout *anvilLayout = nullptr);
 
     /// `playerHpRatio` = current/max for Cordial Manic unusable overlay (red X when &lt; 40%).
     /// `runicShellCdRatio` = 0..1, fraction of Runic Shell cooldown remaining (0 = ready).
@@ -73,6 +105,10 @@ class InventoryUI {
     /// Draw a 7:5 item icon at fixed `ITEM_ICON_DRAW_*` size (centered in `slotRect`).
     static void drawItemIcon(const dreadcast::ItemData &it, dreadcast::ResourceManager &resources,
                              Rectangle slotRect, Color tint = WHITE);
+
+    [[nodiscard]] bool isDragging() const { return dragging_; }
+    /// Which bag column cell is under the cursor, or -1 (uses current `panelLayoutShiftX_`).
+    [[nodiscard]] int hitTestBagSlot(Vector2 mouse, int screenW, int screenH) const;
 
   private:
     bool open_{false};
@@ -97,6 +133,8 @@ class InventoryUI {
     Rectangle contextOpt0_{};
     Rectangle contextOpt1_{};
     Rectangle contextOpt2_{};
+    Rectangle contextOpt3_{};
+    bool contextShowSeparate_{false};
     int contextItemIndex_{-1};
     int contextBagSlot_{-1};
     int contextEquipSlot_{-1};
@@ -105,6 +143,8 @@ class InventoryUI {
     bool contextOpt0IsEquip_{true};
 
     bool rarityInfoOpen_{false};
+
+    float panelLayoutShiftX_{0.0F};
 };
 
 } // namespace dreadcast::ui

@@ -95,6 +95,9 @@ std::string joinPath(const std::string &base, const std::string &relative) {
 
 [[nodiscard]] ItemData itemFromJsonObject(const nlohmann::json &j) {
     ItemData it{};
+    if (j.contains("id") && j["id"].is_string()) {
+        it.catalogId = j["id"].get<std::string>();
+    }
     if (j.contains("name") && j["name"].is_string()) {
         it.name = j["name"].get<std::string>();
     }
@@ -148,6 +151,28 @@ std::string joinPath(const std::string &base, const std::string &relative) {
     if (j.contains("name") && j["name"].is_string()) {
         a.name = j["name"].get<std::string>();
     }
+    // Legacy defaults by ability name, so older/partial JSON keeps prior behavior.
+    if (a.name == "Lead Fever") {
+        a.effectDuration = 6.0F;
+        a.pelletCount = 4;
+        a.scatterAngle = 0.35F;
+        a.scatterRandom = 0.18F;
+        a.knockback = 250.0F;
+    } else if (a.name == "Deadlight Snare") {
+        a.projectileSpeed = 500.0F;
+        a.projectileRange = 350.0F;
+        a.pullRadius = 100.0F;
+        a.stunDuration = 2.0F;
+        a.dashDistance = 150.0F;
+        a.dashSpeed = 800.0F;
+    } else if (a.name == "Calamity Slug") {
+        a.aimDuration = 1.0F;
+        a.damage = 50.0F;
+        a.projectileSpeed = 1200.0F;
+        a.projectileRange = 1200.0F;
+        a.projectileSize = 20.0F;
+        a.knockbackSide = 400.0F;
+    }
     if (j.contains("description") && j["description"].is_string()) {
         a.description = j["description"].get<std::string>();
     }
@@ -160,6 +185,28 @@ std::string joinPath(const std::string &base, const std::string &relative) {
     if (j.contains("cooldown") && j["cooldown"].is_number()) {
         a.cooldown = j["cooldown"].get<float>();
     }
+    auto numF = [&](const char *key, float &outV) {
+        if (j.contains(key) && j[key].is_number()) {
+            outV = j[key].get<float>();
+        }
+    };
+    numF("effectDuration", a.effectDuration);
+    if (j.contains("pelletCount") && j["pelletCount"].is_number_integer()) {
+        a.pelletCount = std::max(1, j["pelletCount"].get<int>());
+    }
+    numF("scatterAngle", a.scatterAngle);
+    numF("scatterRandom", a.scatterRandom);
+    numF("knockback", a.knockback);
+    numF("projectileSpeed", a.projectileSpeed);
+    numF("projectileRange", a.projectileRange);
+    numF("pullRadius", a.pullRadius);
+    numF("stunDuration", a.stunDuration);
+    numF("dashDistance", a.dashDistance);
+    numF("dashSpeed", a.dashSpeed);
+    numF("aimDuration", a.aimDuration);
+    numF("damage", a.damage);
+    numF("projectileSize", a.projectileSize);
+    numF("knockbackSide", a.knockbackSide);
     return a;
 }
 
@@ -318,9 +365,9 @@ void seedItemCatalogFallback(std::unordered_map<std::string, ItemData> &catalog)
 void seedAbilitiesFallback(CharacterAbilities &out) {
     static constexpr const char *kEmbedded = R"JSON({
   "abilities": [
-    {"name":"Lead Fever","description":"Overload your gun for 6s: ranged attacks fire 4 pellets in a loose, random scatter that knock enemies back (full damage per pellet).\nMana: 25  Cooldown: 20s","iconPath":"assets/textures/abilities/lead_fever.png","manaCost":25,"cooldown":20},
-    {"name":"Deadlight Snare","description":"Throw a trap net forward and dash backward. On hit, pulls nearby enemies together and stuns them for 2s.\nMana: 20  Cooldown: 20s","iconPath":"assets/textures/abilities/deadlight_snare.png","manaCost":20,"cooldown":20},
-    {"name":"Calamity Slug","description":"Channel 1s, then fire a huge piercing slug (50 damage) that knocks survivors sideways.\nMana: 30  Cooldown: 25s","iconPath":"assets/textures/abilities/calamity_slug.png","manaCost":30,"cooldown":25}
+    {"name":"Lead Fever","description":"Overload your gun for 6s: ranged attacks fire 4 pellets in a loose, random scatter that knock enemies back (full damage per pellet).\nMana: 25  Cooldown: 20s","iconPath":"assets/textures/abilities/lead_fever.png","manaCost":25,"cooldown":20,"effectDuration":6,"pelletCount":4,"scatterAngle":0.35,"scatterRandom":0.18,"knockback":250},
+    {"name":"Deadlight Snare","description":"Throw a trap net forward and dash backward. On hit, pulls nearby enemies together and stuns them for 2s.\nMana: 20  Cooldown: 20s","iconPath":"assets/textures/abilities/deadlight_snare.png","manaCost":20,"cooldown":20,"projectileSpeed":500,"projectileRange":350,"pullRadius":100,"stunDuration":2,"dashDistance":150,"dashSpeed":800},
+    {"name":"Calamity Slug","description":"Channel 1s, then fire a huge piercing slug (50 damage) that knocks survivors sideways.\nMana: 30  Cooldown: 25s","iconPath":"assets/textures/abilities/calamity_slug.png","manaCost":30,"cooldown":25,"aimDuration":1,"damage":50,"projectileSpeed":1200,"projectileRange":1200,"projectileSize":20,"knockbackSide":400}
   ]
 })JSON";
     try {
@@ -342,6 +389,26 @@ std::unordered_map<std::string, ItemData> g_itemCatalog{};
 CharacterAbilities g_undeadHunterAbilities{};
 std::vector<CharacterClass> g_characters{};
 bool g_gameDataLoaded{false};
+
+std::vector<ForgeRecipe> g_forgeRecipes{};
+std::vector<DisassembleRecipe> g_disassembleRecipes{};
+
+void seedCraftingRecipes() {
+    g_forgeRecipes.clear();
+    ForgeRecipe fr{};
+    fr.inputs.push_back(CraftIngredient{"vial_pure_blood", 1});
+    fr.inputs.push_back(CraftIngredient{"iron_armor", 1});
+    fr.outputId = "barbed_tunic";
+    fr.outputCount = 1;
+    g_forgeRecipes.push_back(std::move(fr));
+
+    g_disassembleRecipes.clear();
+    DisassembleRecipe dr{};
+    dr.sourceId = "barbed_tunic";
+    dr.outputs.push_back(CraftIngredient{"vial_pure_blood", 1});
+    dr.outputs.push_back(CraftIngredient{"iron_armor", 1});
+    g_disassembleRecipes.push_back(std::move(dr));
+}
 
 } // namespace
 
@@ -407,6 +474,7 @@ bool loadGameData() {
 
     const bool charsOk = !g_characters.empty();
     g_gameDataLoaded = itemsOk && abilitiesOk && charsOk;
+    seedCraftingRecipes();
     return g_gameDataLoaded;
 }
 
@@ -466,5 +534,9 @@ const CharacterClass &characterAt(int index) {
     const size_t i = static_cast<size_t>(std::max(0, index));
     return g_characters[std::min(i, g_characters.size() - 1)];
 }
+
+const std::vector<ForgeRecipe> &forgeRecipes() { return g_forgeRecipes; }
+
+const std::vector<DisassembleRecipe> &disassembleRecipes() { return g_disassembleRecipes; }
 
 } // namespace dreadcast

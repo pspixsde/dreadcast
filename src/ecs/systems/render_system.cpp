@@ -3,12 +3,14 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <vector>
 
 #include <entt/entt.hpp>
 #include <raylib.h>
 
 #include "config.hpp"
 #include "core/iso_utils.hpp"
+#include "core/poly_helpers.hpp"
 #include "core/resource_manager.hpp"
 #include "core/types.hpp"
 #include "ecs/components.hpp"
@@ -49,6 +51,14 @@ bool hasLineOfSight(entt::registry &registry, Vector2 from, Vector2 to) {
         const auto &t = registry.get<Transform>(w);
         const auto &wall = registry.get<Wall>(w);
         if (segmentIntersectsRect(from, to, wallRect(t, wall))) {
+            return false;
+        }
+    }
+    const auto polys = registry.view<SolidPolygon, Transform>();
+    for (const auto pe : polys) {
+        const auto &poly = registry.get<SolidPolygon>(pe);
+        if (poly.vertsWorld.size() >= 3 &&
+            dreadcast::segmentIntersectsPolygonEdges(from, to, poly.vertsWorld)) {
             return false;
         }
     }
@@ -274,6 +284,28 @@ void drawLavaEntity(const Transform &transform, const Lava &lava) {
     DrawLineV(p4, p1, outline);
 }
 
+void drawSolidPolygonEntity(const SolidPolygon &poly) {
+    const auto &v = poly.vertsWorld;
+    const int n = static_cast<int>(v.size());
+    if (n < 3) {
+        return;
+    }
+    std::vector<Vector2> iso;
+    iso.reserve(static_cast<size_t>(n));
+    for (const Vector2 &p : v) {
+        iso.push_back(dreadcast::worldToIso(p));
+    }
+    const Color fill = {55, 48, 42, 255};
+    const Color outline = {110, 90, 75, 255};
+    const Vector2 &c0 = iso[0];
+    for (int i = 1; i + 1 < n; ++i) {
+        DrawTriangle(c0, iso[static_cast<size_t>(i)], iso[static_cast<size_t>(i + 1)], fill);
+    }
+    for (int i = 0; i < n; ++i) {
+        DrawLineV(iso[static_cast<size_t>(i)], iso[static_cast<size_t>((i + 1) % n)], outline);
+    }
+}
+
 void drawWallEntity(const Transform &transform, const Wall &wall) {
     const float x0 = transform.position.x - wall.halfW;
     const float x1 = transform.position.x + wall.halfW;
@@ -295,6 +327,9 @@ void drawWallEntity(const Transform &transform, const Wall &wall) {
 
 void drawSpriteEntity(entt::entity entity, entt::registry &registry, ResourceManager &resources,
                       Vector2 fogOrigin, float fogRadius) {
+    if (registry.all_of<SolidPolygon>(entity)) {
+        return;
+    }
     const auto &transform = registry.get<Transform>(entity);
     const bool shouldFogHide =
         registry.all_of<Enemy>(entity) || registry.all_of<ManaShard>(entity) ||
@@ -376,6 +411,10 @@ void render_system(entt::registry &registry, const Font &font, ResourceManager &
 
     for (const auto w : registry.view<Wall, Transform>()) {
         drawWallEntity(registry.get<Transform>(w), registry.get<Wall>(w));
+    }
+
+    for (const auto pe : registry.view<SolidPolygon, Transform>()) {
+        drawSolidPolygonEntity(registry.get<SolidPolygon>(pe));
     }
 
     const auto view = registry.view<Transform, Sprite>();

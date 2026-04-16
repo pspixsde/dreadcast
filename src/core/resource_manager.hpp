@@ -16,6 +16,10 @@ struct GameSettings {
     bool showAbilityManaCost{true};
     /// Floating damage/heal numbers near entities.
     bool showDamageNumbers{false};
+    /// Circular reload progress on the aim cursor while the chamber reloads.
+    bool showReloadOnCursor{true};
+    /// When bag is full, "Separate" still splits one unit by dropping it at the player.
+    bool separateDropsWhenFull{false};
 
     [[nodiscard]] bool saveToFile(const std::string &path) const;
     /// Loads from `path` if present; ignores missing file / parse errors.

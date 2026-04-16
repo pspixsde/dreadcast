@@ -93,7 +93,7 @@ struct MeleeAttacker {
     static constexpr float kSingleSwingCooldown = 0.22F;
 
     static constexpr float kKnockbackScale[3] = {0.9F, 1.1F, 1.6F};
-    static constexpr float kDamageScale[3] = {1.0F, 1.0F, 1.35F};
+    static constexpr float kDamageScale[3] = {1.0F, 1.0F, 1.0F};
     static constexpr float kArcHalfDeg[3] = {35.0F, 45.0F, 60.0F};
 
     [[nodiscard]] bool isMeleeArcActive() const { return phase == Phase::Swing; }
@@ -274,6 +274,22 @@ struct EnemyXpReward {
 /// Display level on enemy HUD (current content: all level 1).
 struct EnemyDisplayLevel {
     int level{1};
+};
+
+/// Ranged chamber / reload (Undead Hunter basic shots).
+struct ChamberState {
+    int shotsRemaining{config::CHAMBER_MAX_SHOTS};
+    int maxShots{config::CHAMBER_MAX_SHOTS};
+    float reloadTimer{0.0F};
+    float reloadDuration{config::CHAMBER_RELOAD_TIME};
+    bool isReloading{false};
+    float idleTimer{0.0F};
+    float idleReloadThreshold{config::CHAMBER_IDLE_RELOAD_TIME};
+};
+
+/// Solid obstacle from map editor (closed polygon in world space).
+struct SolidPolygon {
+    std::vector<Vector2> vertsWorld{};
 };
 
 /// Tag for the player-controlled entity.

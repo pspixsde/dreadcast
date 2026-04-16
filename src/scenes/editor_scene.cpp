@@ -5,6 +5,7 @@
 #include <cmath>
 #include <filesystem>
 #include <memory>
+#include <string>
 
 #include <raylib.h>
 
@@ -12,6 +13,7 @@
 #include "core/input.hpp"
 #include "game/game_data.hpp"
 #include "core/iso_utils.hpp"
+#include "core/poly_helpers.hpp"
 #include "core/resource_manager.hpp"
 #include "scenes/menu_scene.hpp"
 #include "scenes/scene_manager.hpp"
@@ -32,18 +34,129 @@ float distSq(Vector2 a, Vector2 b) {
     return dx * dx + dy * dy;
 }
 
+Vector2 polygonCentroid(const std::vector<Vector2> &verts) {
+    Vector2 s{0.0F, 0.0F};
+    if (verts.empty()) {
+        return s;
+    }
+    for (const Vector2 &p : verts) {
+        s.x += p.x;
+        s.y += p.y;
+    }
+    const float inv = 1.0F / static_cast<float>(verts.size());
+    return {s.x * inv, s.y * inv};
+}
+
+/// Snap a vertical world X edge to nearby wall/lava vertical edges (unless Ctrl held).
+float snapVerticalEdgeX(float xEdge, const MapData &map, int skipWallIdx, int skipLavaIdx,
+                        bool ctrlHeld, bool &guideActive, Vector2 &ga, Vector2 &gb) {
+    guideActive = false;
+    if (ctrlHeld) {
+        return xEdge;
+    }
+    constexpr float thresh = 14.0F;
+    constexpr float span = 4000.0F;
+    float best = xEdge;
+    float bestD = thresh;
+    for (int j = 0; j < static_cast<int>(map.walls.size()); ++j) {
+        if (j == skipWallIdx) {
+            continue;
+        }
+        const WallData &o = map.walls[static_cast<size_t>(j)];
+        for (const float ox : {o.cx - o.halfW, o.cx + o.halfW}) {
+            const float d = std::fabs(ox - xEdge);
+            if (d < bestD) {
+                bestD = d;
+                best = ox;
+            }
+        }
+    }
+    for (int j = 0; j < static_cast<int>(map.lavas.size()); ++j) {
+        if (j == skipLavaIdx) {
+            continue;
+        }
+        const LavaData &o = map.lavas[static_cast<size_t>(j)];
+        for (const float ox : {o.cx - o.halfW, o.cx + o.halfW}) {
+            const float d = std::fabs(ox - xEdge);
+            if (d < bestD) {
+                bestD = d;
+                best = ox;
+            }
+        }
+    }
+    if (bestD < thresh) {
+        guideActive = true;
+        ga = {best, -span};
+        gb = {best, span};
+        return best;
+    }
+    return xEdge;
+}
+
+/// Snap a horizontal world Y edge to nearby wall/lava horizontal edges.
+float snapHorizontalEdgeY(float yEdge, const MapData &map, int skipWallIdx, int skipLavaIdx,
+                          bool ctrlHeld, bool &guideActive, Vector2 &ga, Vector2 &gb) {
+    guideActive = false;
+    if (ctrlHeld) {
+        return yEdge;
+    }
+    constexpr float thresh = 14.0F;
+    constexpr float span = 4000.0F;
+    float best = yEdge;
+    float bestD = thresh;
+    for (int j = 0; j < static_cast<int>(map.walls.size()); ++j) {
+        if (j == skipWallIdx) {
+            continue;
+        }
+        const WallData &o = map.walls[static_cast<size_t>(j)];
+        for (const float oy : {o.cy - o.halfH, o.cy + o.halfH}) {
+            const float d = std::fabs(oy - yEdge);
+            if (d < bestD) {
+                bestD = d;
+                best = oy;
+            }
+        }
+    }
+    for (int j = 0; j < static_cast<int>(map.lavas.size()); ++j) {
+        if (j == skipLavaIdx) {
+            continue;
+        }
+        const LavaData &o = map.lavas[static_cast<size_t>(j)];
+        for (const float oy : {o.cy - o.halfH, o.cy + o.halfH}) {
+            const float d = std::fabs(oy - yEdge);
+            if (d < bestD) {
+                bestD = d;
+                best = oy;
+            }
+        }
+    }
+    if (bestD < thresh) {
+        guideActive = true;
+        ga = {-span, best};
+        gb = {span, best};
+        return best;
+    }
+    return yEdge;
+}
+
 } // namespace
 
 Rectangle EditorScene::toolbarPanelRect() const {
-    return {4.0F, 4.0F, 260.0F, 452.0F};
+    return {4.0F, 4.0F, 260.0F, 500.0F};
 }
 
 Rectangle EditorScene::editorUiHitRect() const {
-    return {4.0F, 4.0F, 300.0F, 480.0F};
+    return {4.0F, 4.0F, 320.0F, 540.0F};
 }
 
 bool EditorScene::isMouseOverEditorUi(Vector2 screenMouse) const {
-    return CheckCollisionPointRec(screenMouse, editorUiHitRect());
+    if (CheckCollisionPointRec(screenMouse, editorUiHitRect())) {
+        return true;
+    }
+    if (selected_.type == SelectedType::Casket && map_.hasCasket) {
+        return CheckCollisionPointRec(screenMouse, casketLootPanelRect());
+    }
+    return false;
 }
 
 void EditorScene::refreshMapFileList() {
@@ -156,7 +269,8 @@ EditorScene::Selection EditorScene::pickSelection(const Vector2 &worldMouse) con
         s.type = SelectedType::PlayerSpawn;
         return s;
     }
-    if (map_.hasCasket && distSq(worldMouse, map_.casketPos) <= pickR2) {
+    if (map_.hasCasket &&
+        distSq(worldMouse, {map_.casket.cx, map_.casket.cy}) <= pickR2) {
         s.type = SelectedType::Casket;
         return s;
     }
@@ -173,6 +287,22 @@ EditorScene::Selection EditorScene::pickSelection(const Vector2 &worldMouse) con
         const Vector2 p{it.x, it.y};
         if (distSq(worldMouse, p) <= pickR2) {
             s.type = SelectedType::Item;
+            s.index = i;
+            return s;
+        }
+    }
+    for (int i = static_cast<int>(map_.anvils.size()) - 1; i >= 0; --i) {
+        const AnvilData &an = map_.anvils[static_cast<size_t>(i)];
+        if (distSq(worldMouse, {an.cx, an.cy}) <= pickR2 * 1.4F) {
+            s.type = SelectedType::Anvil;
+            s.index = i;
+            return s;
+        }
+    }
+    for (int i = static_cast<int>(map_.solidShapes.size()) - 1; i >= 0; --i) {
+        const SolidShapeData &sd = map_.solidShapes[static_cast<size_t>(i)];
+        if (pointInPolygon(worldMouse, sd.verts)) {
+            s.type = SelectedType::SolidShape;
             s.index = i;
             return s;
         }
@@ -218,7 +348,8 @@ void EditorScene::handlePlacement(const Vector2 &worldMouse) {
         break;
     case Tool::PlaceCasket:
         map_.hasCasket = true;
-        map_.casketPos = worldMouse;
+        map_.casket.cx = worldMouse.x;
+        map_.casket.cy = worldMouse.y;
         selected_.type = SelectedType::Casket;
         selected_.index = -1;
         break;
@@ -239,6 +370,14 @@ void EditorScene::handlePlacement(const Vector2 &worldMouse) {
         selected_.index = static_cast<int>(map_.itemSpawns.size()) - 1;
         break;
     }
+    case Tool::PlaceSolid:
+        solidDraftVerts_.push_back(worldMouse);
+        break;
+    case Tool::PlaceAnvil:
+        map_.anvils.push_back({worldMouse.x, worldMouse.y});
+        selected_.type = SelectedType::Anvil;
+        selected_.index = static_cast<int>(map_.anvils.size()) - 1;
+        break;
     case Tool::Select:
         break;
     }
@@ -269,8 +408,27 @@ void EditorScene::applySelectionMove(const Vector2 &worldMouse) {
         }
         break;
     case SelectedType::Casket:
-        map_.casketPos = target;
+        map_.casket.cx = target.x;
+        map_.casket.cy = target.y;
         map_.hasCasket = true;
+        break;
+    case SelectedType::SolidShape:
+        if (solidMoveActive_ && selected_.index >= 0 &&
+            selected_.index < static_cast<int>(map_.solidShapes.size())) {
+            const Vector2 delta{target.x - solidMoveCenterStart_.x, target.y - solidMoveCenterStart_.y};
+            auto &verts = map_.solidShapes[static_cast<size_t>(selected_.index)].verts;
+            verts = solidMoveSnapshot_;
+            for (Vector2 &v : verts) {
+                v.x += delta.x;
+                v.y += delta.y;
+            }
+        }
+        break;
+    case SelectedType::Anvil:
+        if (selected_.index >= 0 && selected_.index < static_cast<int>(map_.anvils.size())) {
+            map_.anvils[static_cast<size_t>(selected_.index)].cx = target.x;
+            map_.anvils[static_cast<size_t>(selected_.index)].cy = target.y;
+        }
         break;
     case SelectedType::PlayerSpawn:
         map_.playerSpawn = target;
@@ -302,6 +460,12 @@ void EditorScene::deleteSelection() {
         map_.itemSpawns.erase(map_.itemSpawns.begin() + selected_.index);
     } else if (selected_.type == SelectedType::Casket) {
         map_.hasCasket = false;
+    } else if (selected_.type == SelectedType::SolidShape && selected_.index >= 0 &&
+               selected_.index < static_cast<int>(map_.solidShapes.size())) {
+        map_.solidShapes.erase(map_.solidShapes.begin() + selected_.index);
+    } else if (selected_.type == SelectedType::Anvil && selected_.index >= 0 &&
+               selected_.index < static_cast<int>(map_.anvils.size())) {
+        map_.anvils.erase(map_.anvils.begin() + selected_.index);
     }
     selected_ = {};
 }
@@ -336,6 +500,22 @@ void EditorScene::duplicateSelection() {
         map_.itemSpawns.push_back(copy);
         selected_.type = SelectedType::Item;
         selected_.index = static_cast<int>(map_.itemSpawns.size()) - 1;
+    } else if (selected_.type == SelectedType::SolidShape && selected_.index >= 0 &&
+               selected_.index < static_cast<int>(map_.solidShapes.size())) {
+        SolidShapeData copy = map_.solidShapes[static_cast<size_t>(selected_.index)];
+        for (Vector2 &v : copy.verts) {
+            v.x += 36.0F;
+            v.y += 36.0F;
+        }
+        map_.solidShapes.push_back(std::move(copy));
+        selected_.index = static_cast<int>(map_.solidShapes.size()) - 1;
+    } else if (selected_.type == SelectedType::Anvil && selected_.index >= 0 &&
+               selected_.index < static_cast<int>(map_.anvils.size())) {
+        AnvilData copy = map_.anvils[static_cast<size_t>(selected_.index)];
+        copy.cx += 40.0F;
+        copy.cy += 40.0F;
+        map_.anvils.push_back(copy);
+        selected_.index = static_cast<int>(map_.anvils.size()) - 1;
     }
 }
 
@@ -358,8 +538,7 @@ void EditorScene::copySelectionToClipboard() {
         clipboardItem_ = map_.itemSpawns[static_cast<size_t>(selected_.index)];
         clipboardKind_ = ClipboardKind::Item;
     } else if (selected_.type == SelectedType::Casket && map_.hasCasket) {
-        clipboardCasketPos_ = map_.casketPos;
-        clipboardHasCasket_ = true;
+        clipboardCasket_ = map_.casket;
         clipboardKind_ = ClipboardKind::Casket;
     }
 }
@@ -395,7 +574,9 @@ void EditorScene::pasteFromClipboard(const Vector2 &worldMouse) {
     }
     case ClipboardKind::Casket:
         map_.hasCasket = true;
-        map_.casketPos = worldMouse;
+        map_.casket = clipboardCasket_;
+        map_.casket.cx = worldMouse.x;
+        map_.casket.cy = worldMouse.y;
         selected_.type = SelectedType::Casket;
         selected_.index = -1;
         break;
@@ -527,6 +708,9 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
     const bool leftPressed = input.isMouseButtonPressed(MOUSE_BUTTON_LEFT);
     const bool leftHeld = input.isMouseButtonHeld(MOUSE_BUTTON_LEFT);
     const bool leftReleased = input.isMouseButtonReleased(MOUSE_BUTTON_LEFT);
+    const bool ctrlHeld = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
+
+    snapGuideActive_ = false;
 
     if (resizingWall_ != ResizeHandle::None) {
         if (selected_.type == SelectedType::Wall && selected_.index >= 0 &&
@@ -536,20 +720,57 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
             const float fixedLeft = wallResizeStart_.cx - wallResizeStart_.halfW;
             const float fixedTop = wallResizeStart_.cy - wallResizeStart_.halfH;
             const float fixedBottom = wallResizeStart_.cy + wallResizeStart_.halfH;
+            const int skipW = selected_.index;
             if (resizingWall_ == ResizeHandle::Right) {
-                const float newRight = fixedRight + (worldMouse.x - wallResizeMouseStart_.x);
+                float newRight = fixedRight + (worldMouse.x - wallResizeMouseStart_.x);
+                bool g = false;
+                Vector2 ga{};
+                Vector2 gb{};
+                newRight = snapVerticalEdgeX(newRight, map_, skipW, -1, ctrlHeld, g, ga, gb);
+                if (g) {
+                    snapGuideActive_ = true;
+                    snapGuideA_ = ga;
+                    snapGuideB_ = gb;
+                }
                 w.cx = (fixedLeft + newRight) * 0.5F;
                 w.halfW = std::max(10.0F, (newRight - fixedLeft) * 0.5F);
             } else if (resizingWall_ == ResizeHandle::Left) {
-                const float newLeft = fixedLeft + (worldMouse.x - wallResizeMouseStart_.x);
+                float newLeft = fixedLeft + (worldMouse.x - wallResizeMouseStart_.x);
+                bool g = false;
+                Vector2 ga{};
+                Vector2 gb{};
+                newLeft = snapVerticalEdgeX(newLeft, map_, skipW, -1, ctrlHeld, g, ga, gb);
+                if (g) {
+                    snapGuideActive_ = true;
+                    snapGuideA_ = ga;
+                    snapGuideB_ = gb;
+                }
                 w.cx = (newLeft + fixedRight) * 0.5F;
                 w.halfW = std::max(10.0F, (fixedRight - newLeft) * 0.5F);
             } else if (resizingWall_ == ResizeHandle::Bottom) {
-                const float newBottom = fixedBottom + (worldMouse.y - wallResizeMouseStart_.y);
+                float newBottom = fixedBottom + (worldMouse.y - wallResizeMouseStart_.y);
+                bool g = false;
+                Vector2 ga{};
+                Vector2 gb{};
+                newBottom = snapHorizontalEdgeY(newBottom, map_, skipW, -1, ctrlHeld, g, ga, gb);
+                if (g) {
+                    snapGuideActive_ = true;
+                    snapGuideA_ = ga;
+                    snapGuideB_ = gb;
+                }
                 w.cy = (fixedTop + newBottom) * 0.5F;
                 w.halfH = std::max(10.0F, (newBottom - fixedTop) * 0.5F);
             } else if (resizingWall_ == ResizeHandle::Top) {
-                const float newTop = fixedTop + (worldMouse.y - wallResizeMouseStart_.y);
+                float newTop = fixedTop + (worldMouse.y - wallResizeMouseStart_.y);
+                bool g = false;
+                Vector2 ga{};
+                Vector2 gb{};
+                newTop = snapHorizontalEdgeY(newTop, map_, skipW, -1, ctrlHeld, g, ga, gb);
+                if (g) {
+                    snapGuideActive_ = true;
+                    snapGuideA_ = ga;
+                    snapGuideB_ = gb;
+                }
                 w.cy = (newTop + fixedBottom) * 0.5F;
                 w.halfH = std::max(10.0F, (fixedBottom - newTop) * 0.5F);
             }
@@ -568,20 +789,57 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
             const float fixedLeft = lavaResizeStart_.cx - lavaResizeStart_.halfW;
             const float fixedTop = lavaResizeStart_.cy - lavaResizeStart_.halfH;
             const float fixedBottom = lavaResizeStart_.cy + lavaResizeStart_.halfH;
+            const int skipL = selected_.index;
             if (resizingLava_ == ResizeHandle::Right) {
-                const float newRight = fixedRight + (worldMouse.x - lavaResizeMouseStart_.x);
+                float newRight = fixedRight + (worldMouse.x - lavaResizeMouseStart_.x);
+                bool g = false;
+                Vector2 ga{};
+                Vector2 gb{};
+                newRight = snapVerticalEdgeX(newRight, map_, -1, skipL, ctrlHeld, g, ga, gb);
+                if (g) {
+                    snapGuideActive_ = true;
+                    snapGuideA_ = ga;
+                    snapGuideB_ = gb;
+                }
                 w.cx = (fixedLeft + newRight) * 0.5F;
                 w.halfW = std::max(10.0F, (newRight - fixedLeft) * 0.5F);
             } else if (resizingLava_ == ResizeHandle::Left) {
-                const float newLeft = fixedLeft + (worldMouse.x - lavaResizeMouseStart_.x);
+                float newLeft = fixedLeft + (worldMouse.x - lavaResizeMouseStart_.x);
+                bool g = false;
+                Vector2 ga{};
+                Vector2 gb{};
+                newLeft = snapVerticalEdgeX(newLeft, map_, -1, skipL, ctrlHeld, g, ga, gb);
+                if (g) {
+                    snapGuideActive_ = true;
+                    snapGuideA_ = ga;
+                    snapGuideB_ = gb;
+                }
                 w.cx = (newLeft + fixedRight) * 0.5F;
                 w.halfW = std::max(10.0F, (fixedRight - newLeft) * 0.5F);
             } else if (resizingLava_ == ResizeHandle::Bottom) {
-                const float newBottom = fixedBottom + (worldMouse.y - lavaResizeMouseStart_.y);
+                float newBottom = fixedBottom + (worldMouse.y - lavaResizeMouseStart_.y);
+                bool g = false;
+                Vector2 ga{};
+                Vector2 gb{};
+                newBottom = snapHorizontalEdgeY(newBottom, map_, -1, skipL, ctrlHeld, g, ga, gb);
+                if (g) {
+                    snapGuideActive_ = true;
+                    snapGuideA_ = ga;
+                    snapGuideB_ = gb;
+                }
                 w.cy = (fixedTop + newBottom) * 0.5F;
                 w.halfH = std::max(10.0F, (newBottom - fixedTop) * 0.5F);
             } else if (resizingLava_ == ResizeHandle::Top) {
-                const float newTop = fixedTop + (worldMouse.y - lavaResizeMouseStart_.y);
+                float newTop = fixedTop + (worldMouse.y - lavaResizeMouseStart_.y);
+                bool g = false;
+                Vector2 ga{};
+                Vector2 gb{};
+                newTop = snapHorizontalEdgeY(newTop, map_, -1, skipL, ctrlHeld, g, ga, gb);
+                if (g) {
+                    snapGuideActive_ = true;
+                    snapGuideA_ = ga;
+                    snapGuideB_ = gb;
+                }
                 w.cy = (newTop + fixedBottom) * 0.5F;
                 w.halfH = std::max(10.0F, (fixedBottom - newTop) * 0.5F);
             }
@@ -659,12 +917,23 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
                 const auto &e = map_.enemies[static_cast<size_t>(selected_.index)];
                 center = {e.x, e.y};
             } else if (selected_.type == SelectedType::Casket) {
-                center = map_.casketPos;
+                center = {map_.casket.cx, map_.casket.cy};
             } else if (selected_.type == SelectedType::PlayerSpawn) {
                 center = map_.playerSpawn;
             } else if (selected_.type == SelectedType::Item) {
                 const auto &it = map_.itemSpawns[static_cast<size_t>(selected_.index)];
                 center = {it.x, it.y};
+            } else if (selected_.type == SelectedType::SolidShape && selected_.index >= 0 &&
+                       selected_.index < static_cast<int>(map_.solidShapes.size())) {
+                const auto &sd = map_.solidShapes[static_cast<size_t>(selected_.index)];
+                solidMoveSnapshot_ = sd.verts;
+                solidMoveCenterStart_ = polygonCentroid(sd.verts);
+                solidMoveActive_ = true;
+                center = solidMoveCenterStart_;
+            } else if (selected_.type == SelectedType::Anvil && selected_.index >= 0 &&
+                       selected_.index < static_cast<int>(map_.anvils.size())) {
+                const auto &an = map_.anvils[static_cast<size_t>(selected_.index)];
+                center = {an.cx, an.cy};
             }
             dragOffset_ = {center.x - worldMouse.x, center.y - worldMouse.y};
             draggingSelection_ = true;
@@ -675,6 +944,7 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
     }
     if (leftReleased) {
         draggingSelection_ = false;
+        solidMoveActive_ = false;
     }
 
     if (selected_.type == SelectedType::Wall && selected_.index >= 0 &&
@@ -891,10 +1161,12 @@ void EditorScene::update(SceneManager &scenes, InputManager &input, ResourceMana
                                   panel.y + panel.height - 8.0F - contentY};
     if (click && CheckCollisionPointRec(mouse, contentClip)) {
         if (activeTab_ == EditorTab::Elements) {
-            static constexpr const char *kElemLbl[] = {"Select", "Wall", "Lava", "Casket",
-                                                       "Player spawn"};
-            static constexpr Tool kElemTool[] = {Tool::Select, Tool::PlaceWall, Tool::PlaceLava,
-                                                   Tool::PlaceCasket, Tool::SetPlayerSpawn};
+            static constexpr const char *kElemLbl[] = {"Select",  "Wall",        "Lava",
+                                                         "Casket",  "Player spawn", "Solid (poly)",
+                                                         "Anvil"};
+            static constexpr Tool kElemTool[] = {
+                Tool::Select, Tool::PlaceWall, Tool::PlaceLava, Tool::PlaceCasket, Tool::SetPlayerSpawn,
+                Tool::PlaceSolid, Tool::PlaceAnvil};
             constexpr int nElem = static_cast<int>(sizeof(kElemLbl) / sizeof(kElemLbl[0]));
             for (int i = 0; i < nElem; ++i) {
                 const Rectangle row{contentClip.x + 2.0F,
@@ -987,6 +1259,23 @@ void EditorScene::update(SceneManager &scenes, InputManager &input, ResourceMana
     const float wheel = GetMouseWheelMove();
     if (std::fabs(wheel) > 0.001F) {
         camera_.camera().zoom = std::clamp(camera_.camera().zoom + wheel * 0.08F, 0.35F, 2.2F);
+    }
+
+    if (click) {
+        handleCasketLootPanelClick(mouse, click, uiConsumedClick);
+    }
+    if (!overUi && !uiConsumedClick && activeTool_ == Tool::PlaceSolid &&
+        input.isKeyPressed(KEY_ENTER) && static_cast<int>(solidDraftVerts_.size()) >= 3) {
+        SolidShapeData sd{};
+        sd.verts = solidDraftVerts_;
+        map_.solidShapes.push_back(std::move(sd));
+        solidDraftVerts_.clear();
+        activeTool_ = Tool::Select;
+        uiConsumedClick = true;
+    }
+    if (!overUi && activeTool_ == Tool::PlaceSolid &&
+        input.isMouseButtonPressed(MOUSE_BUTTON_RIGHT) && !solidDraftVerts_.empty()) {
+        solidDraftVerts_.pop_back();
     }
 
     const Vector2 worldMouse = worldMouseFromScreen(mouse);
@@ -1131,6 +1420,52 @@ void EditorScene::drawEditorWorld(const Font &font) {
         }
     }
 
+    for (int i = 0; i < static_cast<int>(map_.solidShapes.size()); ++i) {
+        const SolidShapeData &sd = map_.solidShapes[static_cast<size_t>(i)];
+        if (sd.verts.size() < 3) {
+            continue;
+        }
+        const bool sel = selected_.type == SelectedType::SolidShape && selected_.index == i;
+        const Vector2 c = polygonCentroid(sd.verts);
+        const Vector2 cIso = worldToIso(c);
+        const Color fill = sel ? Color{75, 68, 58, 210} : Color{50, 44, 38, 170};
+        const Color edge = sel ? Color{255, 210, 150, 255} : Color{120, 100, 85, 255};
+        for (size_t k = 0; k + 1 < sd.verts.size(); ++k) {
+            const Vector2 a = worldToIso(sd.verts[k]);
+            const Vector2 b = worldToIso(sd.verts[k + 1]);
+            DrawTriangle(cIso, a, b, fill);
+        }
+        for (size_t k = 0; k < sd.verts.size(); ++k) {
+            const Vector2 a = worldToIso(sd.verts[k]);
+            const Vector2 b = worldToIso(sd.verts[(k + 1) % sd.verts.size()]);
+            DrawLineV(a, b, edge);
+        }
+        if (sel) {
+            DrawTextEx(font, "Solid", {cIso.x + 6.0F, cIso.y - 16.0F}, 14.0F, 1.0F, RAYWHITE);
+        }
+    }
+
+    for (int i = 0; i < static_cast<int>(map_.anvils.size()); ++i) {
+        const AnvilData &an = map_.anvils[static_cast<size_t>(i)];
+        const float h = 18.0F;
+        const float wv = 22.0F;
+        const Vector2 q1 = worldToIso({an.cx - wv, an.cy - h});
+        const Vector2 q2 = worldToIso({an.cx + wv, an.cy - h});
+        const Vector2 q3 = worldToIso({an.cx + wv, an.cy + h});
+        const Vector2 q4 = worldToIso({an.cx - wv, an.cy + h});
+        const bool sel = selected_.type == SelectedType::Anvil && selected_.index == i;
+        const Color fill = sel ? Color{160, 150, 120, 255} : Color{110, 100, 80, 255};
+        const Color edge = sel ? Color{255, 230, 160, 255} : Color{180, 160, 120, 255};
+        DrawTriangle(q1, q2, q3, fill);
+        DrawTriangle(q1, q3, q4, fill);
+        DrawLineV(q1, q2, edge);
+        DrawLineV(q2, q3, edge);
+        DrawLineV(q3, q4, edge);
+        DrawLineV(q4, q1, edge);
+        const Vector2 ctr = worldToIso({an.cx, an.cy});
+        DrawTextEx(font, "Anvil", {ctr.x + 10.0F, ctr.y - 18.0F}, 13.0F, 1.0F, RAYWHITE);
+    }
+
     for (int i = 0; i < static_cast<int>(map_.enemies.size()); ++i) {
         const EnemySpawnData &e = map_.enemies[static_cast<size_t>(i)];
         const Vector2 iso = worldToIso({e.x, e.y});
@@ -1160,10 +1495,27 @@ void EditorScene::drawEditorWorld(const Font &font) {
     DrawTextEx(font, "Player Spawn", {pIso.x + 8.0F, pIso.y - 18.0F}, 14.0F, 1.0F, RAYWHITE);
 
     if (map_.hasCasket) {
-        const Vector2 cIso = worldToIso(map_.casketPos);
+        const Vector2 cIso = worldToIso({map_.casket.cx, map_.casket.cy});
         const bool sel = selected_.type == SelectedType::Casket;
         DrawCircleV(cIso, sel ? 14.0F : 11.0F, sel ? Color{190, 150, 105, 255} : Color{130, 95, 55, 255});
-        DrawTextEx(font, "Old Casket", {cIso.x + 8.0F, cIso.y - 18.0F}, 14.0F, 1.0F, RAYWHITE);
+        DrawTextEx(font, "Casket", {cIso.x + 8.0F, cIso.y - 18.0F}, 14.0F, 1.0F, RAYWHITE);
+    }
+
+    if (solidDraftVerts_.size() >= 1) {
+        for (size_t k = 0; k + 1 < solidDraftVerts_.size(); ++k) {
+            const Vector2 a = worldToIso(solidDraftVerts_[k]);
+            const Vector2 b = worldToIso(solidDraftVerts_[k + 1]);
+            DrawLineV(a, b, {255, 220, 120, 255});
+        }
+        for (const Vector2 &pv : solidDraftVerts_) {
+            DrawCircleV(worldToIso(pv), 5.0F, {255, 200, 80, 255});
+        }
+    }
+
+    if (snapGuideActive_) {
+        const Vector2 a = worldToIso(snapGuideA_);
+        const Vector2 b = worldToIso(snapGuideB_);
+        DrawLineEx(a, b, 2.0F, Fade(YELLOW, 0.85F));
     }
 }
 
@@ -1236,9 +1588,12 @@ void EditorScene::drawToolbar(const Font &font, Vector2 mouse) {
     };
 
     if (activeTab_ == EditorTab::Elements) {
-        static constexpr const char *kElemLbl[] = {"Select", "Wall", "Lava", "Casket", "Player spawn"};
-        static constexpr Tool kElemTool[] = {Tool::Select, Tool::PlaceWall, Tool::PlaceLava,
-                                             Tool::PlaceCasket, Tool::SetPlayerSpawn};
+        static constexpr const char *kElemLbl[] = {"Select",  "Wall",        "Lava",
+                                                     "Casket",  "Player spawn", "Solid (poly)",
+                                                     "Anvil"};
+        static constexpr Tool kElemTool[] = {
+            Tool::Select, Tool::PlaceWall, Tool::PlaceLava, Tool::PlaceCasket, Tool::SetPlayerSpawn,
+            Tool::PlaceSolid, Tool::PlaceAnvil};
         constexpr int nElem = static_cast<int>(sizeof(kElemLbl) / sizeof(kElemLbl[0]));
         for (int i = 0; i < nElem; ++i) {
             const float ry = contentClip.y + static_cast<float>(i) * (rowH + rowGap);
@@ -1253,11 +1608,26 @@ void EditorScene::drawToolbar(const Font &font, Vector2 mouse) {
             "Hollow Ring",
         };
         constexpr int nItem = static_cast<int>(sizeof(kItemOptLbl) / sizeof(kItemOptLbl[0]));
+        const float maxLabelW = contentClip.width - 20.0F;
         for (int i = 0; i < nItem; ++i) {
             const float ry = contentClip.y + static_cast<float>(i) * (rowH + rowGap);
             const Rectangle hit{contentClip.x + 2.0F, ry, contentClip.width - 4.0F, rowH};
             const bool rowAct = activeTool_ == Tool::PlaceItem && selectedItemKind_ == i;
-            drawRow(ry, kItemOptLbl[static_cast<size_t>(i)], rowAct, CheckCollisionPointRec(mouse, hit));
+            std::string lbl = kItemOptLbl[static_cast<size_t>(i)];
+            const float fs = 14.0F;
+            while (lbl.size() > 3 &&
+                   MeasureTextEx(font, (lbl + "...").c_str(), fs, 1.0F).x > maxLabelW) {
+                lbl.pop_back();
+            }
+            if (lbl != kItemOptLbl[static_cast<size_t>(i)]) {
+                lbl += "...";
+            }
+            const Rectangle row{contentClip.x + 2.0F, ry, contentClip.width - 4.0F, rowH};
+            const bool rowHover = CheckCollisionPointRec(mouse, hit);
+            DrawRectangleRec(row, rowHover ? ui::theme::BTN_HOVER
+                                          : (rowAct ? ui::theme::SLOT_FILL : ui::theme::BTN_FILL));
+            DrawRectangleLinesEx(row, 1.0F, rowAct ? ui::theme::BTN_BORDER : Fade(ui::theme::BTN_BORDER, 140));
+            DrawTextEx(font, lbl.c_str(), {row.x + 8.0F, row.y + 6.0F}, fs, 1.0F, RAYWHITE);
         }
     } else {
         struct RowDef {
@@ -1297,6 +1667,7 @@ void EditorScene::draw(ResourceManager &resources) {
     const Font &font = resources.uiFont();
     const Vector2 mouse = GetMousePosition();
     drawToolbar(font, mouse);
+    drawCasketLootPanel(font, mouse);
 
     const Vector2 worldMouse = worldMouseFromScreen(mouse);
     char posBuf[96];
@@ -1305,8 +1676,10 @@ void EditorScene::draw(ResourceManager &resources) {
     DrawTextEx(font, posBuf, {16.0F, 604.0F}, 16.0F, 1.0F, ui::theme::LABEL_TEXT);
 
     char countBuf[160];
-    std::snprintf(countBuf, sizeof(countBuf), "Walls: %d  Lava: %d  Enemies: %d  Items: %d",
+    std::snprintf(countBuf, sizeof(countBuf),
+                  "Walls: %d  Lava: %d  Solids: %d  Anvils: %d  Enemies: %d  Items: %d",
                   static_cast<int>(map_.walls.size()), static_cast<int>(map_.lavas.size()),
+                  static_cast<int>(map_.solidShapes.size()), static_cast<int>(map_.anvils.size()),
                   static_cast<int>(map_.enemies.size()), static_cast<int>(map_.itemSpawns.size()));
     DrawTextEx(font, countBuf, {16.0F, 626.0F}, 16.0F, 1.0F, ui::theme::LABEL_TEXT);
 
@@ -1321,6 +1694,80 @@ void EditorScene::draw(ResourceManager &resources) {
 
     if (showUnsavedDialog_) {
         drawUnsavedChangesModal(font, mouse);
+    }
+}
+
+Rectangle EditorScene::casketLootPanelRect() const {
+    return {static_cast<float>(config::WINDOW_WIDTH) - 292.0F, 384.0F, 276.0F, 124.0F};
+}
+
+void EditorScene::handleCasketLootPanelClick(const Vector2 &mouse, bool click, bool &uiConsumed) {
+    if (!click || selected_.type != SelectedType::Casket || !map_.hasCasket) {
+        return;
+    }
+    const Rectangle panel = casketLootPanelRect();
+    if (!CheckCollisionPointRec(mouse, panel)) {
+        return;
+    }
+    static constexpr const char *kCycle[] = {"",                "iron_armor",
+                                             "vial_pure_blood", "vial_cordial_manic",
+                                             "barbed_tunic",    "runic_shell",
+                                             "vial_raw_spirit", "hollow_ring"};
+    constexpr int nC = static_cast<int>(sizeof(kCycle) / sizeof(kCycle[0]));
+    for (int slot = 0; slot < 3; ++slot) {
+        const Rectangle row{panel.x + 8.0F, panel.y + 26.0F + static_cast<float>(slot) * 34.0F,
+                              panel.width - 16.0F, 30.0F};
+        if (CheckCollisionPointRec(mouse, row)) {
+            std::string &s = map_.casket.itemSlots[static_cast<size_t>(slot)];
+            int cur = 0;
+            for (; cur < nC; ++cur) {
+                if (s == kCycle[cur]) {
+                    break;
+                }
+            }
+            if (cur >= nC) {
+                cur = 0;
+            }
+            cur = (cur + 1) % nC;
+            s = kCycle[cur];
+            uiConsumed = true;
+            return;
+        }
+    }
+}
+
+void EditorScene::drawCasketLootPanel(const Font &font, Vector2 mouse) {
+    (void)mouse;
+    if (selected_.type != SelectedType::Casket || !map_.hasCasket) {
+        return;
+    }
+    const Rectangle panel = casketLootPanelRect();
+    DrawRectangleRec(panel, Fade(ui::theme::PANEL_FILL, 246));
+    DrawRectangleLinesEx(panel, 2.0F, ui::theme::PANEL_BORDER);
+    DrawTextEx(font, "Casket loot (click row to cycle)", {panel.x + 10.0F, panel.y + 6.0F}, 15.0F,
+               1.0F, RAYWHITE);
+    for (int slot = 0; slot < 3; ++slot) {
+        const Rectangle row{panel.x + 8.0F, panel.y + 26.0F + static_cast<float>(slot) * 34.0F,
+                              panel.width - 16.0F, 30.0F};
+        const bool hov = CheckCollisionPointRec(mouse, row);
+        DrawRectangleRec(row, hov ? ui::theme::BTN_HOVER : ui::theme::SLOT_FILL);
+        DrawRectangleLinesEx(row, 1.0F, ui::theme::SLOT_BORDER);
+        const std::string &kid = map_.casket.itemSlots[static_cast<size_t>(slot)];
+        std::string label = "(empty)";
+        if (!kid.empty()) {
+            const ItemData it = makeItemFromMapKind(kid);
+            label = it.name.empty() ? kid : it.name;
+        }
+        const float maxW = row.width - 16.0F;
+        const float fs = 14.0F;
+        const std::string orig = label;
+        while (label.size() > 3 && MeasureTextEx(font, (label + "...").c_str(), fs, 1.0F).x > maxW) {
+            label.pop_back();
+        }
+        if (label.size() < orig.size()) {
+            label += "...";
+        }
+        DrawTextEx(font, label.c_str(), {row.x + 8.0F, row.y + 7.0F}, fs, 1.0F, RAYWHITE);
     }
 }
 

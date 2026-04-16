@@ -23,6 +23,8 @@ enum class ItemRarity : uint8_t {
 };
 
 struct ItemData {
+    /// Matches `assets/data/items.json` `id` / map `ITEM` kind (empty for legacy items).
+    std::string catalogId{};
     std::string name;
     std::string iconPath{};
     EquipSlot slot{EquipSlot::Armor};
@@ -41,8 +43,14 @@ struct ItemData {
     std::string description{};
 
     [[nodiscard]] bool canStackWith(const ItemData &other) const {
-        return isStackable && other.isStackable && isConsumable && other.isConsumable &&
-               name == other.name && maxStack == other.maxStack;
+        if (!isStackable || !other.isStackable || !isConsumable || !other.isConsumable ||
+            maxStack != other.maxStack) {
+            return false;
+        }
+        if (!catalogId.empty() && !other.catalogId.empty()) {
+            return catalogId == other.catalogId;
+        }
+        return name == other.name;
     }
 };
 
