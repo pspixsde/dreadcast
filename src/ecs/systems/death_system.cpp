@@ -16,6 +16,7 @@ void applyLevelUp(entt::registry &registry, entt::entity player, PlayerLevel &pl
         return;
     }
     ++pl.level;
+    ++pl.skillPoints;
     pl.rangedDamageBonus += pl.perLevelRangedDamage;
 
     if (registry.all_of<PlayerClassStats>(player)) {

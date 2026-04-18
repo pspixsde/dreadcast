@@ -155,7 +155,7 @@ std::string joinPath(const std::string &base, const std::string &relative) {
     if (a.name == "Lead Fever") {
         a.effectDuration = 6.0F;
         a.pelletCount = 4;
-        a.scatterAngle = 0.35F;
+        a.scatterAngle = 0.30F;
         a.scatterRandom = 0.18F;
         a.knockback = 250.0F;
     } else if (a.name == "Deadlight Snare") {
@@ -287,8 +287,8 @@ void seedCharactersFallback(std::vector<CharacterClass> &out) {
     {
       "id": "undead_hunter",
       "name": "Undead Hunter",
-      "description": "Masters of cursed weaponry and relentless aggression.",
-      "bio": "Raised among the ash-choked barrows, they trade sanity for certainty: every curse has a price, and they pay in blood so the dead stay buried.",
+      "description": "",
+      "bio": "A hunter cast out over rumors of dark blood. A cursed beast and cruel men tore his life apart; he died on his family's floor vowing vengeance — and woke in the Dread Pit, half-dead and hungry in ways that no longer feel human.",
       "detailAbilities": "- Ranged curse bolt (LMB) — mana cost, hits at range.\n- Three-hit melee combo (RMB) — frontal cone, hold to loop, per-hit knockback.\n- [1] Lead Fever — 6s: shots become 4 randomly scattered pellets (full damage) with knockback; 25 mana, 20s cooldown.\n- [2] Deadlight Snare — throw a net forward, dash back; on hit, pull nearby foes together and stun 2s; 20 mana, 20s cooldown.\n- [3] Calamity Slug — channel 1s, then a huge piercing shot for 50 damage with sideways knockback; 30 mana, 25s cooldown.\n- Built for aggression: close the gap, manage mana, punish mistakes.",
       "hpRegen": 0.5,
       "manaRegen": 0.5,
@@ -499,10 +499,11 @@ const CharacterClass &characterAt(int index) {
         fallbackInit = true;
         kFallback.id = "undead_hunter";
         kFallback.name = "Undead Hunter";
-        kFallback.description = "Masters of cursed weaponry and relentless aggression.";
+        kFallback.description = "";
         kFallback.bio =
-            "Raised among the ash-choked barrows, they trade sanity for certainty: every curse has a "
-            "price, and they pay in blood so the dead stay buried.";
+            "A hunter cast out over rumors of dark blood. A cursed beast and cruel men tore his life "
+            "apart; he died on his family's floor vowing vengeance — and woke in the Dread Pit, "
+            "half-dead and hungry in ways that no longer feel human.";
         kFallback.detailAbilities =
             "- Ranged curse bolt (LMB) — mana cost, hits at range.\n"
             "- Three-hit melee combo (RMB) — frontal cone, hold to loop, per-hit knockback.\n"

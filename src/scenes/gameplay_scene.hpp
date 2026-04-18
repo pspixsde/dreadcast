@@ -6,6 +6,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "config.hpp"
@@ -16,6 +17,7 @@
 #include "scenes/scene.hpp"
 #include "ui/button.hpp"
 #include "ui/inventory_ui.hpp"
+#include "ui/skill_tree_ui.hpp"
 
 namespace dreadcast {
 
@@ -93,7 +95,7 @@ class GameplayScene final : public Scene {
     void drawFloatingCombatNumbers(ResourceManager &resources);
     void tickFloatingNumbers(float frameDt);
     void tickChamberState(float fixedDt);
-    void drawChamberHudIcon(ResourceManager &resources, float barX, float statusY, float icon);
+    void drawChamberPelletArc(float portraitCx, float portraitCy, float portraitR);
     void drawMinimapOverlay(bool fullScreen, ResourceManager &resources);
     void tickAnvilUi(InputManager &input, ResourceManager &resources, const ui::AnvilUiLayout &layout);
     void drawAnvilUi(ResourceManager &resources, const ui::AnvilUiLayout &layout);
@@ -124,6 +126,7 @@ class GameplayScene final : public Scene {
     bool paused_{false};
     bool gameOver_{false};
     ui::InventoryUI inventoryUi_{};
+    ui::SkillTreeUI skillTreeUi_{};
     InventoryState inventory_{};
 
     ui::Button resumeButton_{};
@@ -143,6 +146,7 @@ class GameplayScene final : public Scene {
     float runicShellFlashTimer_{0.0F};
     float snareImpactFlash_{0.0F};
     Vector2 snareImpactWorld_{0.0F, 0.0F};
+    float skillPointFlashTimer_{0.0F};
 
     float abilityCdRem_[3]{0.0F, 0.0F, 0.0F};
     std::vector<ActiveStatusHud> statusHudOrder_{};
@@ -151,9 +155,14 @@ class GameplayScene final : public Scene {
     std::vector<FloatingNumber> floatingNumbers_{};
     std::unordered_map<entt::entity, float> hpBeforeFixedStep_{};
     std::unordered_map<entt::entity, bool> hellhoundPrevAgitated_{};
+    std::unordered_set<entt::entity> deathSfxPlayed_{};
 
     MapData loadedMap_{};
     bool fullMapOpen_{false};
+    /// Corner minimap only: world-space center of the panned view (deadzone follow).
+    float minimapFollowCamX_{0.0F};
+    float minimapFollowCamY_{0.0F};
+    bool minimapFollowCamInitialized_{false};
 
     bool anvilOpen_{false};
     entt::entity activeAnvil_{entt::null};

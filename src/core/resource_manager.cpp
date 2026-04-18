@@ -47,6 +47,9 @@ bool GameSettings::saveToFile(const std::string &path) const {
     out << "showDamageNumbers=" << (showDamageNumbers ? 1 : 0) << '\n';
     out << "showReloadOnCursor=" << (showReloadOnCursor ? 1 : 0) << '\n';
     out << "separateDropsWhenFull=" << (separateDropsWhenFull ? 1 : 0) << '\n';
+    out << "masterVolume=" << static_cast<double>(masterVolume) << '\n';
+    out << "gameVolume=" << static_cast<double>(gameVolume) << '\n';
+    out << "audioDeviceName=" << audioDeviceName << '\n';
     return out.good();
 }
 
@@ -97,16 +100,43 @@ void GameSettings::loadFromFile(const std::string &path) {
             if (vs >> i) {
                 separateDropsWhenFull = (i != 0);
             }
+        } else if (key == "masterVolume") {
+            double d = 0.0;
+            if (vs >> d) {
+                masterVolume = static_cast<float>(d);
+            }
+        } else if (key == "gameVolume") {
+            double d = 0.0;
+            if (vs >> d) {
+                gameVolume = static_cast<float>(d);
+            }
+        } else if (key == "audioDeviceName") {
+            audioDeviceName = val;
         }
     }
 }
 
 ResourceManager::ResourceManager() {
     settings_.loadFromFile("settings.cfg");
+    audio_.init(settings_.masterVolume, settings_.gameVolume, settings_.audioDeviceName);
+    if (audio_.isReady()) {
+        settings_.audioDeviceName = audio_.currentDeviceName();
+    }
     static_cast<void>(loadGameData());
 }
 
 ResourceManager::~ResourceManager() { unloadAll(); }
+
+void ResourceManager::updateAudio() { audio_.update(); }
+
+void ResourceManager::reinitAudioFromSettings() {
+    soundHandles_.clear();
+    audio_.shutdown();
+    audio_.init(settings_.masterVolume, settings_.gameVolume, settings_.audioDeviceName);
+    if (audio_.isReady()) {
+        settings_.audioDeviceName = audio_.currentDeviceName();
+    }
+}
 
 Texture2D ResourceManager::getTexture(const std::string &path) {
     auto it = textures_.find(path);
@@ -124,18 +154,17 @@ Texture2D ResourceManager::getTexture(const std::string &path) {
     return tex;
 }
 
-Sound ResourceManager::getSound(const std::string &path) {
-    auto it = sounds_.find(path);
-    if (it != sounds_.end()) {
+SoundHandle ResourceManager::getSound(const std::string &path) {
+    auto it = soundHandles_.find(path);
+    if (it != soundHandles_.end()) {
         return it->second;
     }
     const std::string resolved = resolveAssetPath(path);
-    const Sound snd = LoadSound(resolved.c_str());
-    if (!IsSoundValid(snd)) {
-        TraceLog(LOG_WARNING, "Dreadcast: could not load sound from \"%s\"", resolved.c_str());
+    const SoundHandle h = audio_.loadSound(resolved);
+    if (h >= 0) {
+        soundHandles_[path] = h;
     }
-    sounds_[path] = snd;
-    return snd;
+    return h;
 }
 
 void ResourceManager::loadUiFont(const std::string &path, int baseSize) {
@@ -181,14 +210,12 @@ void ResourceManager::loadUiFont(const std::string &path, int baseSize) {
 }
 
 void ResourceManager::unloadAll() {
+    soundHandles_.clear();
+    audio_.shutdown();
     for (auto &kv : textures_) {
         UnloadTexture(kv.second);
     }
     textures_.clear();
-    for (auto &kv : sounds_) {
-        UnloadSound(kv.second);
-    }
-    sounds_.clear();
     if (uiFontOwned_) {
         UnloadFont(uiFont_);
     }

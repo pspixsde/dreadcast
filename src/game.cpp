@@ -15,7 +15,6 @@ void Game::run(bool editorMode) {
     InitWindow(config::WINDOW_WIDTH, config::WINDOW_HEIGHT, config::WINDOW_TITLE);
     /// ESC is used for pause / inventory — do not map it to closing the window (X still closes).
     SetExitKey(KEY_NULL);
-    InitAudioDevice();
     SetTargetFPS(config::TARGET_FPS);
 
     resources_.loadUiFont(config::UI_FONT_PATH, config::UI_FONT_BASE_SIZE);
@@ -30,6 +29,7 @@ void Game::run(bool editorMode) {
     while (!WindowShouldClose() && !scenes_.shouldQuit()) {
         input_.beginFrame();
         const float dt = GetFrameTime();
+        resources_.updateAudio();
         scenes_.update(input_, resources_, dt);
 
         BeginDrawing();
@@ -53,7 +53,6 @@ void Game::run(bool editorMode) {
     while (!scenes_.empty()) {
         scenes_.pop();
     }
-    CloseAudioDevice();
     CloseWindow();
 }
 
