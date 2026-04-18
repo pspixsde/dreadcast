@@ -1,0 +1,199 @@
+#include "ui/skill_tree_ui.hpp"
+
+#include <cstdio>
+#include <cmath>
+
+#include "core/input.hpp"
+#include "core/resource_manager.hpp"
+#include "ui/theme.hpp"
+
+#include <raylib.h>
+
+namespace dreadcast::ui {
+
+namespace {
+
+constexpr float kPanelW = 720.0F;
+constexpr float kPanelH = 560.0F;
+constexpr float kNodeR = 28.0F;
+constexpr float kCoreDx = 80.0F;
+constexpr float kDiag = 80.0F * 0.70710678F;
+
+struct NodeDef {
+    float ox;
+    float oy;
+    bool core;
+};
+
+constexpr std::array<NodeDef, 6> kNodes{{
+    {-kCoreDx, 0.0F, true},
+    {kCoreDx, 0.0F, true},
+    {-kCoreDx - kDiag, -kDiag, false},
+    {-kCoreDx - kDiag, kDiag, false},
+    {kCoreDx + kDiag, -kDiag, false},
+    {kCoreDx + kDiag, kDiag, false},
+}};
+
+constexpr int kConn[][2] = {{0, 1}, {0, 2}, {0, 3}, {1, 4}, {1, 5}};
+
+[[nodiscard]] bool neighborOfLearned(const std::array<bool, 6> &learned, int idx) {
+    for (const auto &c : kConn) {
+        const int a = c[0];
+        const int b = c[1];
+        if (a == idx && learned[static_cast<size_t>(b)]) {
+            return true;
+        }
+        if (b == idx && learned[static_cast<size_t>(a)]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+void SkillTreeUI::resetProgress() {
+    learned_.fill(false);
+    learned_[0] = learned_[1] = true;
+}
+
+void SkillTreeUI::update(InputManager &input, int &skillPoints, float frameDt, bool &consumeEscOut,
+                         bool &flashNoPoints) {
+    consumeEscOut = false;
+    flashNoPoints = false;
+    if (!open_) {
+        holdEProgress_ = 0.0F;
+        hoverNode_ = -1;
+        return;
+    }
+
+    const int w = GetScreenWidth();
+    const int h = GetScreenHeight();
+    const float cx = static_cast<float>(w) * 0.5F;
+    const float cy = static_cast<float>(h) * 0.5F;
+    const Vector2 m = input.mousePosition();
+
+    hoverNode_ = -1;
+    for (int i = 0; i < 6; ++i) {
+        const float nx = cx + kNodes[static_cast<size_t>(i)].ox;
+        const float ny = cy + kNodes[static_cast<size_t>(i)].oy;
+        const float dx = m.x - nx;
+        const float dy = m.y - ny;
+        if (dx * dx + dy * dy <= kNodeR * kNodeR) {
+            hoverNode_ = i;
+            break;
+        }
+    }
+
+    const bool canSpend = hoverNode_ >= 0 && !learned_[static_cast<size_t>(hoverNode_)] &&
+                          !kNodes[static_cast<size_t>(hoverNode_)].core &&
+                          neighborOfLearned(learned_, hoverNode_);
+
+    if (input.isKeyPressed(KEY_ESCAPE)) {
+        open_ = false;
+        consumeEscOut = true;
+        holdEProgress_ = 0.0F;
+        return;
+    }
+
+    if (canSpend && input.isKeyHeld(KEY_E)) {
+        if (skillPoints <= 0) {
+            flashNoPoints = true;
+            holdEProgress_ = 0.0F;
+        } else {
+            holdEProgress_ += frameDt;
+            if (holdEProgress_ >= 1.0F) {
+                learned_[static_cast<size_t>(hoverNode_)] = true;
+                --skillPoints;
+                holdEProgress_ = 0.0F;
+            }
+        }
+    } else {
+        holdEProgress_ = 0.0F;
+    }
+}
+
+void SkillTreeUI::draw(const Font &font, ResourceManager & /*resources*/, int skillPoints,
+                       float noSkillPointFlashTimer) {
+    if (!open_) {
+        return;
+    }
+
+    const int w = GetScreenWidth();
+    const int h = GetScreenHeight();
+    const float cx = static_cast<float>(w) * 0.5F;
+    const float cy = static_cast<float>(h) * 0.5F;
+    const Rectangle panel{(static_cast<float>(w) - kPanelW) * 0.5F,
+                            (static_cast<float>(h) - kPanelH) * 0.5F, kPanelW, kPanelH};
+
+    DrawRectangleRec(panel, Color{20, 16, 14, 240});
+    DrawRectangleLinesEx(panel, 3.0F, ui::theme::BTN_BORDER);
+
+    const char *title = "Skill Tree — Undead Hunter";
+    const float titleSz = 26.0F;
+    DrawTextEx(font, title, {panel.x + 24.0F, panel.y + 18.0F}, titleSz, 1.0F, RAYWHITE);
+
+    char spBuf[48];
+    std::snprintf(spBuf, sizeof(spBuf), "Skill points: %d", skillPoints);
+    const float spSz = 22.0F;
+    const Vector2 spd = MeasureTextEx(font, spBuf, spSz, 1.0F);
+    DrawTextEx(font, spBuf, {panel.x + kPanelW - spd.x - 24.0F, panel.y + 20.0F}, spSz, 1.0F,
+               Color{210, 175, 95, 255});
+
+    if (noSkillPointFlashTimer > 0.001F) {
+        const char *msg = "No skill points";
+        const float ms = 20.0F;
+        const Vector2 md = MeasureTextEx(font, msg, ms, 1.0F);
+        DrawTextEx(font, msg,
+                   {panel.x + (kPanelW - md.x) * 0.5F, panel.y + kPanelH - 48.0F}, ms, 1.0F,
+                   Color{220, 80, 80, 255});
+    }
+
+    auto nodeCenter = [&](int i) {
+        return Vector2{cx + kNodes[static_cast<size_t>(i)].ox, cy + kNodes[static_cast<size_t>(i)].oy};
+    };
+
+    for (const auto &c : kConn) {
+        const Vector2 a = nodeCenter(c[0]);
+        const Vector2 b = nodeCenter(c[1]);
+        DrawLineEx(a, b, 3.0F, Fade(WHITE, 0.35F));
+    }
+
+    for (int i = 0; i < 6; ++i) {
+        const Vector2 nc = nodeCenter(i);
+        const bool learned = learned_[static_cast<size_t>(i)];
+        const bool core = kNodes[static_cast<size_t>(i)].core;
+        const bool grey = !learned && !core;
+        Color fill = core ? Color{90, 70, 45, 255} : (learned ? Color{70, 85, 60, 255}
+                                                             : Color{45, 45, 48, 255});
+        if (grey) {
+            fill = Fade(fill, 0.55F);
+        }
+        DrawCircleV(nc, kNodeR, fill);
+        DrawCircleLinesV(nc, kNodeR, core ? Color{220, 190, 120, 255} : Fade(WHITE, 0.35F));
+
+        const char *label = "?";
+        if (i == 0) {
+            label = "G";
+        } else if (i == 1) {
+            label = "M";
+        } else {
+            label = "?";
+        }
+        const float fs = 22.0F;
+        const Vector2 ld = MeasureTextEx(font, label, fs, 1.0F);
+        DrawTextEx(font, label, {nc.x - ld.x * 0.5F, nc.y - ld.y * 0.5F}, fs, 1.0F,
+                   Fade(RAYWHITE, grey ? 0.45F : 1.0F));
+    }
+
+    if (hoverNode_ >= 0 && holdEProgress_ > 0.001F && learned_[static_cast<size_t>(hoverNode_)] == false &&
+        !kNodes[static_cast<size_t>(hoverNode_)].core) {
+        const Vector2 nc = nodeCenter(hoverNode_);
+        const float t = std::clamp(holdEProgress_, 0.0F, 1.0F);
+        const float a0 = -90.0F;
+        const float a1 = -90.0F + 360.0F * t;
+        DrawRing(nc, kNodeR + 4.0F, kNodeR + 7.0F, a0, a1, 32, Color{210, 175, 95, 220});
+    }
+}
+
+} // namespace dreadcast::ui

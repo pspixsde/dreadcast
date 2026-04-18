@@ -10,7 +10,7 @@
       "cooldown": 20,
       "effectDuration": 6,
       "pelletCount": 4,
-      "scatterAngle": 0.35,
+      "scatterAngle": 0.30,
       "scatterRandom": 0.18,
       "knockback": 250
     },

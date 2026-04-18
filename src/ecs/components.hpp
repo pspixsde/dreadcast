@@ -256,6 +256,8 @@ struct PlayerClassStats {
 /// XP and per-level tuning (gains copied from character at spawn).
 struct PlayerLevel {
     int level{1};
+    /// Spent via skill tree; +1 on each level-up.
+    int skillPoints{0};
     float xp{0.0F};
     float xpToNextLevel{100.0F};
     /// Extra ranged damage from level-ups (added to `PlayerCombatBase::rangedDamage`).

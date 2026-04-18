@@ -5,6 +5,8 @@
 
 #include <raylib.h>
 
+#include "core/audio.hpp"
+
 namespace dreadcast {
 
 /// Runtime, user-tweakable settings shared across scenes.
@@ -20,6 +22,12 @@ struct GameSettings {
     bool showReloadOnCursor{true};
     /// When bag is full, "Separate" still splits one unit by dropping it at the player.
     bool separateDropsWhenFull{false};
+    /// Master volume (0–1) applied to the audio engine.
+    float masterVolume{1.0F};
+    /// Game / SFX volume (0–1), multiplied with master for gameplay sounds.
+    float gameVolume{1.0F};
+    /// Display name from audio device list, or empty / "System Default".
+    std::string audioDeviceName{};
 
     [[nodiscard]] bool saveToFile(const std::string &path) const;
     /// Loads from `path` if present; ignores missing file / parse errors.
@@ -33,7 +41,17 @@ class ResourceManager {
     ~ResourceManager();
 
     Texture2D getTexture(const std::string &path);
-    Sound getSound(const std::string &path);
+    /// Cached miniaudio handle; -1 if load failed.
+    [[nodiscard]] SoundHandle getSound(const std::string &path);
+
+    AudioSystem &audio() { return audio_; }
+    const AudioSystem &audio() const { return audio_; }
+
+    /// Call once per frame (decodes finished one-shot instances).
+    void updateAudio();
+
+    /// Rebuilds the audio backend from current `settings_` (used after Reset / device change).
+    void reinitAudioFromSettings();
 
     /// Loads the main UI font once. Falls back to the default font if loading fails.
     void loadUiFont(const std::string &path, int baseSize);
@@ -47,7 +65,10 @@ class ResourceManager {
 
   private:
     std::unordered_map<std::string, Texture2D> textures_;
-    std::unordered_map<std::string, Sound> sounds_;
+    std::unordered_map<std::string, SoundHandle> soundHandles_;
+
+    AudioSystem audio_{};
+
     Font uiFont_{};
     bool uiFontLoaded_{false};
     bool uiFontOwned_{false};

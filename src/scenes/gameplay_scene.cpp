@@ -7,6 +7,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <raylib.h>
@@ -19,6 +20,7 @@
 #include "core/cursor_draw.hpp"
 #include "core/input.hpp"
 #include "core/iso_utils.hpp"
+#include "core/audio.hpp"
 #include "core/resource_manager.hpp"
 #include "ecs/components.hpp"
 #include "ecs/systems/collision_system.hpp"
@@ -166,6 +168,36 @@ void drawHudKeyBadge(const Font &font, const char *keyChr, float iconLeft, float
     constexpr float protrude = 4.0F;
     const float bx = iconLeft - protrude * 0.65F;
     const float by = iconTop - protrude * 1.2F;
+    return {bx, by, kSq, kSq};
+}
+
+/// Keybind label in a small square on the **middle-right** edge of a HUD slot (sticks out past the slot).
+void drawHudShortcutKeyBadgeRight(const Font &font, const char *keyTxt, float slotLeft, float slotTop,
+                                  float slotSize) {
+    constexpr float kSq = 22.0F;
+    constexpr float overlap = 5.0F;
+    const float bx = slotLeft + slotSize - overlap;
+    const float by = slotTop + (slotSize - kSq) * 0.5F;
+    DrawRectangle(static_cast<int>(bx), static_cast<int>(by), static_cast<int>(kSq),
+                  static_cast<int>(kSq), Color{50, 50, 50, 255});
+    DrawRectangleLines(static_cast<int>(bx), static_cast<int>(by), static_cast<int>(kSq),
+                       static_cast<int>(kSq), Color{15, 15, 15, 200});
+    float fs = 13.0F;
+    Vector2 kd = MeasureTextEx(font, keyTxt, fs, 1.0F);
+    while (fs > 7.5F && (kd.x > kSq - 3.0F || kd.y > kSq - 2.0F)) {
+        fs -= 0.5F;
+        kd = MeasureTextEx(font, keyTxt, fs, 1.0F);
+    }
+    DrawTextEx(font, keyTxt, {bx + (kSq - kd.x) * 0.5F, by + (kSq - kd.y) * 0.5F}, fs, 1.0F,
+               RAYWHITE);
+}
+
+[[nodiscard]] Rectangle hudShortcutKeyBadgeOuterRectRight(float slotLeft, float slotTop,
+                                                          float slotSize) {
+    constexpr float kSq = 22.0F;
+    constexpr float overlap = 5.0F;
+    const float bx = slotLeft + slotSize - overlap;
+    const float by = slotTop + (slotSize - kSq) * 0.5F;
     return {bx, by, kSq, kSq};
 }
 
@@ -453,6 +485,7 @@ void GameplayScene::spawnWorld() {
     }
     loadedMap_ = map;
     fullMapOpen_ = false;
+    minimapFollowCamInitialized_ = false;
     anvilOpen_ = false;
     activeAnvil_ = entt::null;
     anvilTab_ = 0;
@@ -465,6 +498,8 @@ void GameplayScene::spawnWorld() {
     anvilBenchDisOutSlot_ = -1;
     anvilBenchDragPoolIdx_ = -1;
     hellhoundPrevAgitated_.clear();
+    deathSfxPlayed_.clear();
+    skillTreeUi_.resetProgress();
 
     const int classIdx = std::clamp(selectedClass_, 0, std::max(0, characterCount() - 1));
     const CharacterClass &cls = characterAt(classIdx);
@@ -490,6 +525,7 @@ void GameplayScene::spawnWorld() {
                                              ecs::PlayerClassStats{cls.baseMaxHp, cls.baseMaxMana});
     registry_.emplace<ecs::PlayerLevel>(
         player_, ecs::PlayerLevel{1,
+                                  0,
                                   0.0F,
                                   100.0F,
                                   0.0F,
@@ -1001,6 +1037,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
     runicShellFlashTimer_ = std::max(0.0F, runicShellFlashTimer_ - frameDt);
     snareImpactFlash_ = std::max(0.0F, snareImpactFlash_ - frameDt);
     hurtGruntCooldown_ = std::max(0.0F, hurtGruntCooldown_ - frameDt);
+    skillPointFlashTimer_ = std::max(0.0F, skillPointFlashTimer_ - frameDt);
 
     if (gameOver_) {
         const Vector2 mouse = input.mousePosition();
@@ -1022,8 +1059,10 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         return;
     }
 
+    bool escConsumedByCloseUi = false;
+
     if (input.isKeyPressed(KEY_TAB)) {
-        if (!paused_) {
+        if (!paused_ && !skillTreeUi_.isOpen()) {
             const bool wasOpen = inventoryUi_.isOpen();
             inventoryUi_.toggle();
             if (wasOpen && !inventoryUi_.isOpen()) {
@@ -1050,6 +1089,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
             }
             inventoryUi_.setOpen(false);
             aimScreenPos_ = input.mousePosition();
+            escConsumedByCloseUi = true;
         } else {
             const ui::AnvilUiLayout anvilLayout =
                 anvilOpen_ ? buildAnvilUiLayout() : ui::AnvilUiLayout{};
@@ -1076,11 +1116,34 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         }
     }
 
+    bool skillTreeEsc = false;
+    bool flashNoSkillPoints = false;
+    if (registry_.valid(player_) && registry_.all_of<ecs::PlayerLevel>(player_)) {
+        auto &pl = registry_.get<ecs::PlayerLevel>(player_);
+        skillTreeUi_.update(input, pl.skillPoints, frameDt, skillTreeEsc, flashNoSkillPoints);
+    }
+    if (flashNoSkillPoints) {
+        skillPointFlashTimer_ = 0.55F;
+    }
+    if (skillTreeEsc) {
+        escConsumedByCloseUi = true;
+    }
+
+    if (!paused_ && !gameOver_) {
+        if (skillTreeUi_.isOpen()) {
+            if (input.isKeyPressed(KEY_K)) {
+                skillTreeUi_.setOpen(false);
+            }
+        } else if (!inventoryUi_.isOpen() && !fullMapOpen_ && input.isKeyPressed(KEY_K)) {
+            skillTreeUi_.setOpen(true);
+        }
+    }
+
     applyPlayerMaxHpFromEquipment();
     applyPlayerMaxManaFromEquipment();
 
     bool aimSnappedAfterPauseEsc = false;
-    if (!inventoryUi_.isOpen() && input.isKeyPressed(KEY_ESCAPE)) {
+    if (!escConsumedByCloseUi && !inventoryUi_.isOpen() && input.isKeyPressed(KEY_ESCAPE)) {
         if (paused_) {
             paused_ = false;
             aimScreenPos_ = input.mousePosition();
@@ -1123,7 +1186,8 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         aimScreenPos_ = input.mousePosition();
         aimScreenInit_ = true;
     }
-    if (!paused_ && !inventoryUi_.isOpen() && !fullMapOpen_ && !aimSnappedAfterPauseEsc) {
+    if (!paused_ && !inventoryUi_.isOpen() && !fullMapOpen_ && !skillTreeUi_.isOpen() &&
+        !aimSnappedAfterPauseEsc) {
         const Vector2 d = input.mouseDelta();
         aimScreenPos_.x = std::clamp(aimScreenPos_.x + d.x * aimMouseSensitivity_, 0.0F,
                                      static_cast<float>(config::WINDOW_WIDTH));
@@ -1132,13 +1196,39 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
     }
 
     const bool invOpen = inventoryUi_.isOpen();
-    const bool worldBlocked = invOpen || fullMapOpen_;
+    const bool worldBlocked = invOpen || fullMapOpen_ || skillTreeUi_.isOpen();
 
-    if (!paused_ && !invOpen && input.isKeyPressed(KEY_M)) {
+    if (!paused_ && !invOpen && !skillTreeUi_.isOpen() && input.isKeyPressed(KEY_M)) {
         fullMapOpen_ = !fullMapOpen_;
     }
     if (fullMapOpen_ && input.isKeyPressed(KEY_ESCAPE)) {
         fullMapOpen_ = false;
+    }
+
+    if (!paused_ && !gameOver_ && !worldBlocked) {
+        const float slot = 56.0F;
+        const float gap = 10.0F;
+        const float y0 =
+            (static_cast<float>(config::WINDOW_HEIGHT) - (slot * 3.0F + gap * 2.0F)) * 0.5F;
+        const float x = 16.0F;
+        const Vector2 m = input.mousePosition();
+        if (input.isMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            for (int i = 0; i < 3; ++i) {
+                const float yy = y0 + static_cast<float>(i) * (slot + gap);
+                const Rectangle slotR{x, yy, slot, slot};
+                const Rectangle badgeR = hudShortcutKeyBadgeOuterRectRight(x, yy, slot);
+                if (CheckCollisionPointRec(m, slotR) || CheckCollisionPointRec(m, badgeR)) {
+                    if (i == 0) {
+                        inventoryUi_.toggle();
+                    } else if (i == 1) {
+                        skillTreeUi_.toggle();
+                    } else {
+                        fullMapOpen_ = true;
+                    }
+                    break;
+                }
+            }
+        }
     }
 
     if (!worldBlocked) {
@@ -1146,11 +1236,10 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         if (ecs::combat_player_ranged(registry_, input, camera_.camera(), player_, noManaFlashTimer_,
                                       aimScreenPos_)) {
             if (!registry_.all_of<ecs::LeadFeverEffect>(player_)) {
-                Sound gun = resources.getSound("assets/sounds/gun_shot.wav");
-                if (IsSoundValid(gun)) {
+                const SoundHandle gun = resources.getSound("assets/sounds/gun_shot.wav");
+                if (gun >= 0) {
                     const float p = 0.85F + static_cast<float>(GetRandomValue(0, 30)) / 100.0F;
-                    SetSoundPitch(gun, p);
-                    PlaySound(gun);
+                    resources.audio().playOneShot(gun, p, 1.0F);
                 }
             }
         }
@@ -1191,11 +1280,10 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
             const bool now = registry_.get<ecs::Agitation>(e).agitated;
             bool &prev = hellhoundPrevAgitated_[e];
             if (now && !prev) {
-                Sound ag = resources.getSound("assets/sounds/hellhound_agro.wav");
-                if (IsSoundValid(ag)) {
+                const SoundHandle ag = resources.getSound("assets/sounds/hellhound_agro.wav");
+                if (ag >= 0) {
                     const float p = 0.85F + static_cast<float>(GetRandomValue(0, 30)) / 100.0F;
-                    SetSoundPitch(ag, p);
-                    PlaySound(ag);
+                    resources.audio().playOneShot(ag, p, 1.0F);
                 }
             }
             prev = now;
@@ -1210,6 +1298,31 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         ecs::collision::projectile_hits(registry_, player_, &inventory_, &snareImpactWorld_,
                                         &snareImpactFlash_);
         ecs::collision::player_pickup_mana_shards(registry_, player_);
+
+        for (const auto e : registry_.view<ecs::Enemy, ecs::Health, ecs::EnemyAI>()) {
+            const auto &hp = registry_.get<ecs::Health>(e);
+            if (hp.current > 0.0F) {
+                continue;
+            }
+            if (deathSfxPlayed_.count(e) != 0U) {
+                continue;
+            }
+            deathSfxPlayed_.insert(e);
+            const auto type = registry_.get<ecs::EnemyAI>(e).type;
+            const float p = 0.85F + static_cast<float>(GetRandomValue(0, 30)) / 100.0F;
+            if (type == ecs::EnemyType::Hellhound) {
+                const SoundHandle h = resources.getSound("assets/sounds/hellhound_death.wav");
+                if (h >= 0) {
+                    resources.audio().playOneShot(h, p, 1.0F);
+                }
+            } else {
+                const SoundHandle h = resources.getSound("assets/sounds/imp_death.wav");
+                if (h >= 0) {
+                    resources.audio().playOneShot(h, p, 1.0F);
+                }
+            }
+        }
+
         ecs::death_system(registry_, player_, &enemiesSlain_);
         tickManicEffect(config::FIXED_DT);
         tickHealOverTime(config::FIXED_DT);
@@ -1277,11 +1390,20 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         if (cur < prevPlayerHp_ - 1.0e-4F) {
             damageFlashTimer_ = 0.5F;
             const int cix = std::clamp(selectedClass_, 0, std::max(0, characterCount() - 1));
-            if (hurtGruntCooldown_ <= 0.001F && characterAt(cix).id == "undead_hunter") {
-                Sound grunt = resources.getSound("assets/sounds/undead_hunter_hurt.wav");
-                if (IsSoundValid(grunt)) {
-                    SetSoundPitch(grunt, 1.0F);
-                    PlaySound(grunt);
+            if (cur <= 0.0F) {
+                const SoundHandle hurtH = resources.getSound("assets/sounds/undead_hunter_hurt.wav");
+                if (hurtH >= 0) {
+                    resources.audio().stopAll(hurtH);
+                }
+                const SoundHandle deathH = resources.getSound("assets/sounds/undead_hunter_death.wav");
+                if (deathH >= 0) {
+                    resources.audio().playOneShot(deathH, 1.0F, 1.0F);
+                }
+                hurtGruntCooldown_ = 1.0e9F;
+            } else if (hurtGruntCooldown_ <= 0.001F && characterAt(cix).id == "undead_hunter") {
+                const SoundHandle grunt = resources.getSound("assets/sounds/undead_hunter_hurt.wav");
+                if (grunt >= 0) {
+                    resources.audio().playExclusive(grunt, 1.0F, 1.0F);
                 }
                 hurtGruntCooldown_ = 20.0F;
             }
@@ -1445,6 +1567,14 @@ void GameplayScene::draw(ResourceManager &resources) {
                       rscdRatio, rscdSeconds);
     if (anvilOpen_) {
         drawAnvilUi(resources, buildAnvilUiLayout());
+    }
+
+    if (skillTreeUi_.isOpen()) {
+        int sp = 0;
+        if (registry_.valid(player_) && registry_.all_of<ecs::PlayerLevel>(player_)) {
+            sp = registry_.get<ecs::PlayerLevel>(player_).skillPoints;
+        }
+        skillTreeUi_.draw(resources.uiFont(), resources, sp, skillPointFlashTimer_);
     }
 
     if (fullMapOpen_) {
@@ -1618,10 +1748,10 @@ void GameplayScene::drawFogDebugOverlay(const Font &font) {
 }
 
 void GameplayScene::drawCursor(ResourceManager &resources) {
-    const bool uiBlocksAim =
-        paused_ || gameOver_ || inventoryUi_.isOpen() || fullMapOpen_ || !aimScreenInit_;
+    const bool uiBlocksAim = paused_ || gameOver_ || inventoryUi_.isOpen() || fullMapOpen_ ||
+                             skillTreeUi_.isOpen() || !aimScreenInit_;
     const Vector2 m = (!uiBlocksAim) ? aimScreenPos_ : GetMousePosition();
-    if (gameOver_ || paused_ || inventoryUi_.isOpen() || fullMapOpen_) {
+    if (gameOver_ || paused_ || inventoryUi_.isOpen() || fullMapOpen_ || skillTreeUi_.isOpen()) {
         drawCustomCursor(resources, CursorKind::Default, GetMousePosition());
         return;
     }
@@ -1820,10 +1950,9 @@ void GameplayScene::tickSlugAim(float fixedDt, ResourceManager &resources) {
         const Vector2 d = aim.aimDirection;
         registry_.remove<ecs::SlugAimState>(player_);
         fireCalamitySlug(undeadHunterAbilities().abilities[2], d);
-        Sound slugSnd = resources.getSound("assets/sounds/calamity_slug_fire.wav");
-        if (IsSoundValid(slugSnd)) {
-            SetSoundPitch(slugSnd, 1.0F);
-            PlaySound(slugSnd);
+        const SoundHandle slugSnd = resources.getSound("assets/sounds/calamity_slug_fire.wav");
+        if (slugSnd >= 0) {
+            resources.audio().playOneShot(slugSnd, 1.0F, 1.0F);
         }
     }
 }
@@ -1981,6 +2110,48 @@ void GameplayScene::drawHud(ResourceManager &resources) {
     const int ci = std::clamp(selectedClass_, 0, std::max(0, characterCount() - 1));
     const auto &cls = characterAt(ci);
 
+    // Middle-left: shortcuts — key art fills each slot; Tab / K / M labels in small right-edge badges.
+    {
+        const float marginL = 16.0F;
+        const float slot = 56.0F;
+        const float gap = 10.0F;
+        const float y0 = (static_cast<float>(h) - (slot * 3.0F + gap * 2.0F)) * 0.5F;
+        const Texture2D texTab = resources.getTexture("assets/textures/ui/key_tab.png");
+        const Texture2D texK = resources.getTexture("assets/textures/ui/key_k.png");
+        const Texture2D texM = resources.getTexture("assets/textures/ui/key_m.png");
+        const Texture2D keyTex[3] = {texTab, texK, texM};
+        const char *keyLbl[3] = {"Tab", "K", "M"};
+        const Vector2 mouseHud = GetMousePosition();
+        constexpr float kIconPad = 5.0F;
+        for (int i = 0; i < 3; ++i) {
+            const float y = y0 + static_cast<float>(i) * (slot + gap);
+            DrawRectangle(static_cast<int>(marginL), static_cast<int>(y), static_cast<int>(slot),
+                          static_cast<int>(slot), ui::theme::SLOT_FILL);
+            DrawRectangleLines(static_cast<int>(marginL), static_cast<int>(y), static_cast<int>(slot),
+                               static_cast<int>(slot), ui::theme::SLOT_BORDER);
+            if (keyTex[i].id != 0) {
+                const Rectangle src{0.0F, 0.0F, static_cast<float>(keyTex[i].width),
+                                    static_cast<float>(keyTex[i].height)};
+                const Rectangle dst{marginL + kIconPad, y + kIconPad, slot - 2.0F * kIconPad,
+                                      slot - 2.0F * kIconPad};
+                DrawTexturePro(keyTex[i], src, dst, {0.0F, 0.0F}, 0.0F, WHITE);
+            } else {
+                const char *fallback = (i == 0) ? "Inv" : (i == 1) ? "Skl" : "Map";
+                const float ps = 16.0F;
+                const Vector2 pd = MeasureTextEx(font, fallback, ps, 1.0F);
+                DrawTextEx(font, fallback,
+                           {marginL + (slot - pd.x) * 0.5F, y + (slot - pd.y) * 0.5F}, ps, 1.0F,
+                           Fade(RAYWHITE, 0.9F));
+            }
+            drawHudShortcutKeyBadgeRight(font, keyLbl[i], marginL, y, slot);
+            const Rectangle slotR{marginL, y, slot, slot};
+            const Rectangle badgeR = hudShortcutKeyBadgeOuterRectRight(marginL, y, slot);
+            if (CheckCollisionPointRec(mouseHud, slotR) || CheckCollisionPointRec(mouseHud, badgeR)) {
+                hoveringHudElement_ = true;
+            }
+        }
+    }
+
     const float margin = 16.0F;
     const float portraitR = 58.0F;
     const float barW = 380.0F;
@@ -1998,9 +2169,6 @@ void GameplayScene::drawHud(ResourceManager &resources) {
     const float hpBarTop = equipBottomTarget - 44.0F * kEquipSlotHeightScale - barsStackToEquipTop;
     /// Grey backing uses the original layout anchor (do not resize or move the panel).
     const float hpBarTopBacking = hudBottomAll - 138.0F;
-    const float icon = 28.0F;
-    const float chamberStatusY = hpBarTop - icon - 8.0F;
-    drawChamberHudIcon(resources, barX, chamberStatusY, icon);
 
     const float hudPad = 8.0F;
     const float hudLeft = margin;
@@ -2028,9 +2196,9 @@ void GameplayScene::drawHud(ResourceManager &resources) {
 
     if (registry_.all_of<ecs::PlayerLevel>(player_)) {
         const auto &pl = registry_.get<ecs::PlayerLevel>(player_);
-        const float badgeR = 22.0F;
-        const float bx = cx + portraitR * 0.58F;
-        const float by = cy + portraitR * 0.52F;
+        const float badgeR = 20.0F;
+        const float bx = cx + portraitR * 0.65F;
+        const float by = cy + portraitR * 0.60F;
         const Vector2 badgeCenter{bx, by};
         DrawCircleV(badgeCenter, badgeR, Color{38, 34, 40, 245});
         DrawCircleLinesV(badgeCenter, badgeR, ui::theme::PORTRAIT_RING);
@@ -2052,6 +2220,8 @@ void GameplayScene::drawHud(ResourceManager &resources) {
         DrawTextEx(font, lvlBuf, {bx - lvlDim.x * 0.5F, by - lvlDim.y * 0.5F}, lvlFs, 1.0F,
                    RAYWHITE);
     }
+
+    drawChamberPelletArc(cx, cy, portraitR);
 
     DrawRectangle(static_cast<int>(barX), static_cast<int>(hpBarTop), static_cast<int>(barW),
                   static_cast<int>(barHpH), {50, 20, 20, 255});
@@ -2253,6 +2423,7 @@ void GameplayScene::drawHud(ResourceManager &resources) {
         processSeg({x0, y0}, topMid);
     };
 
+    const float icon = 28.0F;
     const float statusY = hpBarTop - icon - 8.0F;
     const size_t nHud = statusHudOrder_.size();
     for (size_t j = 0; j < nHud; ++j) {
@@ -2561,7 +2732,7 @@ void GameplayScene::drawFlashMessages(ResourceManager &resources) {
 }
 
 void GameplayScene::drawLootPickupHighlight([[maybe_unused]] ResourceManager &resources) {
-    if (inventoryUi_.isOpen() || paused_ || gameOver_ || fullMapOpen_) {
+    if (inventoryUi_.isOpen() || paused_ || gameOver_ || fullMapOpen_ || skillTreeUi_.isOpen()) {
         return;
     }
     if (!registry_.valid(hoveredPickup_) || !registry_.all_of<ecs::ItemPickup, ecs::Transform,
@@ -2580,7 +2751,7 @@ void GameplayScene::drawLootPickupHighlight([[maybe_unused]] ResourceManager &re
 }
 
 void GameplayScene::drawLootProximityPrompt(ResourceManager &resources) {
-    if (inventoryUi_.isOpen() || paused_ || gameOver_ || fullMapOpen_) {
+    if (inventoryUi_.isOpen() || paused_ || gameOver_ || fullMapOpen_ || skillTreeUi_.isOpen()) {
         return;
     }
     const Font &font = resources.uiFont();
@@ -2704,36 +2875,52 @@ void GameplayScene::tickChamberState(float fixedDt) {
     }
 }
 
-void GameplayScene::drawChamberHudIcon(ResourceManager &resources, float barX, float statusY,
-                                        float icon) {
+void GameplayScene::drawChamberPelletArc(float portraitCx, float portraitCy, float portraitR) {
     if (!registry_.valid(player_) || !registry_.all_of<ecs::ChamberState>(player_)) {
         return;
     }
     const auto &ch = registry_.get<ecs::ChamberState>(player_);
-    const float ix = barX - icon - 14.0F;
-    const float iy = statusY;
-    DrawRectangle(static_cast<int>(ix), static_cast<int>(iy), static_cast<int>(icon),
-                  static_cast<int>(icon), Color{55, 50, 45, 255});
-    DrawRectangleLinesEx({ix, iy, icon, icon}, 3.5F, Color{220, 190, 120, 255});
-    const Font &font = resources.uiFont();
-    char buf[8];
-    std::snprintf(buf, sizeof(buf), "%d", ch.shotsRemaining);
-    const float fs = 18.0F;
-    const Vector2 d = MeasureTextEx(font, buf, fs, 1.0F);
-    DrawTextEx(font, buf, {ix + (icon - d.x) * 0.5F, iy + (icon - d.y) * 0.5F}, fs, 1.0F,
-               RAYWHITE);
-    const Texture2D ph = resources.getTexture("assets/textures/items/vial_raw_spirit_icon.png");
-    if (ph.id != 0) {
-        DrawTexturePro(
-            ph,
-            {0.0F, 0.0F, static_cast<float>(ph.width), static_cast<float>(ph.height)},
-            {ix + 2.0F, iy + 2.0F, icon - 4.0F, icon - 4.0F}, {0.0F, 0.0F}, 0.0F,
-            Fade(WHITE, 0.22F));
+    const int maxS = ch.maxShots;
+    if (maxS <= 0) {
+        return;
+    }
+
+    const float arcCx = portraitCx + portraitR * 0.65F;
+    const float arcCy = portraitCy - portraitR * 0.55F;
+    const float arcR = portraitR + 14.0F;
+    const float pelletR = 7.0F;
+    const float degStart = -115.0F;
+    const float degEnd = -35.0F;
+
+    int visualFilled = ch.shotsRemaining;
+    if (ch.isReloading) {
+        const float denom = std::max(1.0e-4F, ch.reloadDuration);
+        visualFilled = static_cast<int>(
+            std::floor((ch.reloadTimer / denom) * static_cast<float>(maxS) + 1.0e-4F));
+        visualFilled = std::clamp(visualFilled, 0, maxS);
+    }
+
+    for (int i = 0; i < maxS; ++i) {
+        const float u =
+            maxS > 1 ? static_cast<float>(i) / static_cast<float>(maxS - 1) : 0.5F;
+        const float deg = degStart + u * (degEnd - degStart);
+        const float rad = deg * (3.14159265F / 180.0F);
+        const float px = arcCx + std::cos(rad) * arcR;
+        const float py = arcCy + std::sin(rad) * arcR;
+        const bool filled = i < visualFilled;
+        if (filled) {
+            DrawCircleV({px, py}, pelletR, Color{220, 180, 90, 255});
+        } else {
+            DrawCircleLinesV({px, py}, pelletR, Color{160, 140, 110, 220});
+            DrawCircleV({px, py}, pelletR - 2.0F, Color{35, 32, 30, 120});
+        }
     }
 }
 
 void GameplayScene::drawMinimapOverlay(bool fullScreen, ResourceManager &resources) {
-    (void)resources;
+    // Static padded world bounds from level data (no live entities) for clamping and full-map fit.
+    // Full-screen map: always full level, isotropic scale. Corner minimap: zoomed viewport with
+    // deadzone follow — panning only when the player icon nears the frame edge (smooth lerp).
     float minX = 1.0e9F;
     float maxX = -1.0e9F;
     float minY = 1.0e9F;
@@ -2757,27 +2944,170 @@ void GameplayScene::drawMinimapOverlay(bool fullScreen, ResourceManager &resourc
             expand(v.x, v.y);
         }
     }
-    if (registry_.valid(player_) && registry_.all_of<ecs::Transform>(player_)) {
-        const Vector2 p = registry_.get<ecs::Transform>(player_).position;
-        expand(p.x, p.y);
+    for (const EnemySpawnData &es : loadedMap_.enemies) {
+        expand(es.x - 12.0F, es.y - 12.0F);
+        expand(es.x + 12.0F, es.y + 12.0F);
     }
+    for (const ItemSpawnData &is : loadedMap_.itemSpawns) {
+        expand(is.x - 10.0F, is.y - 10.0F);
+        expand(is.x + 10.0F, is.y + 10.0F);
+    }
+    expand(loadedMap_.playerSpawn.x - 20.0F, loadedMap_.playerSpawn.y - 20.0F);
+    expand(loadedMap_.playerSpawn.x + 20.0F, loadedMap_.playerSpawn.y + 20.0F);
+    if (loadedMap_.hasCasket) {
+        expand(loadedMap_.casket.cx - 48.0F, loadedMap_.casket.cy - 48.0F);
+        expand(loadedMap_.casket.cx + 48.0F, loadedMap_.casket.cy + 48.0F);
+    }
+    for (const AnvilData &an : loadedMap_.anvils) {
+        expand(an.cx - 28.0F, an.cy - 28.0F);
+        expand(an.cx + 28.0F, an.cy + 28.0F);
+    }
+
     if (minX >= maxX || minY >= maxY) {
-        return;
+        Vector2 center = loadedMap_.playerSpawn;
+        if (registry_.valid(player_) && registry_.all_of<ecs::Transform>(player_)) {
+            center = registry_.get<ecs::Transform>(player_).position;
+        }
+        constexpr float half = 420.0F;
+        minX = center.x - half;
+        maxX = center.x + half;
+        minY = center.y - half;
+        maxY = center.y + half;
     }
-    const float pad = 120.0F;
+
+    const float rawW = maxX - minX;
+    const float rawH = maxY - minY;
+    const float pad = std::max(80.0F, 0.07F * std::max(rawW, rawH));
     minX -= pad;
     maxX += pad;
     minY -= pad;
     maxY += pad;
-    const float worldW = maxX - minX;
-    const float worldH = maxY - minY;
+    const float worldW = std::max(1.0F, maxX - minX);
+    const float worldH = std::max(1.0F, maxY - minY);
 
     const int sw = config::WINDOW_WIDTH;
     const int sh = config::WINDOW_HEIGHT;
-    const float mapPx = fullScreen ? static_cast<float>(sw) * 0.72F : 200.0F;
-    const float mapPy = fullScreen ? static_cast<float>(sh) * 0.72F : 200.0F;
-    const float mapX = fullScreen ? (static_cast<float>(sw) - mapPx) * 0.5F : 16.0F;
-    const float mapY = fullScreen ? (static_cast<float>(sh) - mapPy) * 0.5F : 16.0F;
+    const float mapSide =
+        fullScreen ? std::min(static_cast<float>(sw), static_cast<float>(sh)) * 0.78F
+                   : std::clamp(std::min(static_cast<float>(sw), static_cast<float>(sh)) * 0.22F,
+                                168.0F, 236.0F);
+    const float mapPx = mapSide;
+    const float mapPy = mapSide;
+    const float mapX = fullScreen ? (static_cast<float>(sw) - mapPx) * 0.5F : 14.0F;
+    const float mapY = fullScreen ? (static_cast<float>(sh) - mapPy) * 0.5F : 14.0F;
+
+    const float frame = 2.0F;
+    const float titleBand = fullScreen ? 28.0F : 0.0F;
+    const float innerPad = 6.0F;
+    const float innerX = mapX + frame + innerPad;
+    const float innerY = mapY + frame + innerPad + titleBand;
+    const float innerW = mapPx - 2.0F * (frame + innerPad);
+    const float innerH = mapPy - 2.0F * (frame + innerPad) - titleBand;
+
+    float viewMinX = minX;
+    float viewMinY = minY;
+    float scale = 1.0F;
+    float originX = innerX;
+    float originY = innerY;
+
+    if (fullScreen) {
+        scale = std::min(innerW / worldW, innerH / worldH);
+        const float drawnW = worldW * scale;
+        const float drawnH = worldH * scale;
+        originX = innerX + (innerW - drawnW) * 0.5F;
+        originY = innerY + (innerH - drawnH) * 0.5F;
+        viewMinX = minX;
+        viewMinY = minY;
+    } else if (registry_.valid(player_) && registry_.all_of<ecs::Transform>(player_)) {
+        const Vector2 playerPos = registry_.get<ecs::Transform>(player_).position;
+        if (!minimapFollowCamInitialized_) {
+            minimapFollowCamX_ = playerPos.x;
+            minimapFollowCamY_ = playerPos.y;
+            minimapFollowCamInitialized_ = true;
+        }
+        const float innerAspect = innerW / std::max(1.0F, innerH);
+        float hw = std::clamp(worldW * 0.19F, 130.0F, worldW * 0.5F - 4.0F);
+        float hh = std::clamp(worldH * 0.19F, 100.0F, worldH * 0.5F - 4.0F);
+        if (hw / std::max(0.001F, hh) > innerAspect) {
+            hh = hw / innerAspect;
+        } else {
+            hw = hh * innerAspect;
+        }
+        hw = std::min(hw, worldW * 0.5F - 2.0F);
+        hh = std::min(hh, worldH * 0.5F - 2.0F);
+        if (hw / std::max(0.001F, hh) > innerAspect) {
+            hh = hw / innerAspect;
+        } else {
+            hw = hh * innerAspect;
+        }
+
+        const float Vw = 2.0F * hw;
+        const float Vh = 2.0F * hh;
+        const bool cornerShowsWholeLevel =
+            (Vw >= worldW - 6.0F && Vh >= worldH - 6.0F);
+        if (cornerShowsWholeLevel) {
+            scale = std::min(innerW / worldW, innerH / worldH);
+            const float drawnW = worldW * scale;
+            const float drawnH = worldH * scale;
+            originX = innerX + (innerW - drawnW) * 0.5F;
+            originY = innerY + (innerH - drawnH) * 0.5F;
+            viewMinX = minX;
+            viewMinY = minY;
+        } else {
+            scale = std::min(innerW / Vw, innerH / Vh);
+            originX = innerX + (innerW - Vw * scale) * 0.5F;
+            originY = innerY + (innerH - Vh * scale) * 0.5F;
+
+            const float camX = minimapFollowCamX_;
+            const float camY = minimapFollowCamY_;
+            const float viewMin0X = camX - hw;
+            const float viewMin0Y = camY - hh;
+            const float psx = originX + (playerPos.x - viewMin0X) * scale;
+            const float psy = originY + (playerPos.y - viewMin0Y) * scale;
+            const float icx = innerX + innerW * 0.5F;
+            const float icy = innerY + innerH * 0.5F;
+            /// Fraction of half inner width/height from center: player may move here without
+            /// panning (~64% of inner area is deadzone when 0.32).
+            constexpr float kDeadZoneHalf = 0.32F;
+            const float dzHalfW = innerW * kDeadZoneHalf;
+            const float dzHalfH = innerH * kDeadZoneHalf;
+            float dCamX = 0.0F;
+            float dCamY = 0.0F;
+            const float leftBound = icx - dzHalfW;
+            const float rightBound = icx + dzHalfW;
+            const float topBound = icy - dzHalfH;
+            const float botBound = icy + dzHalfH;
+            if (psx < leftBound) {
+                dCamX -= (leftBound - psx) / std::max(1.0e-4F, scale);
+            } else if (psx > rightBound) {
+                dCamX += (psx - rightBound) / std::max(1.0e-4F, scale);
+            }
+            if (psy < topBound) {
+                dCamY -= (topBound - psy) / std::max(1.0e-4F, scale);
+            } else if (psy > botBound) {
+                dCamY += (psy - botBound) / std::max(1.0e-4F, scale);
+            }
+            float targetCamX = camX + dCamX;
+            float targetCamY = camY + dCamY;
+            targetCamX = std::clamp(targetCamX, minX + hw, maxX - hw);
+            targetCamY = std::clamp(targetCamY, minY + hh, maxY - hh);
+            const float kSmooth = std::clamp(GetFrameTime() * 14.0F, 0.0F, 0.55F);
+            minimapFollowCamX_ += (targetCamX - minimapFollowCamX_) * kSmooth;
+            minimapFollowCamY_ += (targetCamY - minimapFollowCamY_) * kSmooth;
+            minimapFollowCamX_ = std::clamp(minimapFollowCamX_, minX + hw, maxX - hw);
+            minimapFollowCamY_ = std::clamp(minimapFollowCamY_, minY + hh, maxY - hh);
+            viewMinX = minimapFollowCamX_ - hw;
+            viewMinY = minimapFollowCamY_ - hh;
+        }
+    } else {
+        scale = std::min(innerW / worldW, innerH / worldH);
+        const float drawnW = worldW * scale;
+        const float drawnH = worldH * scale;
+        originX = innerX + (innerW - drawnW) * 0.5F;
+        originY = innerY + (innerH - drawnH) * 0.5F;
+        viewMinX = minX;
+        viewMinY = minY;
+    }
 
     if (fullScreen) {
         DrawRectangle(0, 0, sw, sh, Fade(BLACK, 0.55F));
@@ -2786,12 +3116,15 @@ void GameplayScene::drawMinimapOverlay(bool fullScreen, ResourceManager &resourc
     DrawRectangle(static_cast<int>(mapX), static_cast<int>(mapY), static_cast<int>(mapPx),
                   static_cast<int>(mapPy), Fade({10, 10, 14, 255}, fullScreen ? 0.92F : 0.88F));
     DrawRectangleLinesEx({mapX, mapY, mapPx, mapPy}, 2.0F, {90, 80, 70, 255});
+    DrawRectangle(static_cast<int>(innerX), static_cast<int>(innerY), static_cast<int>(innerW),
+                  static_cast<int>(innerH), Fade({0, 0, 0, 255}, fullScreen ? 0.28F : 0.22F));
 
     auto toMini = [&](Vector2 world) -> Vector2 {
-        const float nx = (world.x - minX) / std::max(1.0F, worldW);
-        const float ny = (world.y - minY) / std::max(1.0F, worldH);
-        return {mapX + nx * mapPx, mapY + ny * mapPy};
+        return {originX + (world.x - viewMinX) * scale, originY + (world.y - viewMinY) * scale};
     };
+
+    BeginScissorMode(static_cast<int>(innerX), static_cast<int>(innerY), static_cast<int>(innerW),
+                     static_cast<int>(innerH));
 
     for (const WallData &w : loadedMap_.walls) {
         const Vector2 a = toMini({w.cx - w.halfW, w.cy - w.halfH});
@@ -2809,6 +3142,18 @@ void GameplayScene::drawMinimapOverlay(bool fullScreen, ResourceManager &resourc
         DrawRectangle(static_cast<int>(std::min(a.x, b.x)), static_cast<int>(std::min(a.y, b.y)),
                       static_cast<int>(rw), static_cast<int>(rh), {180, 70, 30, 200});
     }
+    const float solidLine = std::clamp(1.4F * std::sqrt(scale), 1.2F, 3.2F);
+    for (const SolidShapeData &sd : loadedMap_.solidShapes) {
+        const size_t n = sd.verts.size();
+        if (n < 2U) {
+            continue;
+        }
+        for (size_t i = 0; i < n; ++i) {
+            const Vector2 a = toMini(sd.verts[i]);
+            const Vector2 b = toMini(sd.verts[(i + 1U) % n]);
+            DrawLineEx(a, b, solidLine, {88, 82, 74, 215});
+        }
+    }
 
     Vector2 fogOrigin{0.0F, 0.0F};
     float fogRadius = config::FOG_OF_WAR_RADIUS;
@@ -2825,28 +3170,35 @@ void GameplayScene::drawMinimapOverlay(bool fullScreen, ResourceManager &resourc
             continue;
         }
         const Vector2 m = toMini(wp);
-        DrawCircleV(m, 4.0F, {220, 70, 70, 255});
+        const float er = std::clamp(4.2F * std::sqrt(scale), 2.6F, 6.0F);
+        DrawCircleV(m, er, {220, 70, 70, 255});
     }
 
     if (loadedMap_.hasCasket) {
         const Vector2 m = toMini({loadedMap_.casket.cx, loadedMap_.casket.cy});
-        DrawCircleV(m, 5.0F, {160, 120, 80, 255});
+        const float cr = std::clamp(5.0F * std::sqrt(scale), 3.0F, 7.0F);
+        DrawCircleV(m, cr, {160, 120, 80, 255});
     }
     for (const AnvilData &an : loadedMap_.anvils) {
         const Vector2 m = toMini({an.cx, an.cy});
-        DrawRectangle(static_cast<int>(m.x - 4), static_cast<int>(m.y - 4), 8, 8,
+        const float half = std::clamp(5.0F * std::sqrt(scale), 3.0F, 8.0F);
+        DrawRectangle(static_cast<int>(m.x - half), static_cast<int>(m.y - half),
+                      static_cast<int>(half * 2.0F), static_cast<int>(half * 2.0F),
                       {200, 180, 120, 255});
     }
 
     if (registry_.valid(player_) && registry_.all_of<ecs::Transform>(player_)) {
         const Vector2 m = toMini(registry_.get<ecs::Transform>(player_).position);
-        DrawCircleV(m, 5.0F, {120, 200, 255, 255});
+        const float pr = std::clamp(5.2F * std::sqrt(scale), 3.2F, 7.5F);
+        DrawCircleV(m, pr, {120, 200, 255, 255});
     }
+
+    EndScissorMode();
 
     if (fullScreen) {
         const Font &font = resources.uiFont();
-        DrawTextEx(font, "Map (M / Esc to close)", {mapX + 8.0F, mapY + 8.0F}, 18.0F, 1.0F,
-                   Fade(RAYWHITE, 0.85F));
+        DrawTextEx(font, "Map (M / Esc to close)", {mapX + 10.0F, mapY + 6.0F}, 18.0F, 1.0F,
+                   Fade(RAYWHITE, 0.9F));
     }
 }
 

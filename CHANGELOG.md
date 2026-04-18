@@ -2,6 +2,27 @@
 
 All notable changes to **Dreadcast** will be documented in this file.
 
+## v0.12.1 — 2026-04-18
+
+### Added
+
+- **Settings → Audio:** **Master volume**, **Game sounds** (SFX) sliders; **Sound device** list (click to switch output). **Settings → Credits** with **Zapsplat** attribution.
+- **Audio engine:** **miniaudio** backend (`src/core/audio.cpp`) with device enumeration/switching; Raylib’s built-in **raudio** module disabled in CMake. Persisted: `masterVolume`, `gameVolume`, `audioDeviceName` in `settings.cfg`.
+- **Death SFX:** `assets/sounds/undead_hunter_death.wav` (Undead Hunter lethal — fixed pitch, stops hurt SFX); `assets/sounds/imp_death.wav` / `hellhound_death.wav` (random pitch on enemy death).
+- **HUD:** Middle-left shortcut row (**Tab** / **K** / **M**): key art PNGs (`assets/textures/ui/key_tab.png`, `key_k.png`, `key_m.png`) fill each slot; **Tab** / **K** / **M** labels in small right-edge badges (same style as consumable/ability keybind boxes). Click slot or badge to open inventory, skill tree, or full map.
+- **Skill tree** (**K** / **Esc**): placeholder graph for **Undead Hunter** — two powered core nodes + four side nodes; **+1 skill point** on each level-up; hover + hold **E** (1s) to spend on a side node. **Skill points** shown in-panel.
+- **Chamber HUD:** Six **pellet circles** in a radial arc on the **upper-right** of the portrait (filled vs outline); reload fills pellets by progress.
+
+### Changed
+
+- **Character select:** Undead Hunter **description** line removed; **bio** aligned with `LORE.md`.
+- **Gameplay:** **Esc** while **inventory** (or **anvil** via inventory) closes that UI only — no longer opens **Pause** on the same keypress.
+
+### Fixed
+
+- **Esc** no longer opens **Pause** immediately after closing **inventory** (or **anvil**).
+- **Audio:** **SFX playback crash** — `ma_sound` instances are **heap-allocated** (`std::unique_ptr`) so vectors/maps never **move** sound objects (miniaudio requires stable `ma_sound` addresses).
+
 ## v0.12.0 — 2026-04-17
 
 ### Added
