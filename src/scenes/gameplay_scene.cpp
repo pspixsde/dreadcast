@@ -175,7 +175,8 @@ void drawHudKeyBadge(const Font &font, const char *keyChr, float iconLeft, float
 void drawHudShortcutKeyBadgeRight(const Font &font, const char *keyTxt, float slotLeft, float slotTop,
                                   float slotSize) {
     constexpr float kSq = 22.0F;
-    constexpr float overlap = 5.0F;
+    /// More overlap = badge sits further **in** on the slot (less sticking out past the right edge).
+    constexpr float overlap = 10.0F;
     const float bx = slotLeft + slotSize - overlap;
     const float by = slotTop + (slotSize - kSq) * 0.5F;
     DrawRectangle(static_cast<int>(bx), static_cast<int>(by), static_cast<int>(kSq),
@@ -195,7 +196,7 @@ void drawHudShortcutKeyBadgeRight(const Font &font, const char *keyTxt, float sl
 [[nodiscard]] Rectangle hudShortcutKeyBadgeOuterRectRight(float slotLeft, float slotTop,
                                                           float slotSize) {
     constexpr float kSq = 22.0F;
-    constexpr float overlap = 5.0F;
+    constexpr float overlap = 10.0F;
     const float bx = slotLeft + slotSize - overlap;
     const float by = slotTop + (slotSize - kSq) * 0.5F;
     return {bx, by, kSq, kSq};
@@ -658,6 +659,13 @@ void GameplayScene::tickHealOverTime(float fixedDt) {
     if (!registry_.valid(player_) || !registry_.all_of<ecs::Health>(player_)) {
         return;
     }
+    auto &hpEarly = registry_.get<ecs::Health>(player_);
+    if (hpEarly.current <= 0.001F) {
+        if (registry_.all_of<ecs::HealOverTime>(player_)) {
+            registry_.remove<ecs::HealOverTime>(player_);
+        }
+        return;
+    }
     if (!registry_.all_of<ecs::HealOverTime>(player_)) {
         return;
     }
@@ -684,6 +692,10 @@ void GameplayScene::tickHealOverTime(float fixedDt) {
 
 void GameplayScene::tickManaRegenOverTime(float fixedDt) {
     if (!registry_.valid(player_) || !registry_.all_of<ecs::Mana>(player_)) {
+        return;
+    }
+    if (registry_.all_of<ecs::Health>(player_) &&
+        registry_.get<ecs::Health>(player_).current <= 0.001F) {
         return;
     }
     if (!registry_.all_of<ecs::ManaRegenOverTime>(player_)) {
@@ -1331,22 +1343,28 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         checkRunicShellTrigger();
 
         // Passive regen based on the selected class (+ equipment); blocked during ManicEffect.
+        // Do not apply while HP is depleted — otherwise lethal damage (e.g. lava) is undone same tick.
         if (registry_.valid(player_) && registry_.all_of<ecs::Health, ecs::Mana>(player_) &&
             !registry_.all_of<ecs::ManicEffect>(player_)) {
             const int ci = std::clamp(selectedClass_, 0, std::max(0, characterCount() - 1));
             const auto &cls = characterAt(ci);
             auto &hp2 = registry_.get<ecs::Health>(player_);
             auto &mp = registry_.get<ecs::Mana>(player_);
-            hp2.current = std::min(
-                hp2.max, hp2.current + cls.hpRegen * config::FIXED_DT +
-                             inventory_.totalEquippedHpRegenBonus() * config::FIXED_DT);
-            mp.current = std::min(mp.max, mp.current + cls.manaRegen * config::FIXED_DT);
-        } else if (registry_.valid(player_) && registry_.all_of<ecs::Mana>(player_) &&
+            if (hp2.current > 0.001F) {
+                hp2.current = std::min(
+                    hp2.max, hp2.current + cls.hpRegen * config::FIXED_DT +
+                                 inventory_.totalEquippedHpRegenBonus() * config::FIXED_DT);
+                mp.current = std::min(mp.max, mp.current + cls.manaRegen * config::FIXED_DT);
+            }
+        } else if (registry_.valid(player_) && registry_.all_of<ecs::Health, ecs::Mana>(player_) &&
                    registry_.all_of<ecs::ManicEffect>(player_)) {
-            auto &mp = registry_.get<ecs::Mana>(player_);
-            const int ci = std::clamp(selectedClass_, 0, std::max(0, characterCount() - 1));
-            const auto &cls = characterAt(ci);
-            mp.current = std::min(mp.max, mp.current + cls.manaRegen * config::FIXED_DT);
+            auto &hpM = registry_.get<ecs::Health>(player_);
+            if (hpM.current > 0.001F) {
+                auto &mp = registry_.get<ecs::Mana>(player_);
+                const int ci = std::clamp(selectedClass_, 0, std::max(0, characterCount() - 1));
+                const auto &cls = characterAt(ci);
+                mp.current = std::min(mp.max, mp.current + cls.manaRegen * config::FIXED_DT);
+            }
         }
 
         if (resources.settings().showDamageNumbers) {
@@ -2122,7 +2140,8 @@ void GameplayScene::drawHud(ResourceManager &resources) {
         const Texture2D keyTex[3] = {texTab, texK, texM};
         const char *keyLbl[3] = {"Tab", "K", "M"};
         const Vector2 mouseHud = GetMousePosition();
-        constexpr float kIconPad = 5.0F;
+        /// Inset so key art does not run to the slot border (box stays 56×56).
+        constexpr float kIconPad = 11.0F;
         for (int i = 0; i < 3; ++i) {
             const float y = y0 + static_cast<float>(i) * (slot + gap);
             DrawRectangle(static_cast<int>(marginL), static_cast<int>(y), static_cast<int>(slot),
@@ -2137,7 +2156,7 @@ void GameplayScene::drawHud(ResourceManager &resources) {
                 DrawTexturePro(keyTex[i], src, dst, {0.0F, 0.0F}, 0.0F, WHITE);
             } else {
                 const char *fallback = (i == 0) ? "Inv" : (i == 1) ? "Skl" : "Map";
-                const float ps = 16.0F;
+                const float ps = 14.0F;
                 const Vector2 pd = MeasureTextEx(font, fallback, ps, 1.0F);
                 DrawTextEx(font, fallback,
                            {marginL + (slot - pd.x) * 0.5F, y + (slot - pd.y) * 0.5F}, ps, 1.0F,
@@ -2885,19 +2904,21 @@ void GameplayScene::drawChamberPelletArc(float portraitCx, float portraitCy, flo
         return;
     }
 
-    const float arcCx = portraitCx + portraitR * 0.65F;
-    const float arcCy = portraitCy - portraitR * 0.55F;
-    const float arcR = portraitR + 14.0F;
+    /// Same center as the portrait so the arc is left/right symmetric; radius just outside the ring.
+    /// Angles are in standard math coords (0° = +x); **-90° is straight up** (12 o’clock on screen).
+    const float arcCx = portraitCx;
+    const float arcCy = portraitCy;
+    const float arcR = portraitR + 9.0F;
     const float pelletR = 7.0F;
-    const float degStart = -115.0F;
-    const float degEnd = -35.0F;
+    const float halfSpanDeg = 44.0F;
+    const float degMid = -90.0F;
+    const float degStart = degMid - halfSpanDeg;
+    const float degEnd = degMid + halfSpanDeg;
 
     int visualFilled = ch.shotsRemaining;
     if (ch.isReloading) {
-        const float denom = std::max(1.0e-4F, ch.reloadDuration);
-        visualFilled = static_cast<int>(
-            std::floor((ch.reloadTimer / denom) * static_cast<float>(maxS) + 1.0e-4F));
-        visualFilled = std::clamp(visualFilled, 0, maxS);
+        /// Pellets stay empty until reload completes; then `shotsRemaining` jumps to full next tick.
+        visualFilled = 0;
     }
 
     for (int i = 0; i < maxS; ++i) {

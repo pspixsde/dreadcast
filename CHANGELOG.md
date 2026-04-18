@@ -9,19 +9,21 @@ All notable changes to **Dreadcast** will be documented in this file.
 - **Settings → Audio:** **Master volume**, **Game sounds** (SFX) sliders; **Sound device** list (click to switch output). **Settings → Credits** with **Zapsplat** attribution.
 - **Audio engine:** **miniaudio** backend (`src/core/audio.cpp`) with device enumeration/switching; Raylib’s built-in **raudio** module disabled in CMake. Persisted: `masterVolume`, `gameVolume`, `audioDeviceName` in `settings.cfg`.
 - **Death SFX:** `assets/sounds/undead_hunter_death.wav` (Undead Hunter lethal — fixed pitch, stops hurt SFX); `assets/sounds/imp_death.wav` / `hellhound_death.wav` (random pitch on enemy death).
-- **HUD:** Middle-left shortcut row (**Tab** / **K** / **M**): key art PNGs (`assets/textures/ui/key_tab.png`, `key_k.png`, `key_m.png`) fill each slot; **Tab** / **K** / **M** labels in small right-edge badges (same style as consumable/ability keybind boxes). Click slot or badge to open inventory, skill tree, or full map.
+- **HUD:** Middle-left shortcut row (**Tab** / **K** / **M**): key art PNGs (`assets/textures/ui/key_tab.png`, `key_k.png`, `key_m.png`) in each slot with inset padding; **Tab** / **K** / **M** labels in small right-edge badges (consumable/ability keybind style). Click slot or badge to open inventory, skill tree, or full map.
 - **Skill tree** (**K** / **Esc**): placeholder graph for **Undead Hunter** — two powered core nodes + four side nodes; **+1 skill point** on each level-up; hover + hold **E** (1s) to spend on a side node. **Skill points** shown in-panel.
-- **Chamber HUD:** Six **pellet circles** in a radial arc on the **upper-right** of the portrait (filled vs outline); reload fills pellets by progress.
+- **Chamber HUD:** Six **pellet circles** in an arc **concentric** with the portrait (centered on 12 o’clock, symmetric left/right); filled vs empty; **active reload** keeps all pellets empty until the reload **finishes**, then they **all** fill together.
 
 ### Changed
 
 - **Character select:** Undead Hunter **description** line removed; **bio** aligned with `LORE.md`.
 - **Gameplay:** **Esc** while **inventory** (or **anvil** via inventory) closes that UI only — no longer opens **Pause** on the same keypress.
+- **Editor:** Keybind hint lines (**Select…**, **Wall resize…**) moved to **upper center** so they no longer overlap the left toolbar.
 
 ### Fixed
 
 - **Esc** no longer opens **Pause** immediately after closing **inventory** (or **anvil**).
 - **Audio:** **SFX playback crash** — `ma_sound` instances are **heap-allocated** (`std::unique_ptr`) so vectors/maps never **move** sound objects (miniaudio requires stable `ma_sound` addresses).
+- **Lava / lethal HP:** **Passive HP regen**, **heal-over-time**, and **mana regen** no longer run when HP is already **0**, so damage that would kill (including **lava**) is not undone in the **same fixed tick** — **game over** triggers correctly.
 
 ## v0.12.0 — 2026-04-17
 

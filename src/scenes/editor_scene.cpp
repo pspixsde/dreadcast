@@ -1687,10 +1687,18 @@ void EditorScene::draw(ResourceManager &resources) {
         DrawTextEx(font, statusText_, {16.0F, 652.0F}, 16.0F, 1.0F, RAYWHITE);
     }
 
-    DrawTextEx(font, "Select: drag | Del remove | Ctrl+D dup | Ctrl+C/V copy-paste", {220.0F, 12.0F},
-               16.0F, 1.0F, ui::theme::MUTED_TEXT);
-    DrawTextEx(font, "Wall resize: handles / arrows (Shift=faster) | Mid-mouse: camera grip", {220.0F, 32.0F},
-               16.0F, 1.0F, ui::theme::MUTED_TEXT);
+    {
+        constexpr float hintFs = 16.0F;
+        const float sw = static_cast<float>(config::WINDOW_WIDTH);
+        const char *hint1 = "Select: drag | Del remove | Ctrl+D dup | Ctrl+C/V copy-paste";
+        const char *hint2 = "Wall resize: handles / arrows (Shift=faster) | Mid-mouse: camera grip";
+        const Vector2 h1 = MeasureTextEx(font, hint1, hintFs, 1.0F);
+        const Vector2 h2 = MeasureTextEx(font, hint2, hintFs, 1.0F);
+        const float yTop = 8.0F;
+        DrawTextEx(font, hint1, {(sw - h1.x) * 0.5F, yTop}, hintFs, 1.0F, ui::theme::MUTED_TEXT);
+        DrawTextEx(font, hint2, {(sw - h2.x) * 0.5F, yTop + h1.y + 4.0F}, hintFs, 1.0F,
+                   ui::theme::MUTED_TEXT);
+    }
 
     if (showUnsavedDialog_) {
         drawUnsavedChangesModal(font, mouse);
