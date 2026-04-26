@@ -48,26 +48,35 @@ Vector2 polygonCentroid(const std::vector<Vector2> &verts) {
 }
 
 /// Snap a vertical world X edge to nearby wall/lava vertical edges (unless Ctrl held).
-float snapVerticalEdgeX(float xEdge, const MapData &map, int skipWallIdx, int skipLavaIdx,
-                        bool ctrlHeld, bool &guideActive, Vector2 &ga, Vector2 &gb) {
+float snapVerticalEdgeX(float xEdge, float focusY, const MapData &map, int skipWallIdx, int skipLavaIdx,
+                        bool ctrlHeld, bool globalMode, bool &guideActive, Vector2 &ga, Vector2 &gb) {
     guideActive = false;
     if (ctrlHeld) {
         return xEdge;
     }
     constexpr float thresh = 14.0F;
-    constexpr float span = 4000.0F;
     float best = xEdge;
     float bestD = thresh;
+    float bestY0 = 0.0F;
+    float bestY1 = 0.0F;
+    constexpr float localSpan = 220.0F;
     for (int j = 0; j < static_cast<int>(map.walls.size()); ++j) {
         if (j == skipWallIdx) {
             continue;
         }
         const WallData &o = map.walls[static_cast<size_t>(j)];
+        if (!globalMode && std::fabs(o.cy - focusY) > localSpan) {
+            continue;
+        }
+        const float y0 = o.cy - o.halfH;
+        const float y1 = o.cy + o.halfH;
         for (const float ox : {o.cx - o.halfW, o.cx + o.halfW}) {
             const float d = std::fabs(ox - xEdge);
             if (d < bestD) {
                 bestD = d;
                 best = ox;
+                bestY0 = y0;
+                bestY1 = y1;
             }
         }
     }
@@ -76,44 +85,60 @@ float snapVerticalEdgeX(float xEdge, const MapData &map, int skipWallIdx, int sk
             continue;
         }
         const LavaData &o = map.lavas[static_cast<size_t>(j)];
+        if (!globalMode && std::fabs(o.cy - focusY) > localSpan) {
+            continue;
+        }
+        const float y0 = o.cy - o.halfH;
+        const float y1 = o.cy + o.halfH;
         for (const float ox : {o.cx - o.halfW, o.cx + o.halfW}) {
             const float d = std::fabs(ox - xEdge);
             if (d < bestD) {
                 bestD = d;
                 best = ox;
+                bestY0 = y0;
+                bestY1 = y1;
             }
         }
     }
     if (bestD < thresh) {
         guideActive = true;
-        ga = {best, -span};
-        gb = {best, span};
+        ga = {best, bestY0};
+        gb = {best, bestY1};
         return best;
     }
     return xEdge;
 }
 
 /// Snap a horizontal world Y edge to nearby wall/lava horizontal edges.
-float snapHorizontalEdgeY(float yEdge, const MapData &map, int skipWallIdx, int skipLavaIdx,
-                          bool ctrlHeld, bool &guideActive, Vector2 &ga, Vector2 &gb) {
+float snapHorizontalEdgeY(float yEdge, float focusX, const MapData &map, int skipWallIdx, int skipLavaIdx,
+                          bool ctrlHeld, bool globalMode, bool &guideActive, Vector2 &ga, Vector2 &gb) {
     guideActive = false;
     if (ctrlHeld) {
         return yEdge;
     }
     constexpr float thresh = 14.0F;
-    constexpr float span = 4000.0F;
     float best = yEdge;
     float bestD = thresh;
+    float bestX0 = 0.0F;
+    float bestX1 = 0.0F;
+    constexpr float localSpan = 220.0F;
     for (int j = 0; j < static_cast<int>(map.walls.size()); ++j) {
         if (j == skipWallIdx) {
             continue;
         }
         const WallData &o = map.walls[static_cast<size_t>(j)];
+        if (!globalMode && std::fabs(o.cx - focusX) > localSpan) {
+            continue;
+        }
+        const float x0 = o.cx - o.halfW;
+        const float x1 = o.cx + o.halfW;
         for (const float oy : {o.cy - o.halfH, o.cy + o.halfH}) {
             const float d = std::fabs(oy - yEdge);
             if (d < bestD) {
                 bestD = d;
                 best = oy;
+                bestX0 = x0;
+                bestX1 = x1;
             }
         }
     }
@@ -122,18 +147,25 @@ float snapHorizontalEdgeY(float yEdge, const MapData &map, int skipWallIdx, int 
             continue;
         }
         const LavaData &o = map.lavas[static_cast<size_t>(j)];
+        if (!globalMode && std::fabs(o.cx - focusX) > localSpan) {
+            continue;
+        }
+        const float x0 = o.cx - o.halfW;
+        const float x1 = o.cx + o.halfW;
         for (const float oy : {o.cy - o.halfH, o.cy + o.halfH}) {
             const float d = std::fabs(oy - yEdge);
             if (d < bestD) {
                 bestD = d;
                 best = oy;
+                bestX0 = x0;
+                bestX1 = x1;
             }
         }
     }
     if (bestD < thresh) {
         guideActive = true;
-        ga = {-span, best};
-        gb = {span, best};
+        ga = {bestX0, best};
+        gb = {bestX1, best};
         return best;
     }
     return yEdge;
@@ -329,6 +361,9 @@ EditorScene::Selection EditorScene::pickSelection(const Vector2 &worldMouse) con
 }
 
 void EditorScene::handlePlacement(const Vector2 &worldMouse) {
+    if (activeTool_ != Tool::Select) {
+        pushUndoSnapshot();
+    }
     switch (activeTool_) {
     case Tool::PlaceWall:
         map_.walls.push_back({worldMouse.x, worldMouse.y, kDefaultWallHalf, kDefaultWallHalf});
@@ -391,6 +426,101 @@ void EditorScene::applySelectionMove(const Vector2 &worldMouse) {
             auto &w = map_.walls[static_cast<size_t>(selected_.index)];
             w.cx = target.x;
             w.cy = target.y;
+            const bool ctrlHeld = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
+            const bool shiftHeld = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+            const float left = w.cx - w.halfW;
+            const float right = w.cx + w.halfW;
+            bool gxLeft = false;
+            bool gxRight = false;
+            Vector2 gaxLeft{};
+            Vector2 gbxLeft{};
+            Vector2 gaxRight{};
+            Vector2 gbxRight{};
+            const float snappedLeft =
+                snapVerticalEdgeX(left, w.cy, map_, selected_.index, -1, ctrlHeld, shiftHeld, gxLeft, gaxLeft, gbxLeft);
+            const float snappedRight = snapVerticalEdgeX(right, w.cy, map_, selected_.index, -1, ctrlHeld,
+                                                         shiftHeld, gxRight, gaxRight, gbxRight);
+            const float dLeft = std::fabs(snappedLeft - left);
+            const float dRight = std::fabs(snappedRight - right);
+            bool gx = false;
+            Vector2 gax{};
+            Vector2 gbx{};
+            float snappedEdgeX = left;
+            bool snappedFromLeft = true;
+            if (gxLeft && (!gxRight || dLeft <= dRight)) {
+                gx = true;
+                gax = gaxLeft;
+                gbx = gbxLeft;
+                snappedEdgeX = snappedLeft;
+                snappedFromLeft = true;
+            } else if (gxRight) {
+                gx = true;
+                gax = gaxRight;
+                gbx = gbxRight;
+                snappedEdgeX = snappedRight;
+                snappedFromLeft = false;
+            }
+            if (gx) {
+                const float moveX =
+                    snappedFromLeft ? (snappedEdgeX - left) : (snappedEdgeX - right);
+                w.cx += moveX;
+            }
+
+            const float top = w.cy - w.halfH;
+            const float bottom = w.cy + w.halfH;
+            bool gyTop = false;
+            bool gyBottom = false;
+            Vector2 gayTop{};
+            Vector2 gbyTop{};
+            Vector2 gayBottom{};
+            Vector2 gbyBottom{};
+            const float snappedTop = snapHorizontalEdgeY(top, w.cx, map_, selected_.index, -1, ctrlHeld,
+                                                         shiftHeld, gyTop, gayTop, gbyTop);
+            const float snappedBottom = snapHorizontalEdgeY(bottom, w.cx, map_, selected_.index, -1, ctrlHeld,
+                                                            shiftHeld, gyBottom, gayBottom, gbyBottom);
+            const float dTop = std::fabs(snappedTop - top);
+            const float dBottom = std::fabs(snappedBottom - bottom);
+            bool gy = false;
+            Vector2 gay{};
+            Vector2 gby{};
+            float snappedEdgeY = top;
+            bool snappedFromTop = true;
+            if (gyTop && (!gyBottom || dTop <= dBottom)) {
+                gy = true;
+                gay = gayTop;
+                gby = gbyTop;
+                snappedEdgeY = snappedTop;
+                snappedFromTop = true;
+            } else if (gyBottom) {
+                gy = true;
+                gay = gayBottom;
+                gby = gbyBottom;
+                snappedEdgeY = snappedBottom;
+                snappedFromTop = false;
+            }
+            if (gy) {
+                const float moveY =
+                    snappedFromTop ? (snappedEdgeY - top) : (snappedEdgeY - bottom);
+                w.cy += moveY;
+            }
+
+            if (gx) {
+                snapGuideActive_ = true;
+                snapGuideA_ = gax;
+                snapGuideB_ = gbx;
+                snapDraggedGuideActive_ = true;
+                const float edgeX = snappedFromLeft ? (w.cx - w.halfW) : (w.cx + w.halfW);
+                snapDraggedGuideA_ = {edgeX, w.cy - w.halfH};
+                snapDraggedGuideB_ = {edgeX, w.cy + w.halfH};
+            } else if (gy) {
+                snapGuideActive_ = true;
+                snapGuideA_ = gay;
+                snapGuideB_ = gby;
+                snapDraggedGuideActive_ = true;
+                const float edgeY = snappedFromTop ? (w.cy - w.halfH) : (w.cy + w.halfH);
+                snapDraggedGuideA_ = {w.cx - w.halfW, edgeY};
+                snapDraggedGuideB_ = {w.cx + w.halfW, edgeY};
+            }
         }
         break;
     case SelectedType::Lava:
@@ -446,6 +576,7 @@ void EditorScene::applySelectionMove(const Vector2 &worldMouse) {
 }
 
 void EditorScene::deleteSelection() {
+    pushUndoSnapshot();
     if (selected_.type == SelectedType::Wall && selected_.index >= 0 &&
         selected_.index < static_cast<int>(map_.walls.size())) {
         map_.walls.erase(map_.walls.begin() + selected_.index);
@@ -471,6 +602,7 @@ void EditorScene::deleteSelection() {
 }
 
 void EditorScene::duplicateSelection() {
+    pushUndoSnapshot();
     if (selected_.type == SelectedType::Wall && selected_.index >= 0 &&
         selected_.index < static_cast<int>(map_.walls.size())) {
         WallData copy = map_.walls[static_cast<size_t>(selected_.index)];
@@ -544,6 +676,7 @@ void EditorScene::copySelectionToClipboard() {
 }
 
 void EditorScene::pasteFromClipboard(const Vector2 &worldMouse) {
+    pushUndoSnapshot();
     switch (clipboardKind_) {
     case ClipboardKind::Wall: {
         WallData w = clipboardWall_;
@@ -709,8 +842,10 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
     const bool leftHeld = input.isMouseButtonHeld(MOUSE_BUTTON_LEFT);
     const bool leftReleased = input.isMouseButtonReleased(MOUSE_BUTTON_LEFT);
     const bool ctrlHeld = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
+    const bool shiftHeld = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
 
     snapGuideActive_ = false;
+    snapDraggedGuideActive_ = false;
 
     if (resizingWall_ != ResizeHandle::None) {
         if (selected_.type == SelectedType::Wall && selected_.index >= 0 &&
@@ -726,7 +861,7 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
                 bool g = false;
                 Vector2 ga{};
                 Vector2 gb{};
-                newRight = snapVerticalEdgeX(newRight, map_, skipW, -1, ctrlHeld, g, ga, gb);
+                newRight = snapVerticalEdgeX(newRight, worldMouse.y, map_, skipW, -1, ctrlHeld, shiftHeld, g, ga, gb);
                 if (g) {
                     snapGuideActive_ = true;
                     snapGuideA_ = ga;
@@ -739,7 +874,7 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
                 bool g = false;
                 Vector2 ga{};
                 Vector2 gb{};
-                newLeft = snapVerticalEdgeX(newLeft, map_, skipW, -1, ctrlHeld, g, ga, gb);
+                newLeft = snapVerticalEdgeX(newLeft, worldMouse.y, map_, skipW, -1, ctrlHeld, shiftHeld, g, ga, gb);
                 if (g) {
                     snapGuideActive_ = true;
                     snapGuideA_ = ga;
@@ -752,7 +887,7 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
                 bool g = false;
                 Vector2 ga{};
                 Vector2 gb{};
-                newBottom = snapHorizontalEdgeY(newBottom, map_, skipW, -1, ctrlHeld, g, ga, gb);
+                newBottom = snapHorizontalEdgeY(newBottom, worldMouse.x, map_, skipW, -1, ctrlHeld, shiftHeld, g, ga, gb);
                 if (g) {
                     snapGuideActive_ = true;
                     snapGuideA_ = ga;
@@ -765,7 +900,7 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
                 bool g = false;
                 Vector2 ga{};
                 Vector2 gb{};
-                newTop = snapHorizontalEdgeY(newTop, map_, skipW, -1, ctrlHeld, g, ga, gb);
+                newTop = snapHorizontalEdgeY(newTop, worldMouse.x, map_, skipW, -1, ctrlHeld, shiftHeld, g, ga, gb);
                 if (g) {
                     snapGuideActive_ = true;
                     snapGuideA_ = ga;
@@ -776,6 +911,7 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
             }
         }
         if (leftReleased) {
+            pushUndoSnapshot();
             resizingWall_ = ResizeHandle::None;
         }
         return;
@@ -795,7 +931,7 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
                 bool g = false;
                 Vector2 ga{};
                 Vector2 gb{};
-                newRight = snapVerticalEdgeX(newRight, map_, -1, skipL, ctrlHeld, g, ga, gb);
+                newRight = snapVerticalEdgeX(newRight, worldMouse.y, map_, -1, skipL, ctrlHeld, shiftHeld, g, ga, gb);
                 if (g) {
                     snapGuideActive_ = true;
                     snapGuideA_ = ga;
@@ -808,7 +944,7 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
                 bool g = false;
                 Vector2 ga{};
                 Vector2 gb{};
-                newLeft = snapVerticalEdgeX(newLeft, map_, -1, skipL, ctrlHeld, g, ga, gb);
+                newLeft = snapVerticalEdgeX(newLeft, worldMouse.y, map_, -1, skipL, ctrlHeld, shiftHeld, g, ga, gb);
                 if (g) {
                     snapGuideActive_ = true;
                     snapGuideA_ = ga;
@@ -821,7 +957,7 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
                 bool g = false;
                 Vector2 ga{};
                 Vector2 gb{};
-                newBottom = snapHorizontalEdgeY(newBottom, map_, -1, skipL, ctrlHeld, g, ga, gb);
+                newBottom = snapHorizontalEdgeY(newBottom, worldMouse.x, map_, -1, skipL, ctrlHeld, shiftHeld, g, ga, gb);
                 if (g) {
                     snapGuideActive_ = true;
                     snapGuideA_ = ga;
@@ -834,7 +970,7 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
                 bool g = false;
                 Vector2 ga{};
                 Vector2 gb{};
-                newTop = snapHorizontalEdgeY(newTop, map_, -1, skipL, ctrlHeld, g, ga, gb);
+                newTop = snapHorizontalEdgeY(newTop, worldMouse.x, map_, -1, skipL, ctrlHeld, shiftHeld, g, ga, gb);
                 if (g) {
                     snapGuideActive_ = true;
                     snapGuideA_ = ga;
@@ -845,6 +981,7 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
             }
         }
         if (leftReleased) {
+            pushUndoSnapshot();
             resizingLava_ = ResizeHandle::None;
         }
         return;
@@ -943,6 +1080,9 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
         applySelectionMove(worldMouse);
     }
     if (leftReleased) {
+        if (draggingSelection_) {
+            pushUndoSnapshot();
+        }
         draggingSelection_ = false;
         solidMoveActive_ = false;
     }
@@ -999,6 +1139,27 @@ void EditorScene::drawLavaResizeHandles(const Font & /*font*/, const LavaData &w
         DrawCircleV(p, 6.0F, {255, 180, 90, 255});
         DrawCircleLinesV(p, 6.0F, {120, 50, 30, 255});
     }
+}
+
+void EditorScene::pushUndoSnapshot() {
+    if (undoSnapshotCount_ < static_cast<int>(undoSnapshots_.size())) {
+        undoSnapshots_[static_cast<size_t>(undoSnapshotCount_)] = map_;
+        ++undoSnapshotCount_;
+        return;
+    }
+    for (size_t i = 1; i < undoSnapshots_.size(); ++i) {
+        undoSnapshots_[i - 1] = undoSnapshots_[i];
+    }
+    undoSnapshots_.back() = map_;
+}
+
+void EditorScene::popUndoSnapshot() {
+    if (undoSnapshotCount_ <= 0) {
+        return;
+    }
+    --undoSnapshotCount_;
+    map_ = undoSnapshots_[static_cast<size_t>(undoSnapshotCount_)];
+    selected_ = {};
 }
 
 void EditorScene::update(SceneManager &scenes, InputManager &input, ResourceManager &resources,
@@ -1264,11 +1425,19 @@ void EditorScene::update(SceneManager &scenes, InputManager &input, ResourceMana
     if (click) {
         handleCasketLootPanelClick(mouse, click, uiConsumedClick);
     }
-    if (!overUi && !uiConsumedClick && activeTool_ == Tool::PlaceSolid &&
-        input.isKeyPressed(KEY_ENTER) && static_cast<int>(solidDraftVerts_.size()) >= 3) {
+    if (activeTool_ == Tool::PlaceSolid && input.isKeyPressed(KEY_ENTER) &&
+        static_cast<int>(solidDraftVerts_.size()) >= 3) {
+        pushUndoSnapshot();
         SolidShapeData sd{};
         sd.verts = solidDraftVerts_;
         map_.solidShapes.push_back(std::move(sd));
+        selected_.type = SelectedType::SolidShape;
+        selected_.index = static_cast<int>(map_.solidShapes.size()) - 1;
+        solidDraftVerts_.clear();
+        activeTool_ = Tool::Select;
+        uiConsumedClick = true;
+    }
+    if (activeTool_ == Tool::PlaceSolid && input.isKeyPressed(KEY_ESCAPE)) {
         solidDraftVerts_.clear();
         activeTool_ = Tool::Select;
         uiConsumedClick = true;
@@ -1284,6 +1453,10 @@ void EditorScene::update(SceneManager &scenes, InputManager &input, ResourceMana
     }
     if (input.isKeyPressed(KEY_DELETE)) {
         deleteSelection();
+    }
+    if ((input.isKeyHeld(KEY_LEFT_CONTROL) || input.isKeyHeld(KEY_RIGHT_CONTROL)) &&
+        input.isKeyPressed(KEY_Z)) {
+        popUndoSnapshot();
     }
     if ((input.isKeyHeld(KEY_LEFT_CONTROL) || input.isKeyHeld(KEY_RIGHT_CONTROL)) &&
         input.isKeyPressed(KEY_D)) {
@@ -1403,10 +1576,7 @@ void EditorScene::drawEditorWorld(const Font &font) {
         const Vector2 p3 = worldToIso({w.cx + w.halfW, w.cy + w.halfH});
         const Vector2 p4 = worldToIso({w.cx - w.halfW, w.cy + w.halfH});
         const bool sel = selected_.type == SelectedType::Lava && selected_.index == i;
-        const Color fill = sel ? Color{220, 90, 40, 220} : Color{180, 60, 20, 180};
         const Color edge = sel ? Color{255, 200, 120, 255} : Color{255, 100, 40, 255};
-        DrawTriangle(p1, p2, p3, fill);
-        DrawTriangle(p1, p3, p4, fill);
         DrawLineV(p1, p2, edge);
         DrawLineV(p2, p3, edge);
         DrawLineV(p3, p4, edge);
@@ -1510,12 +1680,25 @@ void EditorScene::drawEditorWorld(const Font &font) {
         for (const Vector2 &pv : solidDraftVerts_) {
             DrawCircleV(worldToIso(pv), 5.0F, {255, 200, 80, 255});
         }
+        if (solidDraftVerts_.size() >= 3) {
+            DrawLineV(worldToIso(solidDraftVerts_.back()), worldToIso(solidDraftVerts_.front()),
+                      {200, 160, 90, 220});
+        }
     }
 
     if (snapGuideActive_) {
         const Vector2 a = worldToIso(snapGuideA_);
         const Vector2 b = worldToIso(snapGuideB_);
-        DrawLineEx(a, b, 2.0F, Fade(YELLOW, 0.85F));
+        DrawLineEx(a, b, 3.0F, Fade(YELLOW, 0.92F));
+        DrawCircleV(a, 4.0F, Fade(YELLOW, 0.9F));
+        DrawCircleV(b, 4.0F, Fade(YELLOW, 0.9F));
+    }
+    if (snapDraggedGuideActive_) {
+        const Vector2 a = worldToIso(snapDraggedGuideA_);
+        const Vector2 b = worldToIso(snapDraggedGuideB_);
+        DrawLineEx(a, b, 3.0F, Fade(SKYBLUE, 0.92F));
+        DrawCircleV(a, 4.0F, Fade(SKYBLUE, 0.9F));
+        DrawCircleV(b, 4.0F, Fade(SKYBLUE, 0.9F));
     }
 }
 
@@ -1690,14 +1873,20 @@ void EditorScene::draw(ResourceManager &resources) {
     {
         constexpr float hintFs = 16.0F;
         const float sw = static_cast<float>(config::WINDOW_WIDTH);
-        const char *hint1 = "Select: drag | Del remove | Ctrl+D dup | Ctrl+C/V copy-paste";
-        const char *hint2 = "Wall resize: handles / arrows (Shift=faster) | Mid-mouse: camera grip";
-        const Vector2 h1 = MeasureTextEx(font, hint1, hintFs, 1.0F);
-        const Vector2 h2 = MeasureTextEx(font, hint2, hintFs, 1.0F);
-        const float yTop = 8.0F;
-        DrawTextEx(font, hint1, {(sw - h1.x) * 0.5F, yTop}, hintFs, 1.0F, ui::theme::MUTED_TEXT);
-        DrawTextEx(font, hint2, {(sw - h2.x) * 0.5F, yTop + h1.y + 4.0F}, hintFs, 1.0F,
-                   ui::theme::MUTED_TEXT);
+        std::vector<const char *> hints{};
+        hints.push_back("Save [S] | Undo [Ctrl+Z] (5) | Mid-mouse: camera grip");
+        if (activeTool_ == Tool::PlaceSolid) {
+            hints.push_back("Solid: LMB add vertex | RMB remove last | Enter commit | Esc cancel");
+        } else {
+            hints.push_back("Select: drag move | Del remove | Ctrl+D dup | Ctrl+C/V copy-paste");
+        }
+        hints.push_back("Snap: default nearby | Hold Shift global line | Hold Ctrl disable");
+        float y = 8.0F;
+        for (const char *hint : hints) {
+            const Vector2 hd = MeasureTextEx(font, hint, hintFs, 1.0F);
+            DrawTextEx(font, hint, {(sw - hd.x) * 0.5F, y}, hintFs, 1.0F, ui::theme::MUTED_TEXT);
+            y += hd.y + 4.0F;
+        }
     }
 
     if (showUnsavedDialog_) {

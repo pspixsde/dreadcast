@@ -22,6 +22,8 @@ struct GameSettings {
     bool showReloadOnCursor{true};
     /// When bag is full, "Separate" still splits one unit by dropping it at the player.
     bool separateDropsWhenFull{false};
+    /// Shift-click return from workbench prefers bag first instead of equip/consumables.
+    bool bagPriorityShiftIntoInventory{true};
     /// Master volume (0–1) applied to the audio engine.
     float masterVolume{1.0F};
     /// Game / SFX volume (0–1), multiplied with master for gameplay sounds.

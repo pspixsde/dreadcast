@@ -22,6 +22,7 @@
 #include "core/iso_utils.hpp"
 #include "core/audio.hpp"
 #include "core/resource_manager.hpp"
+#include "game/item_rarity.hpp"
 #include "ecs/components.hpp"
 #include "ecs/systems/collision_system.hpp"
 #include "ecs/systems/combat_system.hpp"
@@ -211,7 +212,10 @@ void drawHudShortcutKeyBadgeRight(const Font &font, const char *keyTxt, float sl
 
 } // namespace
 
-GameplayScene::GameplayScene(int selectedClassIndex) : selectedClass_(selectedClassIndex) {}
+GameplayScene::GameplayScene(int selectedClassIndex) : selectedClass_(selectedClassIndex) {
+    inventoryUi_.setRemoveItemCallback(
+        [this](int idx) { this->removeInventoryItemAndRewrite(idx); });
+}
 
 GameplayScene::~GameplayScene() { unloadFogResources(); }
 
@@ -766,9 +770,7 @@ void GameplayScene::tryUseConsumableSlot(int slotIndex) {
         it.stackCount -= 1;
         if (it.stackCount <= 0) {
             inventory_.consumableSlots[static_cast<size_t>(slotIndex)] = -1;
-            const int oldLast = static_cast<int>(inventory_.items.size()) - 1;
-            inventory_.removeItemAtIndex(idx);
-            ecs::collision::rewrite_ground_pickup_indices_after_remove(registry_, idx, oldLast);
+            removeInventoryItemAndRewrite(idx);
         }
         applyVialHealOverTime(wasHot);
         return;
@@ -780,9 +782,7 @@ void GameplayScene::tryUseConsumableSlot(int slotIndex) {
         it.stackCount -= 1;
         if (it.stackCount <= 0) {
             inventory_.consumableSlots[static_cast<size_t>(slotIndex)] = -1;
-            const int oldLast = static_cast<int>(inventory_.items.size()) - 1;
-            inventory_.removeItemAtIndex(idx);
-            ecs::collision::rewrite_ground_pickup_indices_after_remove(registry_, idx, oldLast);
+            removeInventoryItemAndRewrite(idx);
         }
         return;
     }
@@ -792,9 +792,7 @@ void GameplayScene::tryUseConsumableSlot(int slotIndex) {
         it.stackCount -= 1;
         if (it.stackCount <= 0) {
             inventory_.consumableSlots[static_cast<size_t>(slotIndex)] = -1;
-            const int oldLast = static_cast<int>(inventory_.items.size()) - 1;
-            inventory_.removeItemAtIndex(idx);
-            ecs::collision::rewrite_ground_pickup_indices_after_remove(registry_, idx, oldLast);
+            removeInventoryItemAndRewrite(idx);
         }
         applyVialRawSpiritMana(wasActive);
         return;
@@ -819,9 +817,7 @@ void GameplayScene::tryUseConsumableBagSlot(int bagSlot) {
         it.stackCount -= 1;
         if (it.stackCount <= 0) {
             inventory_.bagSlots[static_cast<size_t>(bagSlot)] = -1;
-            const int oldLast = static_cast<int>(inventory_.items.size()) - 1;
-            inventory_.removeItemAtIndex(idx);
-            ecs::collision::rewrite_ground_pickup_indices_after_remove(registry_, idx, oldLast);
+            removeInventoryItemAndRewrite(idx);
         }
         applyVialHealOverTime(wasHot);
         return;
@@ -833,9 +829,7 @@ void GameplayScene::tryUseConsumableBagSlot(int bagSlot) {
         it.stackCount -= 1;
         if (it.stackCount <= 0) {
             inventory_.bagSlots[static_cast<size_t>(bagSlot)] = -1;
-            const int oldLast = static_cast<int>(inventory_.items.size()) - 1;
-            inventory_.removeItemAtIndex(idx);
-            ecs::collision::rewrite_ground_pickup_indices_after_remove(registry_, idx, oldLast);
+            removeInventoryItemAndRewrite(idx);
         }
         return;
     }
@@ -845,9 +839,7 @@ void GameplayScene::tryUseConsumableBagSlot(int bagSlot) {
         it.stackCount -= 1;
         if (it.stackCount <= 0) {
             inventory_.bagSlots[static_cast<size_t>(bagSlot)] = -1;
-            const int oldLast = static_cast<int>(inventory_.items.size()) - 1;
-            inventory_.removeItemAtIndex(idx);
-            ecs::collision::rewrite_ground_pickup_indices_after_remove(registry_, idx, oldLast);
+            removeInventoryItemAndRewrite(idx);
         }
         applyVialRawSpiritMana(wasActive);
         return;
@@ -1002,6 +994,30 @@ void GameplayScene::spawnItemPickupAtPlayer(int itemIndex) {
     spawnItemPickupAtWorld(t.position, itemIndex);
 }
 
+void GameplayScene::removeInventoryItemAndRewrite(int idx) {
+    if (idx < 0 || idx >= static_cast<int>(inventory_.items.size())) {
+        return;
+    }
+    const int oldLast = static_cast<int>(inventory_.items.size()) - 1;
+    inventory_.removeItemAtIndex(idx);
+    ecs::collision::rewrite_ground_pickup_indices_after_remove(registry_, idx, oldLast);
+
+    auto rewriteSlot = [&](int &slot) {
+        if (slot == idx) {
+            slot = -1;
+        } else if (slot == oldLast) {
+            slot = idx;
+        }
+    };
+    for (int &fs : forgeSlots_) {
+        rewriteSlot(fs);
+    }
+    rewriteSlot(disassembleInputIndex_);
+    for (int i = 0; i < disassembleOutputCount_; ++i) {
+        rewriteSlot(disassembleOutputPool_[static_cast<size_t>(i)]);
+    }
+}
+
 void GameplayScene::spawnItemPickupAtWorld(const Vector2 &worldPos, int itemIndex) {
     Vector2 dropPos = worldPos;
     constexpr float minSep = 20.0F; // keep multiple drops pickable
@@ -1074,7 +1090,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
     bool escConsumedByCloseUi = false;
 
     if (input.isKeyPressed(KEY_TAB)) {
-        if (!paused_ && !skillTreeUi_.isOpen()) {
+        if (!paused_ && !skillTreeUi_.isOpen() && !fullMapOpen_) {
             const bool wasOpen = inventoryUi_.isOpen();
             inventoryUi_.toggle();
             if (wasOpen && !inventoryUi_.isOpen()) {
@@ -1089,7 +1105,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         }
     }
 
-    inventoryUi_.setPanelLayoutShift(anvilOpen_ ? 400.0F : 0.0F);
+    inventoryUi_.setPanelLayoutShift(anvilOpen_ ? 238.0F : 0.0F);
 
     if (inventoryUi_.isOpen()) {
         if (input.isKeyPressed(KEY_ESCAPE)) {
@@ -1106,6 +1122,92 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
             const ui::AnvilUiLayout anvilLayout =
                 anvilOpen_ ? buildAnvilUiLayout() : ui::AnvilUiLayout{};
             if (anvilOpen_) {
+                const Vector2 mouse = input.mousePosition();
+                const bool shiftHeld = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+                if (shiftHeld && input.isMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                    const int bagHit = inventoryUi_.hitTestBagSlot(mouse, config::WINDOW_WIDTH, config::WINDOW_HEIGHT);
+                    const int equipHit =
+                        inventoryUi_.hitTestEquipSlot(mouse, config::WINDOW_WIDTH, config::WINDOW_HEIGHT);
+                    const int consHit = inventoryUi_.hitTestConsumableSlot(
+                        mouse, config::WINDOW_WIDTH, config::WINDOW_HEIGHT);
+                    if (bagHit >= 0) {
+                        const int idx = inventory_.bagSlots[static_cast<size_t>(bagHit)];
+                        if (idx >= 0) {
+                            if (anvilLayout.forgeTab) {
+                                for (int i = 0; i < anvilLayout.forgeInputCount; ++i) {
+                                    if (forgeSlots_[static_cast<size_t>(i)] < 0) {
+                                        forgeSlots_[static_cast<size_t>(i)] = idx;
+                                        inventory_.bagSlots[static_cast<size_t>(bagHit)] = -1;
+                                        break;
+                                    }
+                                }
+                            } else if (disassembleInputIndex_ < 0) {
+                                disassembleInputIndex_ = idx;
+                                inventory_.bagSlots[static_cast<size_t>(bagHit)] = -1;
+                            }
+                        }
+                    } else if (equipHit >= 0) {
+                        const int idx = inventory_.equipped[static_cast<size_t>(equipHit)];
+                        if (idx >= 0) {
+                            if (anvilLayout.forgeTab) {
+                                for (int i = 0; i < anvilLayout.forgeInputCount; ++i) {
+                                    if (forgeSlots_[static_cast<size_t>(i)] < 0) {
+                                        forgeSlots_[static_cast<size_t>(i)] = idx;
+                                        inventory_.equipped[static_cast<size_t>(equipHit)] = -1;
+                                        break;
+                                    }
+                                }
+                            } else if (disassembleInputIndex_ < 0) {
+                                disassembleInputIndex_ = idx;
+                                inventory_.equipped[static_cast<size_t>(equipHit)] = -1;
+                            }
+                        }
+                    } else if (consHit >= 0) {
+                        const int idx = inventory_.consumableSlots[static_cast<size_t>(consHit)];
+                        if (idx >= 0) {
+                            if (anvilLayout.forgeTab) {
+                                for (int i = 0; i < anvilLayout.forgeInputCount; ++i) {
+                                    if (forgeSlots_[static_cast<size_t>(i)] < 0) {
+                                        forgeSlots_[static_cast<size_t>(i)] = idx;
+                                        inventory_.consumableSlots[static_cast<size_t>(consHit)] = -1;
+                                        break;
+                                    }
+                                }
+                            } else if (disassembleInputIndex_ < 0) {
+                                disassembleInputIndex_ = idx;
+                                inventory_.consumableSlots[static_cast<size_t>(consHit)] = -1;
+                            }
+                        }
+                    } else if (anvilLayout.forgeTab) {
+                        for (int i = 0; i < anvilLayout.forgeInputCount; ++i) {
+                            if (CheckCollisionPointRec(mouse, anvilLayout.forgeInputRects[static_cast<size_t>(i)])) {
+                                const int idx = forgeSlots_[static_cast<size_t>(i)];
+                                if (idx >= 0) {
+                                    forgeSlots_[static_cast<size_t>(i)] = -1;
+                                    tryReturnPoolItemToBagOrDrop(idx);
+                                }
+                            }
+                        }
+                    } else {
+                        if (CheckCollisionPointRec(mouse, anvilLayout.disInputRect) && disassembleInputIndex_ >= 0) {
+                            tryReturnPoolItemToBagOrDrop(disassembleInputIndex_);
+                            disassembleInputIndex_ = -1;
+                        } else {
+                            for (int i = 0; i < anvilLayout.disOutputCount; ++i) {
+                                if (!CheckCollisionPointRec(
+                                        mouse, anvilLayout.disOutputRects[static_cast<size_t>(i)])) {
+                                    continue;
+                                }
+                                const int idx = disassembleOutputPool_[static_cast<size_t>(i)];
+                                if (idx >= 0) {
+                                    disassembleOutputPool_[static_cast<size_t>(i)] = -1;
+                                    tryReturnPoolItemToBagOrDrop(idx);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
                 tickAnvilUi(input, resources, anvilLayout);
             }
             const ui::InventoryAction invAction = inventoryUi_.update(
@@ -1139,12 +1241,16 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
     }
     if (skillTreeEsc) {
         escConsumedByCloseUi = true;
+        aimScreenPos_ = input.mousePosition();
+        aimScreenInit_ = true;
     }
 
     if (!paused_ && !gameOver_) {
         if (skillTreeUi_.isOpen()) {
             if (input.isKeyPressed(KEY_K)) {
                 skillTreeUi_.setOpen(false);
+                aimScreenPos_ = input.mousePosition();
+                aimScreenInit_ = true;
             }
         } else if (!inventoryUi_.isOpen() && !fullMapOpen_ && input.isKeyPressed(KEY_K)) {
             skillTreeUi_.setOpen(true);
@@ -1156,12 +1262,15 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
 
     bool aimSnappedAfterPauseEsc = false;
     if (!escConsumedByCloseUi && !inventoryUi_.isOpen() && input.isKeyPressed(KEY_ESCAPE)) {
-        if (paused_) {
+        if (fullMapOpen_) {
+            fullMapOpen_ = false;
+            escConsumedByCloseUi = true;
+        } else if (paused_) {
             paused_ = false;
             aimScreenPos_ = input.mousePosition();
             aimScreenInit_ = true;
             aimSnappedAfterPauseEsc = true;
-        } else {
+        } else if (!fullMapOpen_) {
             paused_ = true;
         }
     }
@@ -1194,6 +1303,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
     }
 
     aimMouseSensitivity_ = resources.settings().mouseSensitivity;
+    bagPriorityShiftIntoInventory_ = resources.settings().bagPriorityShiftIntoInventory;
     if (!aimScreenInit_) {
         aimScreenPos_ = input.mousePosition();
         aimScreenInit_ = true;
@@ -1508,7 +1618,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
                     anvilOpen_ = true;
                     activeAnvil_ = hoveredInteract_;
                     inventoryUi_.setOpen(true);
-                    inventoryUi_.setPanelLayoutShift(400.0F);
+                    inventoryUi_.setPanelLayoutShift(238.0F);
                 }
             }
 
@@ -1581,11 +1691,12 @@ void GameplayScene::draw(ResourceManager &resources) {
         rscdRatio = cd.total > 0.001F ? cd.remaining / cd.total : 0.0F;
         rscdSeconds = cd.remaining;
     }
-    inventoryUi_.draw(resources.uiFont(), resources, w, h, inventory_, hpRatioDraw,
-                      rscdRatio, rscdSeconds);
+    inventoryUi_.drawWithoutDragGhost(resources.uiFont(), resources, w, h, inventory_, hpRatioDraw,
+                                      rscdRatio, rscdSeconds);
     if (anvilOpen_) {
         drawAnvilUi(resources, buildAnvilUiLayout());
     }
+    inventoryUi_.drawDragGhost(resources, inventory_);
 
     if (skillTreeUi_.isOpen()) {
         int sp = 0;
@@ -2810,15 +2921,20 @@ void GameplayScene::drawLootProximityPrompt(ResourceManager &resources) {
     if (!registry_.valid(player_) || !registry_.all_of<ecs::Transform>(player_)) {
         return;
     }
-    const char *name = inventory_.items[static_cast<size_t>(idx)].name.c_str();
+    const auto &hoverItem = inventory_.items[static_cast<size_t>(idx)];
+    std::string name = hoverItem.name;
+    if (hoverItem.isStackable && hoverItem.stackCount > 1) {
+        name += " x";
+        name += std::to_string(hoverItem.stackCount);
+    }
     const float nameSz = 16.0F;
     const char *prompt = "Press [E] to pick up";
     const float promptSz = 18.0F;
     const Vector2 mouse = GetMousePosition();
-    const Vector2 nameDim = MeasureTextEx(font, name, nameSz, 1.0F);
+    const Vector2 nameDim = MeasureTextEx(font, name.c_str(), nameSz, 1.0F);
     const Vector2 prDim = MeasureTextEx(font, prompt, promptSz, 1.0F);
     const bool altHeld = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
-    const std::string &desc = inventory_.items[static_cast<size_t>(idx)].description;
+    const std::string &desc = hoverItem.description;
     float boxW = std::max(nameDim.x, prDim.x) + 24.0F;
     float boxH = nameDim.y + prDim.y + 28.0F;
     Vector2 descDim{};
@@ -2831,8 +2947,8 @@ void GameplayScene::drawLootProximityPrompt(ResourceManager &resources) {
     Rectangle bg{mouse.x, mouse.y - boxH, boxW, boxH};
     clampRectToScreen(bg, config::WINDOW_WIDTH, config::WINDOW_HEIGHT);
     DrawRectangleRec(bg, {0, 0, 0, 210});
-    DrawRectangleLinesEx(bg, 2.0F, ui::theme::BTN_BORDER);
-    DrawTextEx(font, name, {bg.x + 12.0F, bg.y + 8.0F}, nameSz, 1.0F, RAYWHITE);
+    DrawRectangleLinesEx(bg, 2.0F, rarityColor(hoverItem.rarity));
+    DrawTextEx(font, name.c_str(), {bg.x + 12.0F, bg.y + 8.0F}, nameSz, 1.0F, RAYWHITE);
     float textY = bg.y + 16.0F + nameDim.y;
     if (altHeld && !desc.empty()) {
         const float descSz = 14.0F;
@@ -3262,6 +3378,69 @@ bool GameplayScene::tryReturnPoolItemToBagOrDrop(int poolIdx) {
     if (poolIdx < 0 || poolIdx >= static_cast<int>(inventory_.items.size())) {
         return false;
     }
+    const bool bagPriority = bagPriorityShiftIntoInventory_;
+    auto &it = inventory_.items[static_cast<size_t>(poolIdx)];
+
+    // First, try to consolidate stackable items into compatible existing stacks.
+    if (it.isStackable && it.stackCount > 0) {
+        auto pourIntoPool = [&](int dstPoolIdx) {
+            if (dstPoolIdx < 0 || dstPoolIdx >= static_cast<int>(inventory_.items.size()) ||
+                dstPoolIdx == poolIdx) {
+                return;
+            }
+            auto &src = inventory_.items[static_cast<size_t>(poolIdx)];
+            auto &dst = inventory_.items[static_cast<size_t>(dstPoolIdx)];
+            if (!src.canStackWith(dst)) {
+                return;
+            }
+            const int space = dst.maxStack - dst.stackCount;
+            if (space <= 0 || src.stackCount <= 0) {
+                return;
+            }
+            const int move = std::min(space, src.stackCount);
+            dst.stackCount += move;
+            src.stackCount -= move;
+        };
+
+        auto tryPourArray = [&](const auto &slots) {
+            for (int slotPoolIdx : slots) {
+                if (inventory_.items[static_cast<size_t>(poolIdx)].stackCount <= 0) {
+                    break;
+                }
+                pourIntoPool(slotPoolIdx);
+            }
+        };
+
+        if (bagPriority) {
+            tryPourArray(inventory_.bagSlots);
+            tryPourArray(inventory_.consumableSlots);
+        } else {
+            tryPourArray(inventory_.consumableSlots);
+            tryPourArray(inventory_.bagSlots);
+        }
+
+        if (inventory_.items[static_cast<size_t>(poolIdx)].stackCount <= 0) {
+            removeInventoryItemAndRewrite(poolIdx);
+            return true;
+        }
+    }
+
+    if (!bagPriority) {
+        if (it.isConsumable) {
+            const int c = inventory_.firstEmptyConsumableSlot();
+            if (c >= 0) {
+                inventory_.consumableSlots[static_cast<size_t>(c)] = poolIdx;
+                return true;
+            }
+        } else {
+            const int eq = static_cast<int>(it.slot);
+            if (eq >= 0 && eq < static_cast<int>(inventory_.equipped.size()) &&
+                inventory_.equipped[static_cast<size_t>(eq)] < 0) {
+                inventory_.equipped[static_cast<size_t>(eq)] = poolIdx;
+                return true;
+            }
+        }
+    }
     const int bag = inventory_.firstEmptyBagSlot();
     if (bag >= 0) {
         inventory_.bagSlots[static_cast<size_t>(bag)] = poolIdx;
@@ -3322,8 +3501,8 @@ void GameplayScene::commitDisassembleRecipe() {
     const int stack =
         inventory_.items[static_cast<size_t>(disassembleInputIndex_)].stackCount;
     const int inPool = disassembleInputIndex_;
-    inventory_.removeItemAtIndex(inPool);
     disassembleInputIndex_ = -1;
+    removeInventoryItemAndRewrite(inPool);
     disassembleOutputCount_ = 0;
     for (const CraftIngredient &outg : drecipes[0].outputs) {
         for (int k = 0; k < outg.count * stack; ++k) {
@@ -3350,10 +3529,16 @@ ui::AnvilUiLayout GameplayScene::buildAnvilUiLayout() const {
     }
     L.active = true;
     L.forgeTab = anvilTab_ == 0;
-    constexpr float panelX = 40.0F;
-    constexpr float panelY = 80.0F;
-    constexpr float panelW = 300.0F;
-    constexpr float panelH = 520.0F;
+    constexpr float invPanelW = 860.0F;
+    constexpr float invPanelH = 500.0F;
+    constexpr float panelW = 460.0F;
+    constexpr float panelH = invPanelH;
+    constexpr float pairGap = 16.0F;
+    const float pairW = panelW + pairGap + invPanelW;
+    const float pairLeft = (static_cast<float>(config::WINDOW_WIDTH) - pairW) * 0.5F;
+    const float invX = pairLeft + panelW + pairGap;
+    const float panelX = invX - pairGap - panelW;
+    const float panelY = (static_cast<float>(config::WINDOW_HEIGHT) - panelH) * 0.5F;
     L.panelBounds = {panelX, panelY, panelW, panelH};
     const float tabH = 36.0F;
     const float tabY = panelY + 44.0F;
@@ -3364,30 +3549,32 @@ ui::AnvilUiLayout GameplayScene::buildAnvilUiLayout() const {
         const auto &recipes = forgeRecipes();
         if (!recipes.empty()) {
             const size_t nIn = recipes[0].inputs.size();
-            L.forgeInputCount = static_cast<int>(std::min<size_t>(nIn, L.forgeInputRects.size()));
+            L.forgeInputCount = static_cast<int>(std::min<size_t>(nIn, 3));
+            const float slotW = ui::ITEM_SLOT_W;
+            const float slotH = ui::ITEM_SLOT_H;
             const float gap = 10.0F;
-            const float innerW = panelW - 32.0F;
-            const float slotW =
-                L.forgeInputCount > 0 ? (innerW - gap * static_cast<float>(L.forgeInputCount - 1)) /
-                                            static_cast<float>(L.forgeInputCount)
-                                      : 0.0F;
-            float x = panelX + 16.0F;
+            const float rowW =
+                static_cast<float>(L.forgeInputCount) * slotW + static_cast<float>(L.forgeInputCount - 1) * gap;
+            float x = panelX + (panelW - rowW) * 0.5F;
             for (int i = 0; i < L.forgeInputCount; ++i) {
-                L.forgeInputRects[static_cast<size_t>(i)] = {x, contentY, slotW, 78.0F};
+                L.forgeInputRects[static_cast<size_t>(i)] = {x, contentY, slotW, slotH};
                 x += slotW + gap;
             }
         }
-        L.forgeOutputRect = {panelX + panelW * 0.5F - 50.0F, contentY + 200.0F, 100.0F, 72.0F};
+        L.forgeCraftRect = {panelX + panelW * 0.5F - 36.0F, contentY + ui::ITEM_SLOT_H + 14.0F, 72.0F, 72.0F};
+        L.forgeOutputRect = {panelX + panelW * 0.5F - ui::ITEM_SLOT_W * 0.5F, L.forgeCraftRect.y + 86.0F,
+                             ui::ITEM_SLOT_W, ui::ITEM_SLOT_H};
     } else {
-        L.disInputRect = {panelX + 40.0F, contentY, panelW - 80.0F, 78.0F};
-        L.disBreakRect = {panelX + 40.0F, contentY + 200.0F, panelW - 80.0F, 40.0F};
-        const float outY = contentY + 260.0F;
-        const float outSlotW = 100.0F;
-        const float outGap = 8.0F;
-        L.disOutputCount = std::min(disassembleOutputCount_, static_cast<int>(L.disOutputRects.size()));
-        float ox = panelX + 20.0F;
+        L.disInputRect = {panelX + panelW * 0.5F - ui::ITEM_SLOT_W * 0.5F, contentY, ui::ITEM_SLOT_W,
+                          ui::ITEM_SLOT_H};
+        L.disBreakRect = {panelX + 48.0F, contentY + ui::ITEM_SLOT_H + 16.0F, panelW - 96.0F, 44.0F};
+        const float outY = L.disBreakRect.y + L.disBreakRect.height + 16.0F;
+        const float outSlotW = ui::ITEM_SLOT_W;
+        const float outGap = 10.0F;
+        L.disOutputCount = 3;
+        float ox = panelX + (panelW - (outSlotW * 3.0F + outGap * 2.0F)) * 0.5F;
         for (int i = 0; i < L.disOutputCount; ++i) {
-            L.disOutputRects[static_cast<size_t>(i)] = {ox, outY, outSlotW, 72.0F};
+            L.disOutputRects[static_cast<size_t>(i)] = {ox, outY, outSlotW, ui::ITEM_SLOT_H};
             ox += outSlotW + outGap;
         }
     }
@@ -3402,21 +3589,42 @@ namespace {
     if (n == 0U || n > forgeSlots.size()) {
         return false;
     }
-    for (size_t i = 0; i < n; ++i) {
-        const int idx = forgeSlots[static_cast<size_t>(i)];
-        if (idx < 0 || idx >= static_cast<int>(inv.items.size())) {
-            return false;
-        }
-        const auto &it = inv.items[static_cast<size_t>(idx)];
-        if (it.catalogId != recipe.inputs[i].itemId) {
-            return false;
-        }
-        if (it.stackCount != recipe.inputs[i].count) {
-            return false;
+
+    std::array<bool, 6> usedSlot{};
+    size_t filledSlotCount = 0U;
+    for (size_t i = 0; i < forgeSlots.size(); ++i) {
+        if (forgeSlots[i] >= 0) {
+            ++filledSlotCount;
         }
     }
-    for (size_t i = n; i < forgeSlots.size(); ++i) {
-        if (forgeSlots[static_cast<size_t>(i)] >= 0) {
+    if (filledSlotCount != n) {
+        return false;
+    }
+
+    // Order-agnostic recipe matching: each ingredient must match exactly one distinct
+    // occupied forge slot (same catalogId and required stack count), regardless of slot index.
+    for (size_t ing = 0; ing < n; ++ing) {
+        bool matched = false;
+        for (size_t slot = 0; slot < forgeSlots.size(); ++slot) {
+            if (usedSlot[slot]) {
+                continue;
+            }
+            const int idx = forgeSlots[slot];
+            if (idx < 0 || idx >= static_cast<int>(inv.items.size())) {
+                continue;
+            }
+            const auto &it = inv.items[static_cast<size_t>(idx)];
+            if (it.catalogId != recipe.inputs[ing].itemId) {
+                continue;
+            }
+            if (it.stackCount != recipe.inputs[ing].count) {
+                continue;
+            }
+            usedSlot[slot] = true;
+            matched = true;
+            break;
+        }
+        if (!matched) {
             return false;
         }
     }
@@ -3455,15 +3663,70 @@ void GameplayScene::tickAnvilUi(InputManager &input, ResourceManager &resources,
         anvilBenchDragPoolIdx_ = -1;
     };
 
+    auto returnAllWorkbenchItems = [&]() {
+        for (int &slot : forgeSlots_) {
+            if (slot >= 0) {
+                tryReturnPoolItemToBagOrDrop(slot);
+                slot = -1;
+            }
+        }
+        if (disassembleInputIndex_ >= 0) {
+            tryReturnPoolItemToBagOrDrop(disassembleInputIndex_);
+            disassembleInputIndex_ = -1;
+        }
+        for (int i = 0; i < disassembleOutputCount_; ++i) {
+            int &slot = disassembleOutputPool_[static_cast<size_t>(i)];
+            if (slot >= 0) {
+                tryReturnPoolItemToBagOrDrop(slot);
+                slot = -1;
+            }
+        }
+        disassembleOutputCount_ = 0;
+    };
+
+    auto tryForgeCraft = [&]() {
+        const auto &recipes = forgeRecipes();
+        const bool canCraft = !recipes.empty() && forgeSlotsMatchRecipe(forgeSlots_, recipes[0], inventory_);
+        if (!canCraft) {
+            return;
+        }
+        ItemData out = makeItemFromMapKind(recipes[0].outputId);
+        if (out.name.empty()) {
+            return;
+        }
+        const size_t nIn = recipes[0].inputs.size();
+        std::vector<int> removeIdx;
+        removeIdx.reserve(nIn);
+        for (size_t k = 0; k < nIn; ++k) {
+            removeIdx.push_back(forgeSlots_[static_cast<size_t>(k)]);
+        }
+        forgeSlots_.fill(-1);
+        std::sort(removeIdx.begin(), removeIdx.end());
+        for (auto it = removeIdx.rbegin(); it != removeIdx.rend(); ++it) {
+            if (*it >= 0 && *it < static_cast<int>(inventory_.items.size())) {
+                removeInventoryItemAndRewrite(*it);
+            }
+        }
+        const int newIdx = inventory_.addItem(std::move(out));
+        const int bag = inventory_.firstEmptyBagSlot();
+        if (bag >= 0) {
+            inventory_.bagSlots[static_cast<size_t>(bag)] = newIdx;
+        } else {
+            spawnItemPickupAtPlayer(newIdx);
+        }
+    };
+
     if (click && lay.active) {
         if (CheckCollisionPointRec(mouse, lay.tabForgeRect)) {
             if (anvilTab_ != 0) {
                 cancelBenchDrag();
+                returnAllWorkbenchItems();
                 anvilTab_ = 0;
             }
         } else if (CheckCollisionPointRec(mouse, lay.tabDisRect)) {
             if (anvilTab_ != 1) {
                 cancelBenchDrag();
+                returnAllWorkbenchItems();
                 anvilTab_ = 1;
             }
         }
@@ -3548,32 +3811,10 @@ void GameplayScene::tickAnvilUi(InputManager &input, ResourceManager &resources,
                 break;
             }
             const auto &recipes = forgeRecipes();
-            if (!startedBenchDrag && !recipes.empty() &&
-                forgeSlotsMatchRecipe(forgeSlots_, recipes[0], inventory_) &&
-                CheckCollisionPointRec(mouse, lay.forgeOutputRect)) {
-                ItemData out = makeItemFromMapKind(recipes[0].outputId);
-                if (!out.name.empty()) {
-                    const size_t nIn = recipes[0].inputs.size();
-                    std::vector<int> removeIdx;
-                    removeIdx.reserve(nIn);
-                    for (size_t k = 0; k < nIn; ++k) {
-                        removeIdx.push_back(forgeSlots_[static_cast<size_t>(k)]);
-                    }
-                    forgeSlots_.fill(-1);
-                    std::sort(removeIdx.begin(), removeIdx.end());
-                    for (auto it = removeIdx.rbegin(); it != removeIdx.rend(); ++it) {
-                        if (*it >= 0 && *it < static_cast<int>(inventory_.items.size())) {
-                            inventory_.removeItemAtIndex(*it);
-                        }
-                    }
-                    const int newIdx = inventory_.addItem(std::move(out));
-                    const int bag = inventory_.firstEmptyBagSlot();
-                    if (bag >= 0) {
-                        inventory_.bagSlots[static_cast<size_t>(bag)] = newIdx;
-                    } else {
-                        spawnItemPickupAtPlayer(newIdx);
-                    }
-                }
+            const bool canCraft = !recipes.empty() && forgeSlotsMatchRecipe(forgeSlots_, recipes[0], inventory_);
+            const bool craftPressed = CheckCollisionPointRec(mouse, lay.forgeCraftRect);
+            if (!startedBenchDrag && canCraft && craftPressed) {
+                tryForgeCraft();
             }
         } else {
             if (disassembleInputIndex_ >= 0 &&
@@ -3603,14 +3844,41 @@ void GameplayScene::tickAnvilUi(InputManager &input, ResourceManager &resources,
             }
         }
     }
+
+    if (input.isKeyPressed(KEY_SPACE) && !inventoryUi_.isDragging() &&
+        anvilBenchDragKind_ == AnvilBenchDragKind::None) {
+        if (lay.forgeTab) {
+            tryForgeCraft();
+        } else {
+            commitDisassembleRecipe();
+        }
+    }
 }
 
 void GameplayScene::drawAnvilUi(ResourceManager &resources, const ui::AnvilUiLayout &lay) {
     const Font &font = resources.uiFont();
-    constexpr float panelX = 40.0F;
-    constexpr float panelY = 80.0F;
-    constexpr float panelW = 300.0F;
-    constexpr float panelH = 520.0F;
+    auto drawStackCount = [&](const ItemData &it, const Rectangle &slotRect, Color tint) {
+        if (!it.isStackable || it.stackCount <= 1) {
+            return;
+        }
+        char cntBuf[16];
+        std::snprintf(cntBuf, sizeof(cntBuf), "%d", it.stackCount);
+        const float stackFs = 17.0F;
+        const Vector2 cd = MeasureTextEx(font, cntBuf, stackFs, 1.0F);
+        const float sp = 2.0F;
+        const float ix = slotRect.x + (slotRect.width - ui::ITEM_ICON_DRAW_W) * 0.5F;
+        const float iy = slotRect.y + (slotRect.height - ui::ITEM_ICON_DRAW_H) * 0.5F;
+        const float tx = ix + ui::ITEM_ICON_DRAW_W - cd.x - sp;
+        const float ty = iy + ui::ITEM_ICON_DRAW_H - cd.y - sp;
+        const unsigned char alpha = tint.a > 0 ? tint.a : 255;
+        DrawTextEx(font, cntBuf, {tx + 1.0F, ty + 1.0F}, stackFs, 1.0F, Color{0, 0, 0, alpha});
+        DrawTextEx(font, cntBuf, {tx, ty}, stackFs, 1.0F, Color{255, 255, 255, alpha});
+    };
+
+    const float panelX = lay.panelBounds.x;
+    const float panelY = lay.panelBounds.y;
+    const float panelW = lay.panelBounds.width;
+    const float panelH = lay.panelBounds.height;
     Color panelFill = ui::theme::PANEL_FILL;
     panelFill.a = 250;
     DrawRectangle(static_cast<int>(panelX), static_cast<int>(panelY), static_cast<int>(panelW),
@@ -3628,68 +3896,109 @@ void GameplayScene::drawAnvilUi(ResourceManager &resources, const ui::AnvilUiLay
                RAYWHITE);
 
     if (lay.forgeTab) {
+        const auto &recipes = forgeRecipes();
+        const bool canCraft = !recipes.empty() && forgeSlotsMatchRecipe(forgeSlots_, recipes[0], inventory_);
         for (int i = 0; i < lay.forgeInputCount; ++i) {
             const Rectangle r = lay.forgeInputRects[static_cast<size_t>(i)];
-            DrawRectangleLinesEx(r, 1.5F, ui::theme::SLOT_BORDER);
             const int idx = forgeSlots_[static_cast<size_t>(i)];
+            const dreadcast::ItemData *pit =
+                (idx >= 0 && idx < static_cast<int>(inventory_.items.size()))
+                    ? &inventory_.items[static_cast<size_t>(idx)]
+                    : nullptr;
+            ui::InventoryUI::drawItemSlotSurface(r, pit, false);
+            DrawRectangleLinesEx(r, 1.5F, ui::theme::SLOT_BORDER);
             if (idx >= 0 && idx < static_cast<int>(inventory_.items.size())) {
                 const bool ghost =
                     anvilBenchDragKind_ == AnvilBenchDragKind::ForgeSlot && anvilBenchForgeSlot_ == i;
+                const Color iconTint = ghost ? Fade(WHITE, 0.35F) : WHITE;
                 ui::InventoryUI::drawItemIcon(inventory_.items[static_cast<size_t>(idx)], resources, r,
-                                                ghost ? Fade(WHITE, 0.35F) : WHITE);
+                                                iconTint);
+                drawStackCount(inventory_.items[static_cast<size_t>(idx)], r, iconTint);
             }
         }
-        DrawTextEx(font, "Drag from inventory into inputs. RMB slot: return to bag.",
-                   {panelX + 12.0F, lay.forgeInputRects[0].y + 86.0F}, 13.0F, 1.0F,
-                   ui::theme::LABEL_TEXT);
 
-        const float midX = panelX + panelW * 0.5F;
-        const float arrowY = lay.forgeInputRects[0].y + 110.0F;
-        DrawTriangle({midX, arrowY + 14.0F}, {midX - 10.0F, arrowY}, {midX + 10.0F, arrowY},
-                     ui::theme::LABEL_TEXT);
+        const Texture2D anvilBtn = resources.getTexture("assets/textures/ui/anvil_button.png");
+        DrawRectangleRec(lay.forgeCraftRect, Fade(ui::theme::SLOT_FILL, canCraft ? 255.0F : 160.0F));
+        DrawRectangleLinesEx(lay.forgeCraftRect, 1.5F, canCraft ? ui::theme::BTN_BORDER : ui::theme::SLOT_BORDER);
+        if (canCraft) {
+            DrawRectangleLinesEx({lay.forgeCraftRect.x - 2.0F, lay.forgeCraftRect.y - 2.0F,
+                                  lay.forgeCraftRect.width + 4.0F, lay.forgeCraftRect.height + 4.0F},
+                                 2.0F, Color{220, 170, 80, 150});
+        }
+        if (anvilBtn.id != 0) {
+            DrawTexturePro(anvilBtn, {0.0F, 0.0F, static_cast<float>(anvilBtn.width),
+                                      static_cast<float>(anvilBtn.height)},
+                           lay.forgeCraftRect, {0.0F, 0.0F}, 0.0F, canCraft ? WHITE : Fade(WHITE, 0.35F));
+        }
+        DrawTextEx(font, "[Space]", {lay.forgeCraftRect.x + 8.0F, lay.forgeCraftRect.y + lay.forgeCraftRect.height + 2.0F},
+                   14.0F, 1.0F, ui::theme::MUTED_TEXT);
 
+        ui::InventoryUI::drawItemSlotSurface(lay.forgeOutputRect, nullptr, false);
         DrawRectangleLinesEx(lay.forgeOutputRect, 2.0F, ui::theme::BTN_BORDER);
-        const auto &recipes = forgeRecipes();
-        if (!recipes.empty() && forgeSlotsMatchRecipe(forgeSlots_, recipes[0], inventory_)) {
+        if (canCraft) {
             const ItemData pv = makeItemFromMapKind(recipes[0].outputId);
             ui::InventoryUI::drawItemIcon(pv, resources, lay.forgeOutputRect, WHITE);
-            DrawTextEx(font, "Click output to craft", {panelX + 16.0F, lay.forgeOutputRect.y + 78.0F},
-                       13.0F, 1.0F, ui::theme::MUTED_TEXT);
         } else {
-            DrawTextEx(font, "Match recipe in inputs", {panelX + 16.0F, lay.forgeOutputRect.y + 28.0F},
+            DrawTextEx(font, "Match recipe in inputs", {panelX + 16.0F, lay.forgeOutputRect.y + lay.forgeOutputRect.height + 6.0F},
                        14.0F, 1.0F, ui::theme::MUTED_TEXT);
         }
     } else {
+        bool canBreak = false;
+        if (disassembleInputIndex_ >= 0 && disassembleInputIndex_ < static_cast<int>(inventory_.items.size())) {
+            const auto &it = inventory_.items[static_cast<size_t>(disassembleInputIndex_)];
+            const auto &drecipes = disassembleRecipes();
+            for (const auto &dr : drecipes) {
+                if (it.catalogId == dr.sourceId) {
+                    canBreak = true;
+                    break;
+                }
+            }
+        }
+        const dreadcast::ItemData *pit =
+            (disassembleInputIndex_ >= 0 && disassembleInputIndex_ < static_cast<int>(inventory_.items.size()))
+                ? &inventory_.items[static_cast<size_t>(disassembleInputIndex_)]
+                : nullptr;
+        ui::InventoryUI::drawItemSlotSurface(lay.disInputRect, pit, false);
         DrawRectangleLinesEx(lay.disInputRect, 1.5F, ui::theme::SLOT_BORDER);
         if (disassembleInputIndex_ >= 0 &&
             disassembleInputIndex_ < static_cast<int>(inventory_.items.size())) {
             ui::InventoryUI::drawItemIcon(
                 inventory_.items[static_cast<size_t>(disassembleInputIndex_)], resources,
                 lay.disInputRect, WHITE);
+            drawStackCount(inventory_.items[static_cast<size_t>(disassembleInputIndex_)],
+                           lay.disInputRect, WHITE);
         }
-        DrawTextEx(font, "Drag gear here. Click input to return.", {panelX + 12.0F, lay.disInputRect.y + 86.0F},
-                   13.0F, 1.0F, ui::theme::LABEL_TEXT);
-
-        DrawRectangleRec(lay.disBreakRect, ui::theme::BTN_FILL);
-        DrawRectangleLinesEx(lay.disBreakRect, 1.0F, ui::theme::BTN_BORDER);
+        DrawRectangleRec(lay.disBreakRect, canBreak ? ui::theme::BTN_FILL : Fade(ui::theme::BTN_FILL, 0.55F));
+        DrawRectangleLinesEx(lay.disBreakRect, 1.0F, canBreak ? ui::theme::BTN_BORDER : ui::theme::SLOT_BORDER);
+        if (canBreak) {
+            DrawRectangleLinesEx({lay.disBreakRect.x - 2.0F, lay.disBreakRect.y - 2.0F,
+                                  lay.disBreakRect.width + 4.0F, lay.disBreakRect.height + 4.0F},
+                                 2.0F, Color{220, 170, 80, 120});
+        }
         DrawTextEx(font, "Break down", {lay.disBreakRect.x + lay.disBreakRect.width * 0.5F - 52.0F,
                                         lay.disBreakRect.y + 10.0F},
                    18.0F, 1.0F, RAYWHITE);
+        DrawTextEx(font, "[Space]", {lay.disBreakRect.x + lay.disBreakRect.width * 0.5F - 26.0F,
+                                     lay.disBreakRect.y + lay.disBreakRect.height + 2.0F},
+                   14.0F, 1.0F, ui::theme::MUTED_TEXT);
 
         for (int i = 0; i < lay.disOutputCount; ++i) {
             const Rectangle r = lay.disOutputRects[static_cast<size_t>(i)];
-            DrawRectangleLinesEx(r, 1.5F, ui::theme::SLOT_BORDER);
             const int pidx = disassembleOutputPool_[static_cast<size_t>(i)];
+            const dreadcast::ItemData *pout =
+                (pidx >= 0 && pidx < static_cast<int>(inventory_.items.size()))
+                    ? &inventory_.items[static_cast<size_t>(pidx)]
+                    : nullptr;
+            ui::InventoryUI::drawItemSlotSurface(r, pout, false);
+            DrawRectangleLinesEx(r, 1.5F, ui::theme::SLOT_BORDER);
             if (pidx >= 0 && pidx < static_cast<int>(inventory_.items.size())) {
                 const bool ghost = anvilBenchDragKind_ == AnvilBenchDragKind::DisOut &&
                                    anvilBenchDisOutSlot_ == i;
+                const Color iconTint = ghost ? Fade(WHITE, 0.35F) : WHITE;
                 ui::InventoryUI::drawItemIcon(inventory_.items[static_cast<size_t>(pidx)], resources, r,
-                                                ghost ? Fade(WHITE, 0.35F) : WHITE);
+                                                iconTint);
+                drawStackCount(inventory_.items[static_cast<size_t>(pidx)], r, iconTint);
             }
-        }
-        if (disassembleOutputCount_ > 0) {
-            DrawTextEx(font, "Drag outputs to inventory", {panelX + 12.0F, lay.disOutputRects[0].y + 78.0F},
-                       13.0F, 1.0F, ui::theme::MUTED_TEXT);
         }
     }
 

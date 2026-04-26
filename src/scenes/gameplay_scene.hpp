@@ -117,6 +117,11 @@ class GameplayScene final : public Scene {
     void spawnItemPickupAtPlayer(int itemIndex);
     void spawnItemPickupAtWorld(const Vector2 &worldPos, int itemIndex);
 
+    /// Wraps `InventoryState::removeItemAtIndex` (swap-with-last) and rewrites every other
+    /// place a pool index can live: ground `ItemPickup`s, `forgeSlots_`, `disassembleInputIndex_`,
+    /// `disassembleOutputPool_`. All callers must use this helper instead of removing directly.
+    void removeInventoryItemAndRewrite(int idx);
+
     entt::registry registry_{};
     GameCamera camera_{};
     FixedStepTimer fixedTimer_{config::FIXED_DT};
@@ -188,6 +193,7 @@ class GameplayScene final : public Scene {
 
     /// Cached from settings each frame for virtual aiming.
     float aimMouseSensitivity_{1.0F};
+    bool bagPriorityShiftIntoInventory_{false};
     Vector2 aimScreenPos_{0.0F, 0.0F};
     bool aimScreenInit_{false};
 

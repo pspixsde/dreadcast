@@ -65,6 +65,8 @@ class EditorScene final : public Scene {
     void syncSavedSnapshot();
     void applyPendingWithoutSaving(SceneManager &scenes);
     void drawUnsavedChangesModal(const Font &font, Vector2 mouse);
+    void pushUndoSnapshot();
+    void popUndoSnapshot();
     void pasteFromClipboard(const Vector2 &worldMouse);
     void copySelectionToClipboard();
     void drawCasketLootPanel(const Font &font, Vector2 mouse);
@@ -115,15 +117,21 @@ class EditorScene final : public Scene {
     Vector2 solidMoveCenterStart_{0.0F, 0.0F};
     bool solidMoveActive_{false};
 
-    /// World-space segment to visualize magnetic edge snap (wall/lava resize).
+    /// World-space segment of the edge we snapped to.
     bool snapGuideActive_{false};
     Vector2 snapGuideA_{0.0F, 0.0F};
     Vector2 snapGuideB_{0.0F, 0.0F};
+    /// World-space segment of the dragged edge being aligned.
+    bool snapDraggedGuideActive_{false};
+    Vector2 snapDraggedGuideA_{0.0F, 0.0F};
+    Vector2 snapDraggedGuideB_{0.0F, 0.0F};
 
     float statusTimer_{0.0F};
     const char *statusText_{"Ready"};
 
     MapData savedMapSnapshot_{};
+    std::array<MapData, 5> undoSnapshots_{};
+    int undoSnapshotCount_{0};
     enum class PendingAction { None, Back, PrevMap, NextMap, NewMap };
     PendingAction pendingAction_{PendingAction::None};
     bool showUnsavedDialog_{false};

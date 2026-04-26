@@ -194,6 +194,15 @@ void SettingsScene::update(SceneManager &scenes, InputManager &input,
                 !resources.settings().separateDropsWhenFull;
             saveSettingsNow(resources);
         }
+        const float rowY4 = rowY3 + 46.0F;
+        bagPriorityToggleButton_.rect = {toggleBtnX, rowY4 - 3.0F, toggleBtnW, toggleBtnH};
+        bagPriorityToggleButton_.label =
+            resources.settings().bagPriorityShiftIntoInventory ? "On" : "Off";
+        if (bagPriorityToggleButton_.wasClicked(mouse, click)) {
+            resources.settings().bagPriorityShiftIntoInventory =
+                !resources.settings().bagPriorityShiftIntoInventory;
+            saveSettingsNow(resources);
+        }
     } else if (activeTab_ == Tab::Controls) {
         const Rectangle sensTrack = {static_cast<float>(w) * 0.5F - 150.0F, 190.0F, 300.0F,
                                      22.0F};
@@ -356,6 +365,14 @@ void SettingsScene::draw(ResourceManager &resources) {
             resources.settings().separateDropsWhenFull ? "On" : "Off";
         separateWhenFullToggleButton_.draw(font, 18.0F, mouse, ui::theme::BTN_FILL,
                                            ui::theme::BTN_HOVER, RAYWHITE, ui::theme::BTN_BORDER);
+        rowY += 46.0F;
+        const char *bagPriorityLbl = "Bag priority on shift into inventory";
+        DrawTextEx(font, bagPriorityLbl, {rowX, rowY}, labelSz, 1.0F, ui::theme::LABEL_TEXT);
+        bagPriorityToggleButton_.rect = {toggleBtnX, rowY - 3.0F, toggleBtnW, toggleBtnH};
+        bagPriorityToggleButton_.label =
+            resources.settings().bagPriorityShiftIntoInventory ? "On" : "Off";
+        bagPriorityToggleButton_.draw(font, 18.0F, mouse, ui::theme::BTN_FILL,
+                                      ui::theme::BTN_HOVER, RAYWHITE, ui::theme::BTN_BORDER);
     } else if (activeTab_ == Tab::Controls) {
         const Rectangle sensTrack = {static_cast<float>(w) * 0.5F - 150.0F, 190.0F, 300.0F,
                                      22.0F};

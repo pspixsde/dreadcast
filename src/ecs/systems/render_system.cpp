@@ -274,10 +274,13 @@ void drawLavaEntity(const Transform &transform, const Lava &lava) {
     const Vector2 p2 = dreadcast::worldToIso(Vector2{x1, y0});
     const Vector2 p3 = dreadcast::worldToIso(Vector2{x1, y1});
     const Vector2 p4 = dreadcast::worldToIso(Vector2{x0, y1});
-    const Color fill = {180, 60, 20, 160};
+    const Color fill = {200, 90, 30, 255};
     const Color outline = {255, 100, 40, 220};
+    // Draw both windings so lava remains filled even if a render pass enables face culling.
     DrawTriangle(p1, p2, p3, fill);
     DrawTriangle(p1, p3, p4, fill);
+    DrawTriangle(p3, p2, p1, fill);
+    DrawTriangle(p4, p3, p1, fill);
     DrawLineV(p1, p2, outline);
     DrawLineV(p2, p3, outline);
     DrawLineV(p3, p4, outline);
