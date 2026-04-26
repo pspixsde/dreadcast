@@ -355,50 +355,64 @@ bool try_pickup_item_entity(entt::registry &registry, entt::entity p, InventoryS
         return true;
     }
 
-    ItemData &pickupItem = inventory.items[static_cast<size_t>(pickupIndex)];
+    // Partial-merge into existing compatible stacks (bag first, then consumable row), then place
+    // any remainder into the first empty bag slot. If still anything left, leave the residual on
+    // the ground entity (its `itemIndex` already points into `inventory.items`, whose `stackCount`
+    // we mutated in place — so the next pickup attempt resumes correctly).
+    const int originalStack = inventory.items[static_cast<size_t>(pickupIndex)].stackCount;
 
-    auto tryMergeIntoStack = [&](int dstPoolIdx) -> bool {
+    auto pourInto = [&](int dstPoolIdx) {
         if (dstPoolIdx < 0 || dstPoolIdx >= static_cast<int>(inventory.items.size())) {
-            return false;
+            return;
         }
         ItemData &dst = inventory.items[static_cast<size_t>(dstPoolIdx)];
-        if (!pickupItem.canStackWith(dst)) {
-            return false;
+        ItemData &src = inventory.items[static_cast<size_t>(pickupIndex)];
+        if (!src.canStackWith(dst)) {
+            return;
         }
         const int space = dst.maxStack - dst.stackCount;
-        if (space <= 0) {
-            return false;
+        if (space <= 0 || src.stackCount <= 0) {
+            return;
         }
-        if (pickupItem.stackCount > space) {
-            return false;
-        }
-        dst.stackCount += pickupItem.stackCount;
-        const int removeIdx = pickupIndex;
-        const int oldLast = static_cast<int>(inventory.items.size()) - 1;
-        registry.destroy(p);
-        inventory.removeItemAtIndex(removeIdx);
-        rewrite_ground_pickup_indices_after_remove(registry, removeIdx, oldLast);
-        return true;
+        const int move = std::min(space, src.stackCount);
+        dst.stackCount += move;
+        src.stackCount -= move;
     };
 
-    if (pickupItem.isStackable && pickupItem.isConsumable) {
-        for (size_t i = 0; i < inventory.bagSlots.size(); ++i) {
-            const int bi = inventory.bagSlots[i];
-            if (bi >= 0 && tryMergeIntoStack(bi)) {
-                return true;
+    {
+        const auto &pickupItemRef = inventory.items[static_cast<size_t>(pickupIndex)];
+        if (pickupItemRef.isStackable && pickupItemRef.isConsumable) {
+            for (size_t i = 0; i < inventory.bagSlots.size(); ++i) {
+                if (inventory.items[static_cast<size_t>(pickupIndex)].stackCount <= 0) {
+                    break;
+                }
+                pourInto(inventory.bagSlots[i]);
             }
-        }
-        for (size_t i = 0; i < inventory.consumableSlots.size(); ++i) {
-            const int ci = inventory.consumableSlots[i];
-            if (ci >= 0 && tryMergeIntoStack(ci)) {
-                return true;
+            for (size_t i = 0; i < inventory.consumableSlots.size(); ++i) {
+                if (inventory.items[static_cast<size_t>(pickupIndex)].stackCount <= 0) {
+                    break;
+                }
+                pourInto(inventory.consumableSlots[i]);
             }
         }
     }
 
+    const int remaining = inventory.items[static_cast<size_t>(pickupIndex)].stackCount;
+    if (remaining <= 0) {
+        const int oldLast = static_cast<int>(inventory.items.size()) - 1;
+        registry.destroy(p);
+        inventory.removeItemAtIndex(pickupIndex);
+        rewrite_ground_pickup_indices_after_remove(registry, pickupIndex, oldLast);
+        return true;
+    }
+
     const int bag = inventory.firstEmptyBagSlot();
     if (bag < 0) {
-        inventoryFullFlashTimer = 1.2F;
+        // Bag full. If we made any progress merging, keep the residual on the ground silently;
+        // only flash inventory-full if literally nothing fit anywhere.
+        if (remaining == originalStack) {
+            inventoryFullFlashTimer = 1.2F;
+        }
         return false;
     }
 

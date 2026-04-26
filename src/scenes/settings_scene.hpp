@@ -31,6 +31,7 @@ class SettingsScene final : public Scene {
     ui::Button damageNumbersToggleButton_{};
     ui::Button reloadCursorToggleButton_{};
     ui::Button separateWhenFullToggleButton_{};
+    ui::Button bagPriorityToggleButton_{};
     ui::Button resetButton_{};
 
     bool draggingMouseSensSlider_{false};

@@ -47,6 +47,7 @@ bool GameSettings::saveToFile(const std::string &path) const {
     out << "showDamageNumbers=" << (showDamageNumbers ? 1 : 0) << '\n';
     out << "showReloadOnCursor=" << (showReloadOnCursor ? 1 : 0) << '\n';
     out << "separateDropsWhenFull=" << (separateDropsWhenFull ? 1 : 0) << '\n';
+    out << "bagPriorityShiftIntoInventory=" << (bagPriorityShiftIntoInventory ? 1 : 0) << '\n';
     out << "masterVolume=" << static_cast<double>(masterVolume) << '\n';
     out << "gameVolume=" << static_cast<double>(gameVolume) << '\n';
     out << "audioDeviceName=" << audioDeviceName << '\n';
@@ -99,6 +100,11 @@ void GameSettings::loadFromFile(const std::string &path) {
             int i = 0;
             if (vs >> i) {
                 separateDropsWhenFull = (i != 0);
+            }
+        } else if (key == "bagPriorityShiftIntoInventory") {
+            int i = 0;
+            if (vs >> i) {
+                bagPriorityShiftIntoInventory = (i != 0);
             }
         } else if (key == "masterVolume") {
             double d = 0.0;

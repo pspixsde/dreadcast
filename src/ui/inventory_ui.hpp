@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <functional>
 
 #include <raylib.h>
 
@@ -17,6 +18,8 @@ namespace dreadcast::ui {
 /// slot; sized to fit bag slots with margin).
 inline constexpr float ITEM_ICON_DRAW_H = 72.0F;
 inline constexpr float ITEM_ICON_DRAW_W = ITEM_ICON_DRAW_H * 7.0F / 5.0F;
+inline constexpr float ITEM_SLOT_W = 120.0F;
+inline constexpr float ITEM_SLOT_H = 86.0F;
 
 /// Screen layout for anvil workbench hit-testing (built by `GameplayScene` each frame).
 struct AnvilUiLayout {
@@ -28,6 +31,7 @@ struct AnvilUiLayout {
     Rectangle tabDisRect{0.0F, 0.0F, 0.0F, 0.0F};
     int forgeInputCount{0};
     std::array<Rectangle, 6> forgeInputRects{};
+    Rectangle forgeCraftRect{0.0F, 0.0F, 0.0F, 0.0F};
     Rectangle forgeOutputRect{0.0F, 0.0F, 0.0F, 0.0F};
     Rectangle disInputRect{0.0F, 0.0F, 0.0F, 0.0F};
     Rectangle disBreakRect{0.0F, 0.0F, 0.0F, 0.0F};
@@ -61,6 +65,12 @@ struct InventoryAction {
 /// Tab-toggle inventory: equipment, consumables, carried grid; drag-and-drop and context menu.
 class InventoryUI {
   public:
+    /// Invoked instead of `InventoryState::removeItemAtIndex` so the host can also rewrite
+    /// out-of-band index references (ground pickups, anvil workbench slots) after the
+    /// swap-with-last that `removeItemAtIndex` performs.
+    using RemoveItemCallback = std::function<void(int)>;
+    void setRemoveItemCallback(RemoveItemCallback cb) { removeItemCb_ = std::move(cb); }
+
     void toggle() {
         open_ = !open_;
         if (open_) {
@@ -101,14 +111,21 @@ class InventoryUI {
     void draw(const Font &font, dreadcast::ResourceManager &resources, int screenW, int screenH,
               const InventoryState &inv, float playerHpRatio = 1.0F,
               float runicShellCdRatio = 0.0F, float runicShellCdSeconds = 0.0F);
+    void drawWithoutDragGhost(const Font &font, dreadcast::ResourceManager &resources, int screenW,
+                              int screenH, const InventoryState &inv, float playerHpRatio = 1.0F,
+                              float runicShellCdRatio = 0.0F, float runicShellCdSeconds = 0.0F);
+    void drawDragGhost(dreadcast::ResourceManager &resources, const InventoryState &inv) const;
 
     /// Draw a 7:5 item icon at fixed `ITEM_ICON_DRAW_*` size (centered in `slotRect`).
     static void drawItemIcon(const dreadcast::ItemData &it, dreadcast::ResourceManager &resources,
                              Rectangle slotRect, Color tint = WHITE);
+    static void drawItemSlotSurface(Rectangle r, const dreadcast::ItemData *it, bool ghost);
 
     [[nodiscard]] bool isDragging() const { return dragging_; }
     /// Which bag column cell is under the cursor, or -1 (uses current `panelLayoutShiftX_`).
     [[nodiscard]] int hitTestBagSlot(Vector2 mouse, int screenW, int screenH) const;
+    [[nodiscard]] int hitTestEquipSlot(Vector2 mouse, int screenW, int screenH) const;
+    [[nodiscard]] int hitTestConsumableSlot(Vector2 mouse, int screenW, int screenH) const;
 
   private:
     bool open_{false};
@@ -121,6 +138,8 @@ class InventoryUI {
     void tryUnequip(InventoryState &inv, EquipSlot slot);
     void moveEquippedToBagSlot(InventoryState &inv, EquipSlot slot, int bagIdx);
     void swapBagSlots(InventoryState &inv, int a, int b);
+    /// Routes through `removeItemCb_` if set so the host can rewrite ground / workbench indices.
+    void removeItemFromPool(InventoryState &inv, int itemIdx);
 
     bool dragging_{false};
     int dragItemIndex_{-1};
@@ -145,6 +164,8 @@ class InventoryUI {
     bool rarityInfoOpen_{false};
 
     float panelLayoutShiftX_{0.0F};
+
+    RemoveItemCallback removeItemCb_{};
 };
 
 } // namespace dreadcast::ui

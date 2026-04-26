@@ -2,6 +2,46 @@
 
 All notable changes to **Dreadcast** will be documented in this file.
 
+## v0.12.2 — 2026-04-26
+
+### Added
+
+- **Skill tree:** Larger panel and per-node hover card with skill name, description, and state hint (`Skilled` / lock / cost + hold key).
+- **Anvil UI:** New icon-only forge craft button (`assets/textures/ui/anvil_button.png`) with active/inactive visual state and **[Space]** keybind hint.
+- **Settings → Gameplay:** Added **Bag priority on shift into inventory** toggle (`bagPriorityShiftIntoInventory` persisted in `settings.cfg`).
+- **Editor:** Added **Ctrl+Z** undo snapshots (5-step ring), plus expanded top hint text for solid editing and snap controls.
+
+### Changed
+
+- **Forge recipes:** Input matching is now **order-agnostic** across forge slots (same ingredients/counts required, extra occupied slots still invalidate the craft).
+- **Skill tree:** Window size increased for readability.
+- **Anvil + inventory layout:** Anvil panel now sits tightly to the left of inventory, both vertically aligned and pair-centered; panel shift updated accordingly.
+- **Anvil slots:** Forge/disassemble slots now use inventory-sized cells and rarity-tinted slot surfaces; disassemble uses one input slot and three output slots.
+- **Anvil actions:** Forge now crafts from the dedicated button (or **Space**) instead of clicking the output preview; tab switching auto-returns slotted workbench items.
+- **Map overlay input:** While full map is open, **Tab** no longer opens inventory, and **Esc** closes the map before pause handling.
+- **Tooltips:** Ground-item hover tooltip border now uses the hovered item rarity color and includes stack count when applicable.
+- **Lava visuals:** Gameplay lava fill is now fully opaque; editor lava remains outline-only for cleaner edit readability.
+- **Editor snap:** Magnetic snap now supports nearby-first behavior with **Shift** for global line snapping, while **Ctrl** still suppresses snap.
+- **Editor snap feedback:** During drag/resize snapping, guides now show both the snapped-to edge and the dragged edge being aligned for clearer directional feedback.
+
+### Fixed
+
+- **Anvil keybind:** **Space** craft/break now works reliably even without a concurrent left-click flow.
+- **Skill tree close drift:** Closing the skill tree now re-syncs aim/cursor position so inventory/world tooltips no longer appear offset afterward.
+- **Anvil slot readability:** Stack counts are now rendered on forge/disassemble slot icons.
+- **Shift return consolidation:** Shift-returning stacked items from anvil slots now merges into compatible inventory stacks before using empty slots or dropping.
+- **Item index rewrite safety:** All inventory pool removals now route through a shared rewrite helper so ground pickups and anvil pool references stay valid after swap-with-last removals.
+- **Ground pickup partial merge:** Picking up stacked consumables now partial-fills compatible bag/consumable stacks and leaves only residual items on the ground.
+- **Inventory drag stack merge parity:** Bag↔consumable and consumable↔consumable drag releases now perform partial stack merges before fallback swapping.
+- **Consumable row Separate:** Right-click **Separate** now appears for eligible consumable-slot stacks and supports split-to-bag / split-drop parity with bag stacks.
+- **Draw order:** Dragged inventory item ghost now renders above the anvil panel.
+- **Solid (poly):** Enter-commit now reliably finalizes and selects the new polygon; draft cancel with Esc and closing-edge preview added.
+- **Consumable shift transfer:** Shift transfers now merge into matching stacks between bag and consumable slots before using empty slots.
+- **Gameplay lava rendering:** Lava fill now stays visible reliably during gameplay render passes (no outline-only fallback from triangle culling state).
+- **Editor wall move snapping:** Moving walls now snaps correctly in all edge directions (left/right/top/bottom), not only a subset.
+- **Anvil shift-click routing:** Shift-click from equipped and consumable slots now sends items directly into active forge/disassemble input slots when valid.
+- **Disassemble output quick-transfer:** Shift-click from disassemble output slots now returns items to inventory using the configured priority toggle (equip/consumable-first or bag-first).
+
 ## v0.12.1 — 2026-04-18
 
 ### Added

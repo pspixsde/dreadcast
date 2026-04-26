@@ -17,8 +17,8 @@ namespace {
 
 // Slot dimensions (width:height = 7:5). Equip, consumables, and bag cells share one footprint.
 constexpr float kInvPaddingX = 40.0F;
-constexpr float kEquipSlotW = 120.0F;
-constexpr float kEquipSlotH = 86.0F;
+constexpr float kEquipSlotW = ITEM_SLOT_W;
+constexpr float kEquipSlotH = ITEM_SLOT_H;
 constexpr float kConsumableSlotW = kEquipSlotW;
 constexpr float kConsumableSlotH = kEquipSlotH;
 constexpr float kBagSlotW = kEquipSlotW;
@@ -206,7 +206,7 @@ void clampRectToScreen(Rectangle &r, int screenW, int screenH) {
 }
 
 /// Base slot fill + rarity tint (margin around centered icon reads as colored “padding”).
-void drawItemSlotSurface(Rectangle r, const dreadcast::ItemData *it, bool ghost) {
+void drawItemSlotSurfaceImpl(Rectangle r, const dreadcast::ItemData *it, bool ghost) {
     DrawRectangleRec(r, ui::theme::SLOT_FILL);
     if (it != nullptr) {
         const Color rc = dreadcast::rarityColor(it->rarity);
@@ -239,6 +239,14 @@ void InventoryUI::drawItemIcon(const dreadcast::ItemData &it, dreadcast::Resourc
     const Rectangle dst{ix, iy, ITEM_ICON_DRAW_W, ITEM_ICON_DRAW_H};
     const Rectangle src{0.0F, 0.0F, static_cast<float>(tex.width), static_cast<float>(tex.height)};
     DrawTexturePro(tex, src, dst, {0.0F, 0.0F}, 0.0F, tint);
+}
+
+void InventoryUI::removeItemFromPool(InventoryState &inv, int itemIdx) {
+    if (removeItemCb_) {
+        removeItemCb_(itemIdx);
+    } else {
+        inv.removeItemAtIndex(itemIdx);
+    }
 }
 
 void InventoryUI::tryEquipFromBag(InventoryState &inv, int bagIndex) {
@@ -275,6 +283,25 @@ void InventoryUI::tryEquipConsumableFromBag(InventoryState &inv, int bagIndex) {
     if (!inv.items[static_cast<size_t>(itemIdx)].isConsumable) {
         return;
     }
+    auto &src = inv.items[static_cast<size_t>(itemIdx)];
+    for (int i = 0; i < dreadcast::CONSUMABLE_SLOT_COUNT; ++i) {
+        const int dstIdx = inv.consumableSlots[static_cast<size_t>(i)];
+        if (dstIdx < 0 || dstIdx >= static_cast<int>(inv.items.size())) {
+            continue;
+        }
+        auto &dst = inv.items[static_cast<size_t>(dstIdx)];
+        if (!dst.canStackWith(src) || dst.stackCount >= dst.maxStack) {
+            continue;
+        }
+        const int canTake = std::min(dst.maxStack - dst.stackCount, src.stackCount);
+        dst.stackCount += canTake;
+        src.stackCount -= canTake;
+        if (src.stackCount <= 0) {
+            inv.bagSlots[static_cast<size_t>(bagIndex)] = -1;
+            removeItemFromPool(inv, itemIdx);
+            return;
+        }
+    }
     const int empty = inv.firstEmptyConsumableSlot();
     if (empty >= 0) {
         inv.consumableSlots[static_cast<size_t>(empty)] = itemIdx;
@@ -289,6 +316,25 @@ void InventoryUI::tryUnequipConsumableToBag(InventoryState &inv, int consumableS
     const int itemIdx = inv.consumableSlots[static_cast<size_t>(consumableSlotIndex)];
     if (itemIdx < 0 || itemIdx >= static_cast<int>(inv.items.size())) {
         return;
+    }
+    auto &src = inv.items[static_cast<size_t>(itemIdx)];
+    for (int i = 0; i < dreadcast::BAG_SLOT_COUNT; ++i) {
+        const int dstIdx = inv.bagSlots[static_cast<size_t>(i)];
+        if (dstIdx < 0 || dstIdx >= static_cast<int>(inv.items.size())) {
+            continue;
+        }
+        auto &dst = inv.items[static_cast<size_t>(dstIdx)];
+        if (!dst.canStackWith(src) || dst.stackCount >= dst.maxStack) {
+            continue;
+        }
+        const int canTake = std::min(dst.maxStack - dst.stackCount, src.stackCount);
+        dst.stackCount += canTake;
+        src.stackCount -= canTake;
+        if (src.stackCount <= 0) {
+            inv.consumableSlots[static_cast<size_t>(consumableSlotIndex)] = -1;
+            removeItemFromPool(inv, itemIdx);
+            return;
+        }
     }
     const int bag = inv.firstEmptyBagSlot();
     if (bag < 0) {
@@ -482,8 +528,10 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv,
 
             if (contextShowSeparate_ && CheckCollisionPointRec(mouse, contextOpt3_)) {
                 const int srcPool = contextItemIndex_;
-                const int bagSlot = contextBagSlot_;
-                if (srcPool >= 0 && srcPool < static_cast<int>(inv.items.size()) && bagSlot >= 0) {
+                const bool fromBagSrc = contextBagSlot_ >= 0;
+                const bool fromConsSrc = contextConsumableSlot_ >= 0;
+                if (srcPool >= 0 && srcPool < static_cast<int>(inv.items.size()) &&
+                    (fromBagSrc || fromConsSrc)) {
                     auto &srcIt = inv.items[static_cast<size_t>(srcPool)];
                     if (srcIt.isStackable && srcIt.stackCount >= 2) {
                         ItemData one = srcIt;
@@ -497,9 +545,11 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv,
                             action.type = InventoryAction::SeparateDropWorld;
                             action.itemIndex = newIdx;
                         } else {
-                            // Revert: could not place split stack
+                            // Revert: could not place split stack. `srcIt` is a reference into
+                            // `inv.items`; addItem may have invalidated it via reallocation, so
+                            // re-resolve by index after popping the appended item.
                             inv.items.pop_back();
-                            ++srcIt.stackCount;
+                            ++inv.items[static_cast<size_t>(srcPool)].stackCount;
                         }
                     }
                 }
@@ -592,7 +642,13 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv,
             if (idx >= 0) {
                 const float rowH = 32.0F;
                 const float menuW = 168.0F;
-                const float menuH = rowH * 3.0F + 10.0F;
+                const bool canSeparate =
+                    idx < static_cast<int>(inv.items.size()) &&
+                    inv.items[static_cast<size_t>(idx)].isStackable &&
+                    inv.items[static_cast<size_t>(idx)].stackCount >= 2;
+                contextShowSeparate_ = canSeparate;
+                const int menuRows = canSeparate ? 4 : 3;
+                const float menuH = rowH * static_cast<float>(menuRows) + 10.0F;
                 contextRect_ = {mouse.x, mouse.y, menuW, menuH};
                 clampRectToScreen(contextRect_, sw, sh);
                 contextOpt0_ = {contextRect_.x + 4.0F, contextRect_.y + 4.0F,
@@ -601,6 +657,11 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv,
                                 contextRect_.width - 8.0F, rowH};
                 contextOpt2_ = {contextRect_.x + 4.0F, contextRect_.y + 5.0F + rowH * 2.0F,
                                 contextRect_.width - 8.0F, rowH};
+                contextOpt3_ = {0, 0, 0, 0};
+                if (canSeparate) {
+                    contextOpt3_ = {contextRect_.x + 4.0F, contextRect_.y + 5.0F + rowH * 3.0F,
+                                    contextRect_.width - 8.0F, rowH};
+                }
                 contextItemIndex_ = idx;
                 contextBagSlot_ = -1;
                 contextEquipSlot_ = -1;
@@ -771,8 +832,8 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv,
                         dstIt.stackCount += move;
                         srcIt.stackCount -= move;
                         if (srcIt.stackCount <= 0) {
-                            inv.removeItemAtIndex(srcPool);
                             inv.bagSlots[static_cast<size_t>(dragSourceBag_)] = -1;
+                            removeItemFromPool(inv, srcPool);
                         }
                     } else {
                         swapBagSlots(inv, dragSourceBag_, bagHit);
@@ -782,9 +843,31 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv,
                 }
             } else if (consHit >= 0 &&
                        inv.items[static_cast<size_t>(dragItemIndex_)].isConsumable) {
-                const int prev = inv.consumableSlots[static_cast<size_t>(consHit)];
-                inv.consumableSlots[static_cast<size_t>(consHit)] = dragItemIndex_;
-                inv.bagSlots[static_cast<size_t>(dragSourceBag_)] = prev;
+                const int dstPool = inv.consumableSlots[static_cast<size_t>(consHit)];
+                const int srcPool = dragItemIndex_;
+                bool merged = false;
+                if (dstPool >= 0 && srcPool >= 0 &&
+                    inv.items[static_cast<size_t>(srcPool)].canStackWith(
+                        inv.items[static_cast<size_t>(dstPool)])) {
+                    auto &dstIt = inv.items[static_cast<size_t>(dstPool)];
+                    auto &srcIt = inv.items[static_cast<size_t>(srcPool)];
+                    const int space = dstIt.maxStack - dstIt.stackCount;
+                    const int move = std::min(space, srcIt.stackCount);
+                    if (move > 0) {
+                        dstIt.stackCount += move;
+                        srcIt.stackCount -= move;
+                        merged = true;
+                        if (srcIt.stackCount <= 0) {
+                            inv.bagSlots[static_cast<size_t>(dragSourceBag_)] = -1;
+                            removeItemFromPool(inv, srcPool);
+                        }
+                    }
+                }
+                if (!merged) {
+                    const int prev = inv.consumableSlots[static_cast<size_t>(consHit)];
+                    inv.consumableSlots[static_cast<size_t>(consHit)] = dragItemIndex_;
+                    inv.bagSlots[static_cast<size_t>(dragSourceBag_)] = prev;
+                }
             } else if (outsidePanel) {
                 action.type = InventoryAction::Drop;
                 action.itemIndex = dragItemIndex_;
@@ -804,16 +887,60 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv,
             }
         } else if (dragSourceConsumable_ >= 0) {
             if (consHit >= 0 && consHit != dragSourceConsumable_) {
-                std::swap(inv.consumableSlots[static_cast<size_t>(dragSourceConsumable_)],
-                          inv.consumableSlots[static_cast<size_t>(consHit)]);
+                const int dstPool = inv.consumableSlots[static_cast<size_t>(consHit)];
+                const int srcPool = dragItemIndex_;
+                bool merged = false;
+                if (dstPool >= 0 && srcPool >= 0 &&
+                    inv.items[static_cast<size_t>(srcPool)].canStackWith(
+                        inv.items[static_cast<size_t>(dstPool)])) {
+                    auto &dstIt = inv.items[static_cast<size_t>(dstPool)];
+                    auto &srcIt = inv.items[static_cast<size_t>(srcPool)];
+                    const int space = dstIt.maxStack - dstIt.stackCount;
+                    const int move = std::min(space, srcIt.stackCount);
+                    if (move > 0) {
+                        dstIt.stackCount += move;
+                        srcIt.stackCount -= move;
+                        merged = true;
+                        if (srcIt.stackCount <= 0) {
+                            inv.consumableSlots[static_cast<size_t>(dragSourceConsumable_)] = -1;
+                            removeItemFromPool(inv, srcPool);
+                        }
+                    }
+                }
+                if (!merged) {
+                    std::swap(inv.consumableSlots[static_cast<size_t>(dragSourceConsumable_)],
+                              inv.consumableSlots[static_cast<size_t>(consHit)]);
+                }
             } else if (bagHit >= 0) {
                 const int bIdx = inv.bagSlots[static_cast<size_t>(bagHit)];
                 if (bIdx < 0) {
                     inv.bagSlots[static_cast<size_t>(bagHit)] = dragItemIndex_;
                     inv.consumableSlots[static_cast<size_t>(dragSourceConsumable_)] = -1;
                 } else if (inv.items[static_cast<size_t>(bIdx)].isConsumable) {
-                    inv.bagSlots[static_cast<size_t>(bagHit)] = dragItemIndex_;
-                    inv.consumableSlots[static_cast<size_t>(dragSourceConsumable_)] = bIdx;
+                    const int srcPool = dragItemIndex_;
+                    bool merged = false;
+                    if (srcPool >= 0 &&
+                        inv.items[static_cast<size_t>(srcPool)].canStackWith(
+                            inv.items[static_cast<size_t>(bIdx)])) {
+                        auto &dstIt = inv.items[static_cast<size_t>(bIdx)];
+                        auto &srcIt = inv.items[static_cast<size_t>(srcPool)];
+                        const int space = dstIt.maxStack - dstIt.stackCount;
+                        const int move = std::min(space, srcIt.stackCount);
+                        if (move > 0) {
+                            dstIt.stackCount += move;
+                            srcIt.stackCount -= move;
+                            merged = true;
+                            if (srcIt.stackCount <= 0) {
+                                inv.consumableSlots[static_cast<size_t>(dragSourceConsumable_)] =
+                                    -1;
+                                removeItemFromPool(inv, srcPool);
+                            }
+                        }
+                    }
+                    if (!merged) {
+                        inv.bagSlots[static_cast<size_t>(bagHit)] = dragItemIndex_;
+                        inv.consumableSlots[static_cast<size_t>(dragSourceConsumable_)] = bIdx;
+                    }
                 }
             } else if (outsidePanel) {
                 action.type = InventoryAction::Drop;
@@ -839,9 +966,10 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv,
     return action;
 }
 
-void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, int screenW, int screenH,
-                       const InventoryState &inv, float playerHpRatio,
-                       float runicShellCdRatio, float runicShellCdSeconds) {
+void InventoryUI::drawWithoutDragGhost(const Font &font, dreadcast::ResourceManager &resources,
+                                       int screenW, int screenH, const InventoryState &inv,
+                                       float playerHpRatio, float runicShellCdRatio,
+                                       float runicShellCdSeconds) {
     if (!open_) {
         return;
     }
@@ -888,7 +1016,7 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
                 ? &inv.items[static_cast<size_t>(idx)]
                 : nullptr;
         const bool ghost = dragging_ && dragSourceEquip_ == i;
-        drawItemSlotSurface(r, pit, ghost);
+        drawItemSlotSurfaceImpl(r, pit, ghost);
         DrawRectangleLinesEx(r, 1.5F, ui::theme::SLOT_BORDER);
         if (pit == nullptr) {
             const Texture2D slotTex = resources.getTexture(kSlotIconPaths[i]);
@@ -932,7 +1060,7 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
                 ? &inv.items[static_cast<size_t>(idx)]
                 : nullptr;
         const bool ghost = dragging_ && dragSourceConsumable_ == i;
-        drawItemSlotSurface(r, pit, ghost);
+        drawItemSlotSurfaceImpl(r, pit, ghost);
         DrawRectangleLinesEx(r, 1.5F, ui::theme::SLOT_BORDER);
         if (pit != nullptr) {
             const Color tint = ghost ? Fade(RAYWHITE, 0.35F) : RAYWHITE;
@@ -966,7 +1094,7 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
                 ? &inv.items[static_cast<size_t>(idx)]
                 : nullptr;
         const bool ghost = dragging_ && dragSourceBag_ == i;
-        drawItemSlotSurface(r, pit, ghost);
+        drawItemSlotSurfaceImpl(r, pit, ghost);
         DrawRectangleLinesEx(r, 1.5F, ui::theme::SLOT_BORDER);
         if (pit != nullptr) {
             const Color tint = ghost ? Fade(RAYWHITE, 0.35F) : RAYWHITE;
@@ -1033,28 +1161,6 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
             DrawRectangleRec(contextOpt3_, h3);
             DrawTextEx(font, "Separate", {contextOpt3_.x + 8.0F, contextOpt3_.y + 6.0F}, optFont,
                        1.0F, RAYWHITE);
-        }
-    }
-
-    if (dragging_ && dragItemIndex_ >= 0 &&
-        dragItemIndex_ < static_cast<int>(inv.items.size())) {
-        const auto &dit = inv.items[static_cast<size_t>(dragItemIndex_)];
-        const Vector2 m = GetMousePosition();
-        const float ix = m.x - ITEM_ICON_DRAW_W * 0.5F;
-        const float iy = m.y - ITEM_ICON_DRAW_H * 0.5F;
-        if (!dit.iconPath.empty()) {
-            const Texture2D tex = resources.getTexture(dit.iconPath);
-            if (tex.id != 0 && tex.width > 0 && tex.height > 0) {
-                const Rectangle dst{ix, iy, ITEM_ICON_DRAW_W, ITEM_ICON_DRAW_H};
-                const Rectangle src{0.0F, 0.0F, static_cast<float>(tex.width),
-                                    static_cast<float>(tex.height)};
-                DrawRectangleRec({ix + 3.0F, iy + 5.0F, ITEM_ICON_DRAW_W, ITEM_ICON_DRAW_H},
-                                 Fade(BLACK, 55));
-                DrawTexturePro(tex, src, dst, {0.0F, 0.0F}, 0.0F, RAYWHITE);
-                DrawRectangleLinesEx(
-                    {ix - 2.0F, iy - 2.0F, ITEM_ICON_DRAW_W + 4.0F, ITEM_ICON_DRAW_H + 4.0F}, 2.0F,
-                    ui::theme::SLOT_BORDER);
-            }
         }
     }
 
@@ -1233,11 +1339,60 @@ void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, 
     }
 }
 
+void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, int screenW, int screenH,
+                       const InventoryState &inv, float playerHpRatio, float runicShellCdRatio,
+                       float runicShellCdSeconds) {
+    drawWithoutDragGhost(font, resources, screenW, screenH, inv, playerHpRatio, runicShellCdRatio,
+                         runicShellCdSeconds);
+    drawDragGhost(resources, inv);
+}
+
+void InventoryUI::drawDragGhost(dreadcast::ResourceManager &resources, const InventoryState &inv) const {
+    if (!open_ || !dragging_ || dragItemIndex_ < 0 || dragItemIndex_ >= static_cast<int>(inv.items.size())) {
+        return;
+    }
+    const auto &dit = inv.items[static_cast<size_t>(dragItemIndex_)];
+    const Vector2 m = GetMousePosition();
+    const float ix = m.x - ITEM_ICON_DRAW_W * 0.5F;
+    const float iy = m.y - ITEM_ICON_DRAW_H * 0.5F;
+    if (dit.iconPath.empty()) {
+        return;
+    }
+    const Texture2D tex = resources.getTexture(dit.iconPath);
+    if (tex.id == 0 || tex.width <= 0 || tex.height <= 0) {
+        return;
+    }
+    const Rectangle dst{ix, iy, ITEM_ICON_DRAW_W, ITEM_ICON_DRAW_H};
+    const Rectangle src{0.0F, 0.0F, static_cast<float>(tex.width), static_cast<float>(tex.height)};
+    DrawRectangleRec({ix + 3.0F, iy + 5.0F, ITEM_ICON_DRAW_W, ITEM_ICON_DRAW_H}, Fade(BLACK, 55));
+    DrawTexturePro(tex, src, dst, {0.0F, 0.0F}, 0.0F, RAYWHITE);
+    DrawRectangleLinesEx({ix - 2.0F, iy - 2.0F, ITEM_ICON_DRAW_W + 4.0F, ITEM_ICON_DRAW_H + 4.0F},
+                         2.0F, ui::theme::SLOT_BORDER);
+}
+
+void InventoryUI::drawItemSlotSurface(Rectangle r, const dreadcast::ItemData *it, bool ghost) {
+    drawItemSlotSurfaceImpl(r, it, ghost);
+}
+
 int InventoryUI::hitTestBagSlot(Vector2 mouse, int screenW, int screenH) const {
     if (!open_) {
         return -1;
     }
     return hitTestBag(screenW, screenH, mouse, panelLayoutShiftX_);
+}
+
+int InventoryUI::hitTestEquipSlot(Vector2 mouse, int screenW, int screenH) const {
+    if (!open_) {
+        return -1;
+    }
+    return hitTestEquip(screenW, screenH, mouse, panelLayoutShiftX_);
+}
+
+int InventoryUI::hitTestConsumableSlot(Vector2 mouse, int screenW, int screenH) const {
+    if (!open_) {
+        return -1;
+    }
+    return hitTestConsumable(screenW, screenH, mouse, panelLayoutShiftX_);
 }
 
 } // namespace dreadcast::ui

@@ -13,8 +13,8 @@ namespace dreadcast::ui {
 
 namespace {
 
-constexpr float kPanelW = 720.0F;
-constexpr float kPanelH = 560.0F;
+constexpr float kPanelW = 920.0F;
+constexpr float kPanelH = 700.0F;
 constexpr float kNodeR = 28.0F;
 constexpr float kCoreDx = 80.0F;
 constexpr float kDiag = 80.0F * 0.70710678F;
@@ -23,15 +23,20 @@ struct NodeDef {
     float ox;
     float oy;
     bool core;
+    const char *name;
+    const char *description;
+    int cost;
 };
 
 constexpr std::array<NodeDef, 6> kNodes{{
-    {-kCoreDx, 0.0F, true},
-    {kCoreDx, 0.0F, true},
-    {-kCoreDx - kDiag, -kDiag, false},
-    {-kCoreDx - kDiag, kDiag, false},
-    {kCoreDx + kDiag, -kDiag, false},
-    {kCoreDx + kDiag, kDiag, false},
+    {-kCoreDx, 0.0F, true, "Bottomless Chamber",
+     "Simple ranged attacks are free and infinite. Reload rhythm still applies.", 0},
+    {kCoreDx, 0.0F, true, "Last Hand",
+     "Enables close-defense fallback so you can fight while out of bullets and mana.", 0},
+    {-kCoreDx - kDiag, -kDiag, false, "TBD Skill", "Skill details coming soon.", 1},
+    {-kCoreDx - kDiag, kDiag, false, "TBD Skill", "Skill details coming soon.", 1},
+    {kCoreDx + kDiag, -kDiag, false, "TBD Skill", "Skill details coming soon.", 1},
+    {kCoreDx + kDiag, kDiag, false, "TBD Skill", "Skill details coming soon.", 1},
 }};
 
 constexpr int kConn[][2] = {{0, 1}, {0, 2}, {0, 3}, {1, 4}, {1, 5}};
@@ -193,6 +198,54 @@ void SkillTreeUI::draw(const Font &font, ResourceManager & /*resources*/, int sk
         const float a0 = -90.0F;
         const float a1 = -90.0F + 360.0F * t;
         DrawRing(nc, kNodeR + 4.0F, kNodeR + 7.0F, a0, a1, 32, Color{210, 175, 95, 220});
+    }
+
+    if (hoverNode_ >= 0) {
+        const size_t idx = static_cast<size_t>(hoverNode_);
+        const NodeDef &node = kNodes[idx];
+        const bool learned = learned_[idx];
+        const bool eligible = !learned && !node.core && neighborOfLearned(learned_, hoverNode_);
+
+        const float titleFs = 22.0F;
+        const float bodyFs = 18.0F;
+        const float statusFs = 16.0F;
+        const float pad = 14.0F;
+        const Vector2 td = MeasureTextEx(font, node.name, titleFs, 1.0F);
+        const Vector2 dd = MeasureTextEx(font, node.description, bodyFs, 1.0F);
+
+        char statusBuf[48];
+        if (learned) {
+            std::snprintf(statusBuf, sizeof(statusBuf), "Skilled");
+        } else if (eligible) {
+            std::snprintf(statusBuf, sizeof(statusBuf), "%d SP - Hold [E]", node.cost);
+        } else {
+            std::snprintf(statusBuf, sizeof(statusBuf), "Locked");
+        }
+        const char *status = statusBuf;
+        const Color statusCol =
+            learned ? Color{120, 180, 110, 255}
+                    : (eligible ? Color{210, 175, 95, 255} : Color{160, 160, 160, 255});
+        const Vector2 sd = MeasureTextEx(font, status, statusFs, 1.0F);
+
+        Rectangle tip{0.0F, 0.0F,
+                      std::max(360.0F, std::max(td.x + pad * 2.0F, dd.x + pad * 2.0F)),
+                      pad * 3.0F + td.y + dd.y};
+        const Vector2 nc = nodeCenter(hoverNode_);
+        tip.x = nc.x + 34.0F;
+        tip.y = nc.y - tip.height - 16.0F;
+        if (tip.x + tip.width > panel.x + panel.width - 12.0F) {
+            tip.x = nc.x - tip.width - 34.0F;
+        }
+        tip.x = std::clamp(tip.x, panel.x + 8.0F, panel.x + panel.width - tip.width - 8.0F);
+        tip.y = std::clamp(tip.y, panel.y + 56.0F, panel.y + panel.height - tip.height - 8.0F);
+
+        DrawRectangleRec(tip, Color{27, 22, 20, 250});
+        DrawRectangleLinesEx(tip, 2.0F, ui::theme::BTN_BORDER);
+        DrawTextEx(font, node.name, {tip.x + pad, tip.y + pad}, titleFs, 1.0F, RAYWHITE);
+        DrawTextEx(font, status, {tip.x + tip.width - sd.x - pad, tip.y + pad + 2.0F}, statusFs, 1.0F,
+                   statusCol);
+        DrawTextEx(font, node.description, {tip.x + pad, tip.y + pad * 2.0F + td.y}, bodyFs, 1.0F,
+                   Fade(RAYWHITE, 0.9F));
     }
 }
 
