@@ -80,12 +80,15 @@ class EditorScene final : public Scene {
     Tool activeTool_{Tool::Select};
     Selection selected_{};
     bool draggingSelection_{false};
+    bool draggingSelectionDidChange_{false};
     Vector2 dragOffset_{};
 
     ResizeHandle resizingWall_{ResizeHandle::None};
+    bool resizingWallDidChange_{false};
     WallData wallResizeStart_{};
     Vector2 wallResizeMouseStart_{};
     ResizeHandle resizingLava_{ResizeHandle::None};
+    bool resizingLavaDidChange_{false};
     LavaData lavaResizeStart_{};
     Vector2 lavaResizeMouseStart_{};
 
