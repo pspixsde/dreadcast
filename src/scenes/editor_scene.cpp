@@ -848,6 +848,13 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
     snapDraggedGuideActive_ = false;
 
     if (resizingWall_ != ResizeHandle::None) {
+        const float dx = worldMouse.x - wallResizeMouseStart_.x;
+        const float dy = worldMouse.y - wallResizeMouseStart_.y;
+        if ((std::fabs(dx) > 0.001F || std::fabs(dy) > 0.001F) && !resizingWallDidChange_) {
+            // Snapshot the pre-resize state so one Ctrl+Z reverts this whole resize.
+            pushUndoSnapshot();
+            resizingWallDidChange_ = true;
+        }
         if (selected_.type == SelectedType::Wall && selected_.index >= 0 &&
             selected_.index < static_cast<int>(map_.walls.size())) {
             auto &w = map_.walls[static_cast<size_t>(selected_.index)];
@@ -911,13 +918,20 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
             }
         }
         if (leftReleased) {
-            pushUndoSnapshot();
             resizingWall_ = ResizeHandle::None;
+            resizingWallDidChange_ = false;
         }
         return;
     }
 
     if (resizingLava_ != ResizeHandle::None) {
+        const float dx = worldMouse.x - lavaResizeMouseStart_.x;
+        const float dy = worldMouse.y - lavaResizeMouseStart_.y;
+        if ((std::fabs(dx) > 0.001F || std::fabs(dy) > 0.001F) && !resizingLavaDidChange_) {
+            // Snapshot the pre-resize state so one Ctrl+Z reverts this whole resize.
+            pushUndoSnapshot();
+            resizingLavaDidChange_ = true;
+        }
         if (selected_.type == SelectedType::Lava && selected_.index >= 0 &&
             selected_.index < static_cast<int>(map_.lavas.size())) {
             auto &w = map_.lavas[static_cast<size_t>(selected_.index)];
@@ -981,8 +995,8 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
             }
         }
         if (leftReleased) {
-            pushUndoSnapshot();
             resizingLava_ = ResizeHandle::None;
+            resizingLavaDidChange_ = false;
         }
         return;
     }
@@ -1001,6 +1015,7 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
             const ResizeHandle h = lavaHandleAt(worldMouse, w);
             if (h != ResizeHandle::None) {
                 resizingLava_ = h;
+                resizingLavaDidChange_ = false;
                 lavaResizeStart_ = w;
                 lavaResizeMouseStart_ = worldMouse;
                 draggingSelection_ = false;
@@ -1013,6 +1028,7 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
             const ResizeHandle h = wallHandleAt(worldMouse, w);
             if (h != ResizeHandle::None) {
                 resizingWall_ = h;
+                resizingWallDidChange_ = false;
                 wallResizeStart_ = w;
                 wallResizeMouseStart_ = worldMouse;
                 draggingSelection_ = false;
@@ -1074,16 +1090,20 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
             }
             dragOffset_ = {center.x - worldMouse.x, center.y - worldMouse.y};
             draggingSelection_ = true;
+            draggingSelectionDidChange_ = false;
         }
     }
     if (leftHeld && draggingSelection_) {
+        if (!draggingSelectionDidChange_) {
+            // Snapshot pre-drag state on first actual drag frame.
+            pushUndoSnapshot();
+            draggingSelectionDidChange_ = true;
+        }
         applySelectionMove(worldMouse);
     }
     if (leftReleased) {
-        if (draggingSelection_) {
-            pushUndoSnapshot();
-        }
         draggingSelection_ = false;
+        draggingSelectionDidChange_ = false;
         solidMoveActive_ = false;
     }
 

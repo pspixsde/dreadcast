@@ -41,6 +41,7 @@ All notable changes to **Dreadcast** will be documented in this file.
 - **Editor wall move snapping:** Moving walls now snaps correctly in all edge directions (left/right/top/bottom), not only a subset.
 - **Anvil shift-click routing:** Shift-click from equipped and consumable slots now sends items directly into active forge/disassemble input slots when valid.
 - **Disassemble output quick-transfer:** Shift-click from disassemble output slots now returns items to inventory using the configured priority toggle (equip/consumable-first or bag-first).
+- **Editor undo (Ctrl+Z):** Drag-move and wall/lava resize operations now snapshot pre-change state on first actual transform, so one undo step reliably restores the original placement/size.
 
 ## v0.12.1 — 2026-04-18
 
