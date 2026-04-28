@@ -239,12 +239,21 @@ struct SnareDashState {
 /// Base ranged damage from character data (curse bolt); level bonuses add on top.
 struct PlayerCombatBase {
     float rangedDamage{10.0F};
+    float rangedProjectileSpeed{600.0F};
 };
 
 /// Movement + fog vision from character data (JSON).
 struct PlayerMoveStats {
     float moveSpeed{dreadcast::config::PLAYER_MOVE_SPEED};
     float visionRange{dreadcast::config::FOG_OF_WAR_RADIUS};
+};
+
+/// Vigilant Eye dynamic vision modifier state.
+struct VigilantEyeState {
+    float currentRange{dreadcast::config::FOG_OF_WAR_RADIUS};
+    float baseRange{dreadcast::config::FOG_OF_WAR_RADIUS};
+    float stillSeconds{0.0F};
+    bool stillBonusActive{false};
 };
 
 /// Max HP/Mana before equipment (from character JSON); equipment adds on top.

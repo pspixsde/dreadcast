@@ -174,11 +174,60 @@ float snapHorizontalEdgeY(float yEdge, float focusX, const MapData &map, int ski
 } // namespace
 
 Rectangle EditorScene::toolbarPanelRect() const {
-    return {4.0F, 4.0F, 260.0F, 500.0F};
+    return {4.0F, 4.0F, 300.0F, 600.0F};
+}
+
+Rectangle EditorScene::pickerPanelRect() const {
+    const Rectangle t = toolbarPanelRect();
+    const float pw = 220.0F;
+    const float px = t.x + t.width + 4.0F;
+    const float py = t.y;
+    const float ph =
+        std::min(560.0F, static_cast<float>(config::WINDOW_HEIGHT) - py - 8.0F);
+    return {px, py, pw, ph};
+}
+
+int EditorScene::pickerRowCount() const {
+    if (!pickerOpen_) {
+        return 0;
+    }
+    switch (*pickerOpen_) {
+    case EditorTab::Elements:
+        return 6;
+    case EditorTab::Items:
+        return 10;
+    case EditorTab::Units:
+        return 3;
+    }
+    return 0;
+}
+
+float EditorScene::pickerMaxScroll() const {
+    const Rectangle pr = pickerPanelRect();
+    constexpr float pad = 8.0F;
+    constexpr float rowH = 28.0F;
+    constexpr float rowGap = 2.0F;
+    const float innerH = pr.height - 2.0F * pad;
+    const int n = pickerRowCount();
+    const float contentH =
+        n > 0 ? static_cast<float>(n) * rowH + static_cast<float>(n - 1) * rowGap : 0.0F;
+    return std::max(0.0F, contentH - innerH);
 }
 
 Rectangle EditorScene::editorUiHitRect() const {
-    return {4.0F, 4.0F, 320.0F, 540.0F};
+    const Rectangle t = toolbarPanelRect();
+    float x0 = t.x;
+    float y0 = t.y;
+    float x1 = t.x + t.width;
+    float y1 = t.y + t.height;
+    if (pickerOpen_) {
+        const Rectangle p = pickerPanelRect();
+        x0 = std::min(x0, p.x);
+        y0 = std::min(y0, p.y);
+        x1 = std::max(x1, p.x + p.width);
+        y1 = std::max(y1, p.y + p.height);
+    }
+    return {x0, y0, x1 - x0, y1 - y0};
 }
 
 bool EditorScene::isMouseOverEditorUi(Vector2 screenMouse) const {
@@ -301,10 +350,16 @@ EditorScene::Selection EditorScene::pickSelection(const Vector2 &worldMouse) con
         s.type = SelectedType::PlayerSpawn;
         return s;
     }
-    if (map_.hasCasket &&
-        distSq(worldMouse, {map_.casket.cx, map_.casket.cy}) <= pickR2) {
-        s.type = SelectedType::Casket;
-        return s;
+    if (map_.hasCasket) {
+        constexpr float halfW = 28.0F;
+        constexpr float halfH = 20.0F;
+        const float cx = map_.casket.cx;
+        const float cy = map_.casket.cy;
+        if (worldMouse.x >= cx - halfW && worldMouse.x <= cx + halfW && worldMouse.y >= cy - halfH &&
+            worldMouse.y <= cy + halfH) {
+            s.type = SelectedType::Casket;
+            return s;
+        }
     }
     for (int i = 0; i < static_cast<int>(map_.enemies.size()); ++i) {
         const Vector2 e{map_.enemies[static_cast<size_t>(i)].x, map_.enemies[static_cast<size_t>(i)].y};
@@ -397,7 +452,8 @@ void EditorScene::handlePlacement(const Vector2 &worldMouse) {
         static const char *kItemKinds[] = {"iron_armor",         "vial_pure_blood",
                                            "vial_cordial_manic", "barbed_tunic",
                                            "runic_shell",        "vial_raw_spirit",
-                                           "hollow_ring"};
+                                           "hollow_ring",        "frayed_amulet",
+                                           "vigilant_eye",       "pulse_link"};
         const int nk = static_cast<int>(sizeof(kItemKinds) / sizeof(kItemKinds[0]));
         const int ki = std::clamp(selectedItemKind_, 0, nk - 1);
         map_.itemSpawns.push_back({worldMouse.x, worldMouse.y, kItemKinds[static_cast<size_t>(ki)]});
@@ -1054,6 +1110,12 @@ void EditorScene::handleSelectionInput(InputManager &input, const Vector2 &world
                 selectedItemKind_ = 5;
             } else if (k == "hollow_ring") {
                 selectedItemKind_ = 6;
+            } else if (k == "frayed_amulet") {
+                selectedItemKind_ = 7;
+            } else if (k == "vigilant_eye") {
+                selectedItemKind_ = 8;
+            } else if (k == "pulse_link") {
+                selectedItemKind_ = 9;
             } else {
                 selectedItemKind_ = 0;
             }
@@ -1317,86 +1379,121 @@ void EditorScene::update(SceneManager &scenes, InputManager &input, ResourceMana
         return;
     }
     const Rectangle panel = toolbarPanelRect();
-    constexpr float tabYOffset = 238.0F;
-    constexpr float tabH = 28.0F;
-    constexpr float tabGap = 4.0F;
-    const float tabX0 = panel.x + 8.0F;
-    const float tabW = (panel.width - 16.0F - 2.0F * tabGap) / 3.0F;
-    const float tabY = panel.y + tabYOffset;
+    constexpr float rowH = 28.0F;
+    constexpr float rowGap = 2.0F;
+    const Rectangle selectRect{panel.x + 8.0F, panel.y + 222.0F, panel.width - 16.0F, 32.0F};
+    const Rectangle tab0{panel.x + 10.0F, panel.y + 262.0F, panel.width - 20.0F, 30.0F};
+    const Rectangle tab1{tab0.x, tab0.y + 36.0F, tab0.width, tab0.height};
+    const Rectangle tab2{tab0.x, tab1.y + 36.0F, tab0.width, tab0.height};
+    const Rectangle previewRect{panel.x + 8.0F, panel.y + panel.height - 88.0F, panel.width - 16.0F,
+                                80.0F};
+
     if (click) {
-        for (int t = 0; t < 3; ++t) {
-            const Rectangle tr{tabX0 + static_cast<float>(t) * (tabW + tabGap), tabY, tabW, tabH};
-            if (CheckCollisionPointRec(mouse, tr)) {
-                activeTab_ = static_cast<EditorTab>(t);
+        if (CheckCollisionPointRec(mouse, selectRect)) {
+            activeTool_ = Tool::Select;
+            pickerOpen_.reset();
+            pickerScrollY_ = 0.0F;
+            uiConsumedClick = true;
+        } else if (CheckCollisionPointRec(mouse, tab0)) {
+            if (pickerOpen_ == EditorTab::Elements) {
+                pickerOpen_.reset();
+            } else {
+                pickerOpen_ = EditorTab::Elements;
+                pickerScrollY_ = 0.0F;
+            }
+            uiConsumedClick = true;
+        } else if (CheckCollisionPointRec(mouse, tab1)) {
+            if (pickerOpen_ == EditorTab::Items) {
+                pickerOpen_.reset();
+            } else {
+                pickerOpen_ = EditorTab::Items;
+                pickerScrollY_ = 0.0F;
+            }
+            uiConsumedClick = true;
+        } else if (CheckCollisionPointRec(mouse, tab2)) {
+            if (pickerOpen_ == EditorTab::Units) {
+                pickerOpen_.reset();
+            } else {
+                pickerOpen_ = EditorTab::Units;
+                pickerScrollY_ = 0.0F;
+            }
+            uiConsumedClick = true;
+        } else if (CheckCollisionPointRec(mouse, previewRect)) {
+            if (activeTool_ == Tool::PlaceItem) {
                 uiConsumedClick = true;
-                break;
+            } else if (activeTool_ == Tool::PlaceEnemy) {
+                uiConsumedClick = true;
+            } else if (activeTool_ == Tool::SetPlayerSpawn) {
+                uiConsumedClick = true;
+            } else if (activeTool_ == Tool::PlaceWall) {
+                activeTool_ = Tool::PlaceWall;
+                uiConsumedClick = true;
+            } else if (activeTool_ == Tool::PlaceLava) {
+                activeTool_ = Tool::PlaceLava;
+                uiConsumedClick = true;
+            } else if (activeTool_ == Tool::PlaceCasket) {
+                activeTool_ = Tool::PlaceCasket;
+                uiConsumedClick = true;
+            } else if (activeTool_ == Tool::PlaceSolid) {
+                activeTool_ = Tool::PlaceSolid;
+                uiConsumedClick = true;
+            } else if (activeTool_ == Tool::PlaceAnvil) {
+                activeTool_ = Tool::PlaceAnvil;
+                uiConsumedClick = true;
             }
         }
     }
 
-    constexpr float contentYOffset = 272.0F;
-    constexpr float rowH = 28.0F;
-    constexpr float rowGap = 2.0F;
-    const float contentY = panel.y + contentYOffset;
-    const Rectangle contentClip{panel.x + 6.0F, contentY, panel.width - 12.0F,
-                                  panel.y + panel.height - 8.0F - contentY};
-    if (click && CheckCollisionPointRec(mouse, contentClip)) {
-        if (activeTab_ == EditorTab::Elements) {
-            static constexpr const char *kElemLbl[] = {"Select",  "Wall",        "Lava",
-                                                         "Casket",  "Player spawn", "Solid (poly)",
-                                                         "Anvil"};
-            static constexpr Tool kElemTool[] = {
-                Tool::Select, Tool::PlaceWall, Tool::PlaceLava, Tool::PlaceCasket, Tool::SetPlayerSpawn,
-                Tool::PlaceSolid, Tool::PlaceAnvil};
-            constexpr int nElem = static_cast<int>(sizeof(kElemLbl) / sizeof(kElemLbl[0]));
-            for (int i = 0; i < nElem; ++i) {
-                const Rectangle row{contentClip.x + 2.0F,
-                                    contentClip.y + static_cast<float>(i) * (rowH + rowGap), contentClip.width - 4.0F,
-                                    rowH};
-                if (CheckCollisionPointRec(mouse, row)) {
-                    activeTool_ = kElemTool[static_cast<size_t>(i)];
-                    uiConsumedClick = true;
-                    break;
-                }
-            }
-        } else if (activeTab_ == EditorTab::Items) {
-            constexpr int nItem = 7;
-            for (int i = 0; i < nItem; ++i) {
-                const Rectangle row{contentClip.x + 2.0F,
-                                    contentClip.y + static_cast<float>(i) * (rowH + rowGap), contentClip.width - 4.0F,
-                                    rowH};
-                if (CheckCollisionPointRec(mouse, row)) {
-                    selectedItemKind_ = i;
+    if (click && pickerOpen_) {
+        const Rectangle pr = pickerPanelRect();
+        const Rectangle inner{pr.x + 6.0F, pr.y + 8.0F, pr.width - 12.0F, pr.height - 16.0F};
+        if (CheckCollisionPointRec(mouse, inner)) {
+            const float localY = mouse.y - inner.y + pickerScrollY_;
+            const int row = static_cast<int>(localY / (rowH + rowGap));
+            if (row >= 0 && row < pickerRowCount()) {
+                if (*pickerOpen_ == EditorTab::Elements) {
+                    static constexpr Tool kElemTool[] = {
+                        Tool::PlaceWall,       Tool::PlaceLava,        Tool::PlaceCasket,
+                        Tool::SetPlayerSpawn, Tool::PlaceSolid,       Tool::PlaceAnvil};
+                    activeTool_ = kElemTool[static_cast<size_t>(row)];
+                } else if (*pickerOpen_ == EditorTab::Items) {
+                    selectedItemKind_ = row;
                     activeTool_ = Tool::PlaceItem;
-                    uiConsumedClick = true;
-                    break;
-                }
-            }
-        } else if (activeTab_ == EditorTab::Units) {
-            struct UnitRow {
-                const char *label;
-                Tool tool;
-                int enemyType; // -1 = n/a
-            };
-            static constexpr UnitRow kRows[] = {{"Imp", Tool::PlaceEnemy, 0},
-                                                {"Hellhound", Tool::PlaceEnemy, 1},
-                                                {"Player spawn", Tool::SetPlayerSpawn, -1}};
-            constexpr int nU = static_cast<int>(sizeof(kRows) / sizeof(kRows[0]));
-            for (int i = 0; i < nU; ++i) {
-                const Rectangle row{contentClip.x + 2.0F,
-                                    contentClip.y + static_cast<float>(i) * (rowH + rowGap), contentClip.width - 4.0F,
-                                    rowH};
-                if (CheckCollisionPointRec(mouse, row)) {
-                    activeTool_ = kRows[static_cast<size_t>(i)].tool;
-                    if (kRows[static_cast<size_t>(i)].enemyType >= 0) {
-                        selectedEnemyType_ = kRows[static_cast<size_t>(i)].enemyType;
+                } else if (*pickerOpen_ == EditorTab::Units) {
+                    struct UnitRow {
+                        Tool tool;
+                        int enemyType;
+                    };
+                    static constexpr UnitRow kRows[] = {
+                        {Tool::PlaceEnemy, 0},
+                        {Tool::PlaceEnemy, 1},
+                        {Tool::SetPlayerSpawn, -1},
+                    };
+                    activeTool_ = kRows[static_cast<size_t>(row)].tool;
+                    if (kRows[static_cast<size_t>(row)].enemyType >= 0) {
+                        selectedEnemyType_ = kRows[static_cast<size_t>(row)].enemyType;
                     }
-                    uiConsumedClick = true;
-                    break;
                 }
+                pickerOpen_.reset();
+                pickerScrollY_ = 0.0F;
+                uiConsumedClick = true;
             }
         }
     }
+
+    if (click && pickerOpen_) {
+        const bool hitCasketPanel =
+            selected_.type == SelectedType::Casket && map_.hasCasket &&
+            CheckCollisionPointRec(mouse, casketLootPanelRect());
+        const Rectangle pr = pickerPanelRect();
+        if (!CheckCollisionPointRec(mouse, panel) && !CheckCollisionPointRec(mouse, pr) &&
+            !hitCasketPanel) {
+            pickerOpen_.reset();
+            pickerScrollY_ = 0.0F;
+        }
+    }
+
+    pickerScrollY_ = std::clamp(pickerScrollY_, 0.0F, pickerMaxScroll());
 
     Vector2 camMove{0.0F, 0.0F};
     if (input.isKeyHeld(KEY_A)) {
@@ -1439,7 +1536,13 @@ void EditorScene::update(SceneManager &scenes, InputManager &input, ResourceMana
 
     const float wheel = GetMouseWheelMove();
     if (std::fabs(wheel) > 0.001F) {
-        camera_.camera().zoom = std::clamp(camera_.camera().zoom + wheel * 0.08F, 0.35F, 2.2F);
+        if (pickerOpen_ && CheckCollisionPointRec(mouse, pickerPanelRect())) {
+            pickerScrollY_ -= wheel * 28.0F;
+            pickerScrollY_ = std::clamp(pickerScrollY_, 0.0F, pickerMaxScroll());
+        } else {
+            camera_.camera().zoom =
+                std::clamp(camera_.camera().zoom + wheel * 0.08F, 0.35F, 2.2F);
+        }
     }
 
     if (click) {
@@ -1685,10 +1788,25 @@ void EditorScene::drawEditorWorld(const Font &font) {
     DrawTextEx(font, "Player Spawn", {pIso.x + 8.0F, pIso.y - 18.0F}, 14.0F, 1.0F, RAYWHITE);
 
     if (map_.hasCasket) {
-        const Vector2 cIso = worldToIso({map_.casket.cx, map_.casket.cy});
+        constexpr float halfW = 28.0F;
+        constexpr float halfH = 20.0F;
+        const float cx = map_.casket.cx;
+        const float cy = map_.casket.cy;
+        const Vector2 p1 = worldToIso({cx - halfW, cy - halfH});
+        const Vector2 p2 = worldToIso({cx + halfW, cy - halfH});
+        const Vector2 p3 = worldToIso({cx + halfW, cy + halfH});
+        const Vector2 p4 = worldToIso({cx - halfW, cy + halfH});
         const bool sel = selected_.type == SelectedType::Casket;
-        DrawCircleV(cIso, sel ? 14.0F : 11.0F, sel ? Color{190, 150, 105, 255} : Color{130, 95, 55, 255});
-        DrawTextEx(font, "Casket", {cIso.x + 8.0F, cIso.y - 18.0F}, 14.0F, 1.0F, RAYWHITE);
+        const Color fill = sel ? Color{120, 92, 62, 255} : Color{90, 70, 55, 255};
+        const Color outline = sel ? Color{210, 180, 130, 255} : Color{140, 110, 80, 255};
+        DrawTriangle(p1, p2, p3, fill);
+        DrawTriangle(p1, p3, p4, fill);
+        DrawLineV(p1, p2, outline);
+        DrawLineV(p2, p3, outline);
+        DrawLineV(p3, p4, outline);
+        DrawLineV(p4, p1, outline);
+        const Vector2 cIso = worldToIso({cx, cy});
+        DrawTextEx(font, "Old Casket", {cIso.x + 8.0F, cIso.y - 22.0F}, 14.0F, 1.0F, RAYWHITE);
     }
 
     if (solidDraftVerts_.size() >= 1) {
@@ -1753,68 +1871,149 @@ void EditorScene::drawToolbar(const Font &font, Vector2 mouse) {
     backButton_.draw(font, 17.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER, RAYWHITE,
                      ui::theme::BTN_BORDER);
 
-    constexpr float tabYOffset = 238.0F;
-    constexpr float tabH = 28.0F;
-    constexpr float tabGap = 4.0F;
-    const float tabX0 = panel.x + 8.0F;
-    const float tabW = (panel.width - 16.0F - 2.0F * tabGap) / 3.0F;
-    const float tabY = panel.y + tabYOffset;
+    const Rectangle selectRect{panel.x + 8.0F, panel.y + 222.0F, panel.width - 16.0F, 32.0F};
+    const Rectangle tab0{panel.x + 10.0F, panel.y + 262.0F, panel.width - 20.0F, 30.0F};
+    const Rectangle tab1{tab0.x, tab0.y + 36.0F, tab0.width, tab0.height};
+    const Rectangle tab2{tab0.x, tab1.y + 36.0F, tab0.width, tab0.height};
+    const Rectangle previewRect{panel.x + 8.0F, panel.y + panel.height - 88.0F, panel.width - 16.0F,
+                                80.0F};
+
+    const bool selHov = CheckCollisionPointRec(mouse, selectRect);
+    DrawRectangleRec(selectRect,
+                     selHov ? ui::theme::BTN_HOVER
+                            : (activeTool_ == Tool::Select ? ui::theme::SLOT_FILL : ui::theme::BTN_FILL));
+    DrawRectangleLinesEx(selectRect, activeTool_ == Tool::Select ? 2.0F : 1.0F,
+                         activeTool_ == Tool::Select ? ui::theme::BTN_BORDER : Fade(ui::theme::BTN_BORDER, 160));
+    {
+        const char *lbl = "Select";
+        const float fs = 15.0F;
+        const Vector2 td = MeasureTextEx(font, lbl, fs, 1.0F);
+        DrawTextEx(font, lbl,
+                   {selectRect.x + (selectRect.width - td.x) * 0.5F,
+                    selectRect.y + (selectRect.height - td.y) * 0.5F},
+                   fs, 1.0F, RAYWHITE);
+    }
+
     const char *tabLbl[3] = {"Elements", "Items", "Units"};
+    const Rectangle tabRects[3] = {tab0, tab1, tab2};
     for (int t = 0; t < 3; ++t) {
-        const Rectangle tr{tabX0 + static_cast<float>(t) * (tabW + tabGap), tabY, tabW, tabH};
-        const bool on = static_cast<int>(activeTab_) == t;
+        const Rectangle &tr = tabRects[t];
+        const bool on = pickerOpen_.has_value() && static_cast<int>(*pickerOpen_) == t;
         const bool hov = CheckCollisionPointRec(mouse, tr);
         DrawRectangleRec(tr, hov ? ui::theme::BTN_HOVER : (on ? ui::theme::SLOT_FILL : ui::theme::BTN_FILL));
         DrawRectangleLinesEx(tr, on ? 2.0F : 1.0F, on ? ui::theme::BTN_BORDER : Fade(ui::theme::BTN_BORDER, 160));
-        const float fs = 13.0F;
+        const float fs = 14.0F;
         const Vector2 td = MeasureTextEx(font, tabLbl[t], fs, 1.0F);
         DrawTextEx(font, tabLbl[t],
                    {tr.x + (tr.width - td.x) * 0.5F, tr.y + (tr.height - td.y) * 0.5F}, fs, 1.0F,
                    RAYWHITE);
     }
 
-    constexpr float contentYOffset = 272.0F;
+    const bool pvHov = CheckCollisionPointRec(mouse, previewRect);
+    DrawRectangleRec(previewRect, pvHov ? ui::theme::BTN_HOVER : ui::theme::SLOT_FILL);
+    DrawRectangleLinesEx(previewRect, 1.5F, ui::theme::SLOT_BORDER);
+    {
+        const char *preview = "—";
+        switch (activeTool_) {
+        case Tool::Select:
+            preview = "Select";
+            break;
+        case Tool::PlaceWall:
+            preview = "Wall";
+            break;
+        case Tool::PlaceLava:
+            preview = "Lava";
+            break;
+        case Tool::PlaceCasket:
+            preview = "Old Casket";
+            break;
+        case Tool::SetPlayerSpawn:
+            preview = "Player spawn";
+            break;
+        case Tool::PlaceSolid:
+            preview = "Solid (poly)";
+            break;
+        case Tool::PlaceAnvil:
+            preview = "Anvil";
+            break;
+        case Tool::PlaceItem: {
+            static const char *kItemOptLbl[] = {
+                "Iron Armor",        "Vial of Pure Blood", "Vial of Cordial Manic",
+                "Barbed Tunic",      "Runic Shell",        "Vial of Raw Spirit",
+                "Hollow Ring",       "Frayed Amulet",      "Vigilant Eye",
+                "Pulse Link",
+            };
+            constexpr int nItem = static_cast<int>(sizeof(kItemOptLbl) / sizeof(kItemOptLbl[0]));
+            preview = kItemOptLbl[static_cast<size_t>(std::clamp(selectedItemKind_, 0, nItem - 1))];
+            break;
+        }
+        case Tool::PlaceEnemy:
+            preview = selectedEnemyType_ == 0 ? "Imp" : "Hellhound";
+            break;
+        default:
+            break;
+        }
+        const float pfs = 15.0F;
+        const Vector2 pd = MeasureTextEx(font, preview, pfs, 1.0F);
+        DrawTextEx(font, preview,
+                   {previewRect.x + (previewRect.width - pd.x) * 0.5F,
+                    previewRect.y + (previewRect.height - pd.y) * 0.5F},
+                   pfs, 1.0F, RAYWHITE);
+    }
+}
+
+void EditorScene::drawPickerPanel(const Font &font, Vector2 mouse) {
+    if (!pickerOpen_) {
+        return;
+    }
+    const Rectangle pr = pickerPanelRect();
+    DrawRectangleRec(pr, Fade(ui::theme::PANEL_FILL, 250));
+    DrawRectangleLinesEx(pr, 2.0F, ui::theme::PANEL_BORDER);
+
     constexpr float rowH = 28.0F;
     constexpr float rowGap = 2.0F;
-    const float contentY = panel.y + contentYOffset;
-    const Rectangle contentClip{panel.x + 6.0F, contentY, panel.width - 12.0F,
-                                  panel.y + panel.height - 8.0F - contentY};
-    BeginScissorMode(static_cast<int>(contentClip.x), static_cast<int>(contentClip.y),
-                     static_cast<int>(contentClip.width), static_cast<int>(contentClip.height));
+    const Rectangle inner{pr.x + 6.0F, pr.y + 8.0F, pr.width - 12.0F, pr.height - 16.0F};
+    BeginScissorMode(static_cast<int>(inner.x), static_cast<int>(inner.y),
+                     static_cast<int>(inner.width), static_cast<int>(inner.height));
 
     auto drawRow = [&](float y, const char *label, bool rowActive, bool rowHover) {
-        const Rectangle row{contentClip.x + 2.0F, y, contentClip.width - 4.0F, rowH};
+        const Rectangle row{inner.x + 2.0F, y, inner.width - 4.0F, rowH};
         DrawRectangleRec(row, rowHover ? ui::theme::BTN_HOVER
                                        : (rowActive ? ui::theme::SLOT_FILL : ui::theme::BTN_FILL));
         DrawRectangleLinesEx(row, 1.0F, rowActive ? ui::theme::BTN_BORDER : Fade(ui::theme::BTN_BORDER, 140));
         DrawTextEx(font, label, {row.x + 8.0F, row.y + 6.0F}, 14.0F, 1.0F, RAYWHITE);
     };
 
-    if (activeTab_ == EditorTab::Elements) {
-        static constexpr const char *kElemLbl[] = {"Select",  "Wall",        "Lava",
-                                                     "Casket",  "Player spawn", "Solid (poly)",
-                                                     "Anvil"};
-        static constexpr Tool kElemTool[] = {
-            Tool::Select, Tool::PlaceWall, Tool::PlaceLava, Tool::PlaceCasket, Tool::SetPlayerSpawn,
-            Tool::PlaceSolid, Tool::PlaceAnvil};
+    if (*pickerOpen_ == EditorTab::Elements) {
+        static constexpr const char *kElemLbl[] = {"Wall", "Lava", "Casket", "Player spawn",
+                                                   "Solid (poly)", "Anvil"};
+        static constexpr Tool kElemTool[] = {Tool::PlaceWall, Tool::PlaceLava, Tool::PlaceCasket,
+                                             Tool::SetPlayerSpawn, Tool::PlaceSolid, Tool::PlaceAnvil};
         constexpr int nElem = static_cast<int>(sizeof(kElemLbl) / sizeof(kElemLbl[0]));
         for (int i = 0; i < nElem; ++i) {
-            const float ry = contentClip.y + static_cast<float>(i) * (rowH + rowGap);
-            const Rectangle hit{contentClip.x + 2.0F, ry, contentClip.width - 4.0F, rowH};
+            const float ry = inner.y + static_cast<float>(i) * (rowH + rowGap) - pickerScrollY_;
+            const Rectangle hit{inner.x + 2.0F, ry, inner.width - 4.0F, rowH};
+            if (ry + rowH < inner.y || ry > inner.y + inner.height) {
+                continue;
+            }
             const bool rowAct = activeTool_ == kElemTool[static_cast<size_t>(i)];
             drawRow(ry, kElemLbl[static_cast<size_t>(i)], rowAct, CheckCollisionPointRec(mouse, hit));
         }
-    } else if (activeTab_ == EditorTab::Items) {
+    } else if (*pickerOpen_ == EditorTab::Items) {
         static const char *kItemOptLbl[] = {
             "Iron Armor",        "Vial of Pure Blood", "Vial of Cordial Manic",
             "Barbed Tunic",      "Runic Shell",        "Vial of Raw Spirit",
-            "Hollow Ring",
+            "Hollow Ring",       "Frayed Amulet",      "Vigilant Eye",
+            "Pulse Link",
         };
         constexpr int nItem = static_cast<int>(sizeof(kItemOptLbl) / sizeof(kItemOptLbl[0]));
-        const float maxLabelW = contentClip.width - 20.0F;
+        const float maxLabelW = inner.width - 20.0F;
         for (int i = 0; i < nItem; ++i) {
-            const float ry = contentClip.y + static_cast<float>(i) * (rowH + rowGap);
-            const Rectangle hit{contentClip.x + 2.0F, ry, contentClip.width - 4.0F, rowH};
+            const float ry = inner.y + static_cast<float>(i) * (rowH + rowGap) - pickerScrollY_;
+            const Rectangle hit{inner.x + 2.0F, ry, inner.width - 4.0F, rowH};
+            if (ry + rowH < inner.y || ry > inner.y + inner.height) {
+                continue;
+            }
             const bool rowAct = activeTool_ == Tool::PlaceItem && selectedItemKind_ == i;
             std::string lbl = kItemOptLbl[static_cast<size_t>(i)];
             const float fs = 14.0F;
@@ -1825,8 +2024,8 @@ void EditorScene::drawToolbar(const Font &font, Vector2 mouse) {
             if (lbl != kItemOptLbl[static_cast<size_t>(i)]) {
                 lbl += "...";
             }
-            const Rectangle row{contentClip.x + 2.0F, ry, contentClip.width - 4.0F, rowH};
             const bool rowHover = CheckCollisionPointRec(mouse, hit);
+            const Rectangle row{inner.x + 2.0F, ry, inner.width - 4.0F, rowH};
             DrawRectangleRec(row, rowHover ? ui::theme::BTN_HOVER
                                           : (rowAct ? ui::theme::SLOT_FILL : ui::theme::BTN_FILL));
             DrawRectangleLinesEx(row, 1.0F, rowAct ? ui::theme::BTN_BORDER : Fade(ui::theme::BTN_BORDER, 140));
@@ -1843,8 +2042,11 @@ void EditorScene::drawToolbar(const Font &font, Vector2 mouse) {
                                            {"Player spawn", Tool::SetPlayerSpawn, -1}};
         constexpr int nU = static_cast<int>(sizeof(kRows) / sizeof(kRows[0]));
         for (int i = 0; i < nU; ++i) {
-            const float ry = contentClip.y + static_cast<float>(i) * (rowH + rowGap);
-            const Rectangle hit{contentClip.x + 2.0F, ry, contentClip.width - 4.0F, rowH};
+            const float ry = inner.y + static_cast<float>(i) * (rowH + rowGap) - pickerScrollY_;
+            const Rectangle hit{inner.x + 2.0F, ry, inner.width - 4.0F, rowH};
+            if (ry + rowH < inner.y || ry > inner.y + inner.height) {
+                continue;
+            }
             bool rowAct = activeTool_ == kRows[static_cast<size_t>(i)].tool;
             if (kRows[static_cast<size_t>(i)].tool == Tool::PlaceEnemy) {
                 rowAct = rowAct && selectedEnemyType_ == kRows[static_cast<size_t>(i)].enemyType;
@@ -1870,6 +2072,7 @@ void EditorScene::draw(ResourceManager &resources) {
     const Font &font = resources.uiFont();
     const Vector2 mouse = GetMousePosition();
     drawToolbar(font, mouse);
+    drawPickerPanel(font, mouse);
     drawCasketLootPanel(font, mouse);
 
     const Vector2 worldMouse = worldMouseFromScreen(mouse);
@@ -1915,7 +2118,8 @@ void EditorScene::draw(ResourceManager &resources) {
 }
 
 Rectangle EditorScene::casketLootPanelRect() const {
-    return {static_cast<float>(config::WINDOW_WIDTH) - 292.0F, 384.0F, 276.0F, 124.0F};
+    const Rectangle t = toolbarPanelRect();
+    return {t.x + t.width + 12.0F, t.y + 220.0F, 276.0F, 124.0F};
 }
 
 void EditorScene::handleCasketLootPanelClick(const Vector2 &mouse, bool click, bool &uiConsumed) {
@@ -1929,7 +2133,9 @@ void EditorScene::handleCasketLootPanelClick(const Vector2 &mouse, bool click, b
     static constexpr const char *kCycle[] = {"",                "iron_armor",
                                              "vial_pure_blood", "vial_cordial_manic",
                                              "barbed_tunic",    "runic_shell",
-                                             "vial_raw_spirit", "hollow_ring"};
+                                             "vial_raw_spirit", "hollow_ring",
+                                             "frayed_amulet",   "vigilant_eye",
+                                             "pulse_link"};
     constexpr int nC = static_cast<int>(sizeof(kCycle) / sizeof(kCycle[0]));
     for (int slot = 0; slot < 3; ++slot) {
         const Rectangle row{panel.x + 8.0F, panel.y + 26.0F + static_cast<float>(slot) * 34.0F,

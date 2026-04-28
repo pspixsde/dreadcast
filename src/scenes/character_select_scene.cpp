@@ -259,13 +259,12 @@ void CharacterSelectScene::draw(ResourceManager &resources) {
     DrawTextEx(font, "Ranged", {detailX + padL + 6.0F, y}, 15.0F, 1.0F, ui::theme::SUBTITLE_TEXT);
     y += 22.0F;
     {
-        char b1[128];
-        std::snprintf(b1, sizeof(b1), "Curse bolt damage %.0f   range %.0f",
-                      static_cast<double>(sel.rangedDamage), static_cast<double>(sel.rangedRange));
+        char b1[160];
+        std::snprintf(b1, sizeof(b1),
+                      "Curse bolt damage %.0f   range %.0f   speed %.0f (world units / second)",
+                      static_cast<double>(sel.rangedDamage), static_cast<double>(sel.rangedRange),
+                      static_cast<double>(sel.rangedProjectileSpeed));
         DrawTextEx(font, b1, {detailX + padL + 14.0F, y}, 14.0F, 1.0F, RAYWHITE);
-        y += 22.0F;
-        DrawTextEx(font, "Mana cost per shot (see HUD in-game).", {detailX + padL + 14.0F, y}, 13.0F,
-                   1.0F, ui::theme::MUTED_TEXT);
         y += 22.0F;
     }
     DrawTextEx(font, "Melee", {detailX + padL + 6.0F, y}, 15.0F, 1.0F, ui::theme::SUBTITLE_TEXT);

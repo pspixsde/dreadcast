@@ -38,7 +38,9 @@
 #include "game/map_data.hpp"
 #include "scenes/menu_scene.hpp"
 #include "scenes/scene_manager.hpp"
+#include "ui/cooldown_overlay.hpp"
 #include "scenes/settings_scene.hpp"
+#include "scenes/archive_scene.hpp"
 
 namespace dreadcast {
 
@@ -480,8 +482,13 @@ void GameplayScene::spawnWorld() {
     for (float &cd : abilityCdRem_) {
         cd = 0.0F;
     }
+    for (float &flash : abilityFinishFlash_) {
+        flash = 0.0F;
+    }
+    runicShellFinishFlash_ = 0.0F;
     snareImpactFlash_ = 0.0F;
     lavaDamageAccumulator_ = 0.0F;
+    inLavaPrev_ = false;
     spiritRefreshFlashTimer_ = 0.0F;
     MapData map = defaultMapData();
     MapData loaded;
@@ -523,9 +530,12 @@ void GameplayScene::spawnWorld() {
         melee.range = cls.meleeRange;
         registry_.emplace<ecs::MeleeAttacker>(player_, melee);
     }
-    registry_.emplace<ecs::PlayerCombatBase>(player_, ecs::PlayerCombatBase{cls.rangedDamage});
+    registry_.emplace<ecs::PlayerCombatBase>(
+        player_, ecs::PlayerCombatBase{cls.rangedDamage, cls.rangedProjectileSpeed});
     registry_.emplace<ecs::PlayerMoveStats>(player_,
                                             ecs::PlayerMoveStats{cls.moveSpeed, cls.visionRange});
+    registry_.emplace<ecs::VigilantEyeState>(
+        player_, ecs::VigilantEyeState{cls.visionRange, cls.visionRange, 0.0F, false});
     registry_.emplace<ecs::PlayerClassStats>(player_,
                                              ecs::PlayerClassStats{cls.baseMaxHp, cls.baseMaxMana});
     registry_.emplace<ecs::PlayerLevel>(
@@ -614,6 +624,56 @@ void GameplayScene::spawnWorld() {
     }
 
     prevPlayerHp_ = cls.baseMaxHp;
+    applySkillTreeEffects();
+}
+
+void GameplayScene::applySkillTreeEffects() {
+    if (!registry_.valid(player_)) {
+        return;
+    }
+    const auto &learned = skillTreeUi_.learned();
+    const int ci = std::clamp(selectedClass_, 0, std::max(0, characterCount() - 1));
+    const CharacterClass &cls = characterAt(ci);
+    if (registry_.all_of<ecs::PlayerCombatBase>(player_)) {
+        auto &cb = registry_.get<ecs::PlayerCombatBase>(player_);
+        cb.rangedDamage = cls.rangedDamage + (learned[2] ? 2.0F : 0.0F);
+        cb.rangedProjectileSpeed = cls.rangedProjectileSpeed + (learned[3] ? 40.0F : 0.0F);
+    }
+    if (registry_.all_of<ecs::MeleeAttacker>(player_)) {
+        auto &ml = registry_.get<ecs::MeleeAttacker>(player_);
+        ml.range = cls.meleeRange + (learned[4] ? 8.0F : 0.0F);
+        ml.damage = cls.meleeDamage + (learned[5] ? 5.0F : 0.0F);
+    }
+}
+
+float GameplayScene::lavaAmbientLoudnessFromPlayer() const {
+    if (!registry_.valid(player_) || !registry_.all_of<ecs::Transform>(player_)) {
+        return 0.0F;
+    }
+    const Vector2 p = registry_.get<ecs::Transform>(player_).position;
+    const float nearDist = config::LAVA_AMBIENT_NEAR;
+    const float farDist = std::max(config::LAVA_AMBIENT_FAR, nearDist + 1.0F);
+    const float span = farDist - nearDist;
+
+    // Sum per-pool loudness in power domain so neighboring pools extend audible coverage
+    // without stacking multiple loop instances.
+    float combinedPower = 0.0F;
+    for (const auto e : registry_.view<ecs::Lava, ecs::Transform>()) {
+        const auto &t = registry_.get<ecs::Transform>(e);
+        const auto &lv = registry_.get<ecs::Lava>(e);
+        const float nx = std::clamp(p.x, t.position.x - lv.halfW, t.position.x + lv.halfW);
+        const float ny = std::clamp(p.y, t.position.y - lv.halfH, t.position.y + lv.halfH);
+        const float dx = p.x - nx;
+        const float dy = p.y - ny;
+        const float distEdge = std::sqrt(dx * dx + dy * dy);
+        if (distEdge >= farDist) {
+            continue;
+        }
+        const float loudness =
+            distEdge <= nearDist ? 1.0F : std::clamp((farDist - distEdge) / span, 0.0F, 1.0F);
+        combinedPower += loudness * loudness;
+    }
+    return std::clamp(std::sqrt(combinedPower), 0.0F, 1.0F);
 }
 
 Vector2 GameplayScene::worldMouseFromScreen(const Vector2 &screenMouse) const {
@@ -639,6 +699,53 @@ void GameplayScene::applyPlayerMaxManaFromEquipment() {
     mp.current = std::clamp(mpRatio * mp.max, 0.0F, mp.max);
 }
 
+void GameplayScene::applyPlayerMoveSpeedFromEquipment() {
+    if (!registry_.valid(player_) || !registry_.all_of<ecs::PlayerMoveStats>(player_)) {
+        return;
+    }
+    const int classIdx = std::clamp(selectedClass_, 0, std::max(0, characterCount() - 1));
+    const float baseSpeed = characterAt(classIdx).moveSpeed;
+    auto &stats = registry_.get<ecs::PlayerMoveStats>(player_);
+    stats.moveSpeed = baseSpeed + inventory_.totalEquippedMoveSpeedBonus();
+}
+
+void GameplayScene::tickVigilantEye(float frameDt) {
+    if (!registry_.valid(player_) || !registry_.all_of<ecs::VigilantEyeState, ecs::PlayerMoveStats>(player_)) {
+        return;
+    }
+    auto &state = registry_.get<ecs::VigilantEyeState>(player_);
+    auto &moveStats = registry_.get<ecs::PlayerMoveStats>(player_);
+
+    float speedSq = 0.0F;
+    if (registry_.all_of<ecs::Velocity>(player_)) {
+        const auto &vel = registry_.get<ecs::Velocity>(player_).value;
+        speedSq = vel.x * vel.x + vel.y * vel.y;
+    }
+    if (speedSq < 0.25F) {
+        state.stillSeconds += frameDt;
+    } else {
+        state.stillSeconds = 0.0F;
+        state.stillBonusActive = false;
+    }
+
+    const int amuletIdx = inventory_.equipped[static_cast<size_t>(EquipSlot::Amulet)];
+    const bool hasVigilantEye =
+        amuletIdx >= 0 && amuletIdx < static_cast<int>(inventory_.items.size()) &&
+        inventory_.items[static_cast<size_t>(amuletIdx)].catalogId == "vigilant_eye";
+    if (hasVigilantEye && state.stillSeconds >= config::VIGILANT_EYE_STILL_SECONDS) {
+        state.stillBonusActive = true;
+    } else if (!hasVigilantEye) {
+        state.stillBonusActive = false;
+    }
+
+    const float equippedBonus = inventory_.totalEquippedVisionRangeBonus();
+    const float stillBonus = (hasVigilantEye && state.stillBonusActive) ? config::VIGILANT_EYE_STILL_BONUS : 0.0F;
+    const float target = state.baseRange + equippedBonus + stillBonus;
+    const float t = std::min(1.0F, frameDt * config::VIGILANT_EYE_LERP_RATE);
+    state.currentRange += (target - state.currentRange) * t;
+    moveStats.visionRange = state.currentRange;
+}
+
 void GameplayScene::applyPlayerMaxHpFromEquipment() {
     if (!registry_.valid(player_) || !registry_.all_of<ecs::Health>(player_)) {
         return;
@@ -659,13 +766,17 @@ void GameplayScene::applyPlayerMaxHpFromEquipment() {
     prevPlayerHp_ = hp.current;
 }
 
-void GameplayScene::tickHealOverTime(float fixedDt) {
+void GameplayScene::tickHealOverTime(float fixedDt, ResourceManager &resources) {
     if (!registry_.valid(player_) || !registry_.all_of<ecs::Health>(player_)) {
         return;
     }
     auto &hpEarly = registry_.get<ecs::Health>(player_);
     if (hpEarly.current <= 0.001F) {
         if (registry_.all_of<ecs::HealOverTime>(player_)) {
+            const SoundHandle pb = resources.getSound("assets/sounds/pureblood.wav");
+            if (pb >= 0) {
+                resources.audio().stopExclusive(pb);
+            }
             registry_.remove<ecs::HealOverTime>(player_);
         }
         return;
@@ -675,6 +786,12 @@ void GameplayScene::tickHealOverTime(float fixedDt) {
     }
     auto &hot = registry_.get<ecs::HealOverTime>(player_);
     hot.elapsed += fixedDt;
+
+    const SoundHandle pbSnd = resources.getSound("assets/sounds/pureblood.wav");
+    if (pbSnd >= 0 && resources.audio().isExclusivePlaying(pbSnd)) {
+        const float v = std::exp(-3.0F * hot.elapsed / config::HOT_DURATION);
+        resources.audio().setExclusiveVolume(pbSnd, v);
+    }
 
     // Healing is suppressed while Cordial Manic is active; timer still runs.
     if (!registry_.all_of<ecs::ManicEffect>(player_)) {
@@ -690,6 +807,9 @@ void GameplayScene::tickHealOverTime(float fixedDt) {
     }
 
     if (hot.elapsed >= hot.duration - 1.0e-4F || hot.healedSoFar >= hot.totalHeal - 1.0e-3F) {
+        if (pbSnd >= 0) {
+            resources.audio().stopExclusive(pbSnd);
+        }
         registry_.remove<ecs::HealOverTime>(player_);
     }
 }
@@ -722,7 +842,31 @@ void GameplayScene::tickManaRegenOverTime(float fixedDt) {
     }
 }
 
-void GameplayScene::tickLavaHazard(float fixedDt) {
+void GameplayScene::tickLavaHazard(float fixedDt, ResourceManager &resources) {
+    const float loudness = lavaAmbientLoudnessFromPlayer();
+    const SoundHandle lavaAmb = resources.getSound("assets/sounds/lava.wav");
+    float targetVol = 0.0F;
+    bool lavaPlaying = false;
+    if (lavaAmb >= 0) {
+        targetVol = loudness;
+        // Ensure lava ambience is clearly audible while standing in lava even if source file is quiet.
+        if (inLavaPrev_) {
+            targetVol = std::max(targetVol, 0.35F);
+        }
+        // Slight boost: lava ambience clip may be quieter than one-shots.
+        targetVol = std::clamp(targetVol * 1.4F, 0.0F, 1.0F);
+        if (targetVol <= 0.001F) {
+            resources.audio().stopExclusive(lavaAmb);
+        } else {
+            resources.audio().playExclusiveLoop(lavaAmb, 1.0F, targetVol);
+            lavaPlaying = resources.audio().isExclusivePlaying(lavaAmb);
+        }
+    }
+    lavaAudioDbgLastHandle_ = lavaAmb;
+    lavaAudioDbgLastLoudness_ = loudness;
+    lavaAudioDbgLastTargetVol_ = targetVol;
+    lavaAudioDbgLastPlaying_ = lavaPlaying;
+
     if (!registry_.valid(player_) || !registry_.all_of<ecs::Health, ecs::Transform>(player_)) {
         return;
     }
@@ -739,6 +883,14 @@ void GameplayScene::tickLavaHazard(float fixedDt) {
             break;
         }
     }
+    if (inLava && !inLavaPrev_) {
+        pushStatusHud(StatusHudKind::LavaBurn, "", Color{220, 80, 30, 255}, StatusSign::Negative,
+                      true);
+    }
+    if (!inLava && inLavaPrev_) {
+        removeStatusHudKind(StatusHudKind::LavaBurn);
+    }
+    inLavaPrev_ = inLava;
     if (!inLava) {
         lavaDamageAccumulator_ = 0.0F;
         return;
@@ -749,10 +901,15 @@ void GameplayScene::tickLavaHazard(float fixedDt) {
         auto &hp = registry_.get<ecs::Health>(player_);
         hp.current -= config::LAVA_DAMAGE_PER_TICK;
         hp.current = std::max(0.0F, hp.current);
+        const SoundHandle hiss = resources.getSound("assets/sounds/lavahiss.wav");
+        if (hiss >= 0) {
+            const float p = 0.85F + static_cast<float>(GetRandomValue(0, 30)) / 100.0F;
+            resources.audio().playOneShot(hiss, p, 1.0F);
+        }
     }
 }
 
-void GameplayScene::tryUseConsumableSlot(int slotIndex) {
+void GameplayScene::tryUseConsumableSlot(int slotIndex, ResourceManager &resources) {
     if (slotIndex < 0 || slotIndex >= CONSUMABLE_SLOT_COUNT) {
         return;
     }
@@ -772,17 +929,31 @@ void GameplayScene::tryUseConsumableSlot(int slotIndex) {
             inventory_.consumableSlots[static_cast<size_t>(slotIndex)] = -1;
             removeInventoryItemAndRewrite(idx);
         }
-        applyVialHealOverTime(wasHot);
+        applyVialHealOverTime(wasHot, resources);
+        {
+            const SoundHandle g = resources.getSound("assets/sounds/gulp.wav");
+            if (g >= 0) {
+                const float p = 0.88F + static_cast<float>(GetRandomValue(0, 24)) / 100.0F;
+                resources.audio().playOneShot(g, p, 1.0F);
+            }
+        }
         return;
     }
     if (it.name == "Vial of Cordial Manic") {
-        if (!tryApplyCordialManic()) {
+        if (!tryApplyCordialManic(resources)) {
             return;
         }
         it.stackCount -= 1;
         if (it.stackCount <= 0) {
             inventory_.consumableSlots[static_cast<size_t>(slotIndex)] = -1;
             removeInventoryItemAndRewrite(idx);
+        }
+        {
+            const SoundHandle g = resources.getSound("assets/sounds/gulp.wav");
+            if (g >= 0) {
+                const float p = 0.88F + static_cast<float>(GetRandomValue(0, 24)) / 100.0F;
+                resources.audio().playOneShot(g, p, 1.0F);
+            }
         }
         return;
     }
@@ -795,11 +966,18 @@ void GameplayScene::tryUseConsumableSlot(int slotIndex) {
             removeInventoryItemAndRewrite(idx);
         }
         applyVialRawSpiritMana(wasActive);
+        {
+            const SoundHandle g = resources.getSound("assets/sounds/gulp.wav");
+            if (g >= 0) {
+                const float p = 0.88F + static_cast<float>(GetRandomValue(0, 24)) / 100.0F;
+                resources.audio().playOneShot(g, p, 1.0F);
+            }
+        }
         return;
     }
 }
 
-void GameplayScene::tryUseConsumableBagSlot(int bagSlot) {
+void GameplayScene::tryUseConsumableBagSlot(int bagSlot, ResourceManager &resources) {
     if (bagSlot < 0 || bagSlot >= dreadcast::BAG_SLOT_COUNT) {
         return;
     }
@@ -819,17 +997,31 @@ void GameplayScene::tryUseConsumableBagSlot(int bagSlot) {
             inventory_.bagSlots[static_cast<size_t>(bagSlot)] = -1;
             removeInventoryItemAndRewrite(idx);
         }
-        applyVialHealOverTime(wasHot);
+        applyVialHealOverTime(wasHot, resources);
+        {
+            const SoundHandle g = resources.getSound("assets/sounds/gulp.wav");
+            if (g >= 0) {
+                const float p = 0.88F + static_cast<float>(GetRandomValue(0, 24)) / 100.0F;
+                resources.audio().playOneShot(g, p, 1.0F);
+            }
+        }
         return;
     }
     if (it.name == "Vial of Cordial Manic") {
-        if (!tryApplyCordialManic()) {
+        if (!tryApplyCordialManic(resources)) {
             return;
         }
         it.stackCount -= 1;
         if (it.stackCount <= 0) {
             inventory_.bagSlots[static_cast<size_t>(bagSlot)] = -1;
             removeInventoryItemAndRewrite(idx);
+        }
+        {
+            const SoundHandle g = resources.getSound("assets/sounds/gulp.wav");
+            if (g >= 0) {
+                const float p = 0.88F + static_cast<float>(GetRandomValue(0, 24)) / 100.0F;
+                resources.audio().playOneShot(g, p, 1.0F);
+            }
         }
         return;
     }
@@ -842,11 +1034,18 @@ void GameplayScene::tryUseConsumableBagSlot(int bagSlot) {
             removeInventoryItemAndRewrite(idx);
         }
         applyVialRawSpiritMana(wasActive);
+        {
+            const SoundHandle g = resources.getSound("assets/sounds/gulp.wav");
+            if (g >= 0) {
+                const float p = 0.88F + static_cast<float>(GetRandomValue(0, 24)) / 100.0F;
+                resources.audio().playOneShot(g, p, 1.0F);
+            }
+        }
         return;
     }
 }
 
-void GameplayScene::applyVialHealOverTime(bool wasAlreadyActive) {
+void GameplayScene::applyVialHealOverTime(bool wasAlreadyActive, ResourceManager &resources) {
     if (!registry_.valid(player_)) {
         return;
     }
@@ -856,7 +1055,12 @@ void GameplayScene::applyVialHealOverTime(bool wasAlreadyActive) {
     registry_.emplace_or_replace<ecs::HealOverTime>(
         player_, ecs::HealOverTime{config::HOT_TOTAL_HEAL, config::HOT_DURATION, 0.0F, 0.0F});
     pushStatusHud(StatusHudKind::HealOverTime, "assets/textures/items/vial_pure_blood_icon.png",
-                  {220, 80, 80, 255});
+                  {220, 80, 80, 255}, StatusSign::Positive, false);
+    const SoundHandle pb = resources.getSound("assets/sounds/pureblood.wav");
+    if (pb >= 0) {
+        const float pitch = 0.92F + static_cast<float>(GetRandomValue(0, 16)) / 100.0F;
+        resources.audio().playExclusiveLoop(pb, pitch, 1.0F);
+    }
 }
 
 void GameplayScene::applyVialRawSpiritMana(bool wasAlreadyActive) {
@@ -870,10 +1074,10 @@ void GameplayScene::applyVialRawSpiritMana(bool wasAlreadyActive) {
         player_, ecs::ManaRegenOverTime{config::RAW_SPIRIT_MANA_TOTAL, config::RAW_SPIRIT_DURATION,
                                         0.0F, 0.0F});
     pushStatusHud(StatusHudKind::ManaRegenOverTime, "assets/textures/items/vial_raw_spirit_icon.png",
-                  {120, 170, 255, 255});
+                  {120, 170, 255, 255}, StatusSign::Positive, false);
 }
 
-bool GameplayScene::tryApplyCordialManic() {
+bool GameplayScene::tryApplyCordialManic(ResourceManager &resources) {
     if (!registry_.valid(player_) || !registry_.all_of<ecs::Health>(player_)) {
         return false;
     }
@@ -886,11 +1090,16 @@ bool GameplayScene::tryApplyCordialManic() {
     registry_.emplace_or_replace<ecs::ManicEffect>(
         player_, ecs::ManicEffect{config::MANIC_DURATION, 0.0F, drainTotal, 0.0F});
     pushStatusHud(StatusHudKind::ManicEffect, "assets/textures/items/vial_cordial_manic_icon.png",
-                  {255, 210, 120, 255});
+                  {255, 210, 120, 255}, StatusSign::Positive, false);
+    const SoundHandle hb = resources.getSound("assets/sounds/fastheartbeat.wav");
+    if (hb >= 0) {
+        const float pitch = 9.0F / config::MANIC_DURATION;
+        resources.audio().playExclusive(hb, pitch, 1.0F);
+    }
     return true;
 }
 
-void GameplayScene::tickManicEffect(float fixedDt) {
+void GameplayScene::tickManicEffect(float fixedDt, ResourceManager &resources) {
     if (!registry_.valid(player_) || !registry_.all_of<ecs::ManicEffect, ecs::Health>(player_)) {
         return;
     }
@@ -909,6 +1118,10 @@ void GameplayScene::tickManicEffect(float fixedDt) {
     }
     if (me.elapsed >= me.duration - 1.0e-4F ||
         me.hpDrained >= me.hpDrainTotal - 1.0e-3F) {
+        const SoundHandle hb = resources.getSound("assets/sounds/fastheartbeat.wav");
+        if (hb >= 0) {
+            resources.audio().stopExclusive(hb);
+        }
         registry_.remove<ecs::ManicEffect>(player_);
     }
 }
@@ -921,6 +1134,7 @@ void GameplayScene::tickRunicShellCooldown(float fixedDt) {
     cd.remaining -= fixedDt;
     if (cd.remaining <= 0.0F) {
         registry_.remove<ecs::RunicShellCooldown>(player_);
+        runicShellFinishFlash_ = 0.0001F;
     }
 }
 
@@ -1222,9 +1436,9 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
                 spawnItemPickupAtPlayer(invAction.itemIndex);
             } else if (invAction.type == ui::InventoryAction::Use) {
                 if (invAction.useConsumableSlot >= 0) {
-                    tryUseConsumableSlot(invAction.useConsumableSlot);
+                    tryUseConsumableSlot(invAction.useConsumableSlot, resources);
                 } else if (invAction.useBagSlot >= 0) {
-                    tryUseConsumableBagSlot(invAction.useBagSlot);
+                    tryUseConsumableBagSlot(invAction.useBagSlot, resources);
                 }
             }
         }
@@ -1236,6 +1450,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         auto &pl = registry_.get<ecs::PlayerLevel>(player_);
         skillTreeUi_.update(input, pl.skillPoints, frameDt, skillTreeEsc, flashNoSkillPoints);
     }
+    applySkillTreeEffects();
     if (flashNoSkillPoints) {
         skillPointFlashTimer_ = 0.55F;
     }
@@ -1259,6 +1474,22 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
 
     applyPlayerMaxHpFromEquipment();
     applyPlayerMaxManaFromEquipment();
+    applyPlayerMoveSpeedFromEquipment();
+    tickVigilantEye(frameDt);
+    for (float &flash : abilityFinishFlash_) {
+        if (flash > 0.0F) {
+            flash += frameDt;
+            if (flash > 0.30F) {
+                flash = 0.0F;
+            }
+        }
+    }
+    if (runicShellFinishFlash_ > 0.0F) {
+        runicShellFinishFlash_ += frameDt;
+        if (runicShellFinishFlash_ > 0.30F) {
+            runicShellFinishFlash_ = 0.0F;
+        }
+    }
 
     bool aimSnappedAfterPauseEsc = false;
     if (!escConsumedByCloseUi && !inventoryUi_.isOpen() && input.isKeyPressed(KEY_ESCAPE)) {
@@ -1280,16 +1511,21 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         const bool click = input.isMouseButtonPressed(MOUSE_BUTTON_LEFT);
         const int w = config::WINDOW_WIDTH;
         const int h = config::WINDOW_HEIGHT;
-        resumeButton_.rect = {(w - 260.0F) * 0.5F, h * 0.5F - 95.0F, 260.0F, 48.0F};
+        resumeButton_.rect = {(w - 260.0F) * 0.5F, h * 0.5F - 127.0F, 260.0F, 48.0F};
         resumeButton_.label = "Resume";
-        settingsPauseButton_.rect = {(w - 260.0F) * 0.5F, h * 0.5F - 30.0F, 260.0F, 48.0F};
+        archivePauseButton_.rect = {(w - 260.0F) * 0.5F, h * 0.5F - 62.0F, 260.0F, 48.0F};
+        archivePauseButton_.label = "Archive";
+        settingsPauseButton_.rect = {(w - 260.0F) * 0.5F, h * 0.5F + 3.0F, 260.0F, 48.0F};
         settingsPauseButton_.label = "Settings";
-        mainMenuButton_.rect = {(w - 260.0F) * 0.5F, h * 0.5F + 35.0F, 260.0F, 48.0F};
+        mainMenuButton_.rect = {(w - 260.0F) * 0.5F, h * 0.5F + 68.0F, 260.0F, 48.0F};
         mainMenuButton_.label = "Main Menu";
         if (resumeButton_.wasClicked(mouse, click)) {
             paused_ = false;
             aimScreenPos_ = mouse;
             aimScreenInit_ = true;
+        }
+        if (archivePauseButton_.wasClicked(mouse, click)) {
+            scenes.push(std::make_unique<ArchiveScene>());
         }
         if (settingsPauseButton_.wasClicked(mouse, click)) {
             scenes.push(std::make_unique<SettingsScene>());
@@ -1356,13 +1592,14 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
     if (!worldBlocked) {
         ecs::input_system(registry_, input, camera_.camera(), aimScreenPos_);
         if (ecs::combat_player_ranged(registry_, input, camera_.camera(), player_, noManaFlashTimer_,
-                                      aimScreenPos_)) {
-            if (!registry_.all_of<ecs::LeadFeverEffect>(player_)) {
-                const SoundHandle gun = resources.getSound("assets/sounds/gun_shot.wav");
-                if (gun >= 0) {
-                    const float p = 0.85F + static_cast<float>(GetRandomValue(0, 30)) / 100.0F;
-                    resources.audio().playOneShot(gun, p, 1.0F);
-                }
+                                      aimScreenPos_, &resources)) {
+            const bool leadFeverActive = registry_.all_of<ecs::LeadFeverEffect>(player_);
+            const char *shotSound =
+                leadFeverActive ? "assets/sounds/1scatterattack.wav" : "assets/sounds/gun_shot.wav";
+            const SoundHandle gun = resources.getSound(shotSound);
+            if (gun >= 0) {
+                const float p = 0.85F + static_cast<float>(GetRandomValue(0, 30)) / 100.0F;
+                resources.audio().playOneShot(gun, p, 1.0F);
             }
         }
     } else if (registry_.valid(player_) && registry_.all_of<ecs::Velocity>(player_)) {
@@ -1383,7 +1620,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         tickLeadFeverEffect(config::FIXED_DT);
         tickSnareDash(config::FIXED_DT);
         tickSlugAim(config::FIXED_DT, resources);
-        tickChamberState(config::FIXED_DT);
+        tickChamberState(config::FIXED_DT, resources);
         if (!worldBlocked) {
             ecs::combat_player_melee(registry_, input, player_, config::FIXED_DT);
         } else if (registry_.valid(player_) && registry_.all_of<ecs::MeleeAttacker>(player_)) {
@@ -1414,11 +1651,18 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         ecs::movement_system(registry_, config::FIXED_DT);
         ecs::wall_resolve_collisions(registry_);
         ecs::unit_resolve_collisions(registry_);
-        tickLavaHazard(config::FIXED_DT);
+        tickLavaHazard(config::FIXED_DT, resources);
         ecs::wall_destroy_projectiles(registry_);
         ecs::projectile_system(registry_, config::FIXED_DT);
+        const float snareFlashBefore = snareImpactFlash_;
         ecs::collision::projectile_hits(registry_, player_, &inventory_, &snareImpactWorld_,
                                         &snareImpactFlash_);
+        if (snareFlashBefore <= 0.001F && snareImpactFlash_ > 0.001F) {
+            const SoundHandle s = resources.getSound("assets/sounds/2hit.wav");
+            if (s >= 0) {
+                resources.audio().playOneShot(s, 1.0F, 1.0F);
+            }
+        }
         ecs::collision::player_pickup_mana_shards(registry_, player_);
 
         for (const auto e : registry_.view<ecs::Enemy, ecs::Health, ecs::EnemyAI>()) {
@@ -1446,8 +1690,8 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         }
 
         ecs::death_system(registry_, player_, &enemiesSlain_);
-        tickManicEffect(config::FIXED_DT);
-        tickHealOverTime(config::FIXED_DT);
+        tickManicEffect(config::FIXED_DT, resources);
+        tickHealOverTime(config::FIXED_DT, resources);
         tickManaRegenOverTime(config::FIXED_DT);
         tickRunicShellCooldown(config::FIXED_DT);
         checkRunicShellTrigger();
@@ -1541,19 +1785,29 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
 
     if (!worldBlocked && !paused_) {
         if (input.isKeyPressed(KEY_C)) {
-            tryUseConsumableSlot(0);
+            tryUseConsumableSlot(0, resources);
         }
         if (input.isKeyPressed(KEY_V)) {
-            tryUseConsumableSlot(1);
+            tryUseConsumableSlot(1, resources);
         }
         if (input.isKeyPressed(KEY_ONE)) {
-            tryUseAbility(0);
+            if (tryUseAbility(0)) {
+                const SoundHandle s = resources.getSound("assets/sounds/1start.wav");
+                if (s >= 0) {
+                    resources.audio().playOneShot(s, 1.0F, 1.0F);
+                }
+            }
         }
         if (input.isKeyPressed(KEY_TWO)) {
-            tryUseAbility(1);
+            if (tryUseAbility(1)) {
+                const SoundHandle s = resources.getSound("assets/sounds/2throw.wav");
+                if (s >= 0) {
+                    resources.audio().playOneShot(s, 1.0F, 1.0F);
+                }
+            }
         }
         if (input.isKeyPressed(KEY_THREE)) {
-            tryUseAbility(2);
+            (void)tryUseAbility(2);
         }
     }
 
@@ -1623,8 +1877,38 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
             }
 
             if (input.isKeyPressed(KEY_E) && hoveredPickup_ != entt::null) {
-                ecs::collision::try_pickup_item_entity(registry_, hoveredPickup_, inventory_,
-                                                       inventoryFullFlashTimer_);
+                bool pickupConsumable = false;
+                EquipSlot pickupSlot = EquipSlot::Armor;
+                if (registry_.valid(hoveredPickup_) && registry_.all_of<ecs::ItemPickup>(hoveredPickup_)) {
+                    const int pickupIndex = registry_.get<ecs::ItemPickup>(hoveredPickup_).itemIndex;
+                    if (pickupIndex >= 0 && pickupIndex < static_cast<int>(inventory_.items.size())) {
+                        const auto &item = inventory_.items[static_cast<size_t>(pickupIndex)];
+                        pickupConsumable = item.isConsumable;
+                        pickupSlot = item.slot;
+                    }
+                }
+                const bool pickedUp =
+                    ecs::collision::try_pickup_item_entity(registry_, hoveredPickup_, inventory_,
+                                                           inventoryFullFlashTimer_);
+                if (pickedUp) {
+                    const char *path = nullptr;
+                    if (pickupConsumable) {
+                        path = "assets/sounds/vialpickup.wav";
+                    } else if (pickupSlot == EquipSlot::Ring) {
+                        path = "assets/sounds/ringpickup.wav";
+                    } else if (pickupSlot == EquipSlot::Amulet) {
+                        path = "assets/sounds/amuletpickup.wav";
+                    } else if (pickupSlot == EquipSlot::Armor) {
+                        path = "assets/sounds/armorpickup.wav";
+                    }
+                    if (path != nullptr) {
+                        const SoundHandle s = resources.getSound(path);
+                        if (s >= 0) {
+                            const float p = 0.85F + static_cast<float>(GetRandomValue(0, 30)) / 100.0F;
+                            resources.audio().playOneShot(s, p, 1.0F);
+                        }
+                    }
+                }
                 hoveredPickup_ = entt::null;
             }
         }
@@ -1692,7 +1976,7 @@ void GameplayScene::draw(ResourceManager &resources) {
         rscdSeconds = cd.remaining;
     }
     inventoryUi_.drawWithoutDragGhost(resources.uiFont(), resources, w, h, inventory_, hpRatioDraw,
-                                      rscdRatio, rscdSeconds);
+                                      rscdRatio, rscdSeconds, runicShellFinishFlash_);
     if (anvilOpen_) {
         drawAnvilUi(resources, buildAnvilUiLayout());
     }
@@ -1817,7 +2101,7 @@ void GameplayScene::drawFogDebugOverlay(const Font &font) {
     float ty = margin;
     char buf[320];
 
-    DrawRectangle(0, 0, 440, 210, Color{0, 0, 0, 170});
+    DrawRectangle(0, 0, 520, 250, Color{0, 0, 0, 170});
 
     snprintf(buf, sizeof(buf), "[Fog debug] F3 toggles this panel");
     DrawTextEx(font, buf, {tx, ty}, textSz, 1.0F, RAYWHITE);
@@ -1844,6 +2128,18 @@ void GameplayScene::drawFogDebugOverlay(const Font &font) {
 
     DrawTextEx(font, "Mask: BLACK=visible hole, WHITE=fog (before composite)", {tx, ty}, 14.0F,
                1.0F, Color{200, 200, 200, 255});
+    ty += lineH;
+
+    snprintf(buf, sizeof(buf), "Lava audio: handle=%d playing=%d inLava=%d",
+             static_cast<int>(lavaAudioDbgLastHandle_), lavaAudioDbgLastPlaying_ ? 1 : 0,
+             inLavaPrev_ ? 1 : 0);
+    DrawTextEx(font, buf, {tx, ty}, textSz, 1.0F, Color{170, 235, 170, 255});
+    ty += lineH;
+
+    snprintf(buf, sizeof(buf), "Lava loudness=%.3f targetVol=%.3f",
+             static_cast<double>(lavaAudioDbgLastLoudness_),
+             static_cast<double>(lavaAudioDbgLastTargetVol_));
+    DrawTextEx(font, buf, {tx, ty}, textSz, 1.0F, Color{170, 235, 170, 255});
     ty += lineH;
 
     if (fogResourcesReady_ && IsTextureValid(fogSceneTarget_.texture) &&
@@ -1963,11 +2259,15 @@ void GameplayScene::tickFloatingNumbers(float frameDt) {
 }
 
 void GameplayScene::drawFloatingCombatNumbers(ResourceManager &resources) {
-    if (floatingNumbers_.empty() || !resources.settings().showDamageNumbers) {
+    if (floatingNumbers_.empty()) {
         return;
     }
+    const bool showDmg = resources.settings().showDamageNumbers;
     const Font &font = resources.uiFont();
     for (const auto &fn : floatingNumbers_) {
+        if (!showDmg && !fn.isManaRestore) {
+            continue;
+        }
         const float t = fn.lifetime > 1.0e-4F ? fn.elapsed / fn.lifetime : 1.0F;
         const float alpha = std::clamp(1.0F - t, 0.0F, 1.0F);
         const Vector2 iso = worldToIso(fn.worldPos);
@@ -1975,7 +2275,9 @@ void GameplayScene::drawFloatingCombatNumbers(ResourceManager &resources) {
         screen.x += fn.driftX * t;
         screen.y -= 42.0F * t;
         char buf[32];
-        if (fn.amount >= 10.0F) {
+        if (fn.isManaRestore) {
+            std::snprintf(buf, sizeof(buf), "+%.0f", static_cast<double>(fn.amount));
+        } else if (fn.amount >= 10.0F) {
             std::snprintf(buf, sizeof(buf), "%.0f", static_cast<double>(fn.amount));
         } else {
             std::snprintf(buf, sizeof(buf), "%.1f", static_cast<double>(fn.amount));
@@ -1983,8 +2285,9 @@ void GameplayScene::drawFloatingCombatNumbers(ResourceManager &resources) {
         const float fs = 18.0F;
         const Vector2 dim = MeasureTextEx(font, buf, fs, 1.0F);
         const unsigned char a = static_cast<unsigned char>(alpha * 255.0F);
-        const Color col =
-            fn.isHeal ? Color{110, 255, 150, a} : Color{255, 95, 85, a};
+        const Color col = fn.isManaRestore ? Color{120, 210, 255, a}
+                           : fn.isHeal        ? Color{110, 255, 150, a}
+                                              : Color{255, 95, 85, a};
         DrawTextEx(font, buf, {screen.x - dim.x * 0.5F + 1.0F, screen.y - dim.y * 0.5F + 1.0F}, fs,
                    1.0F, Fade(BLACK, alpha * 0.65F));
         DrawTextEx(font, buf, {screen.x - dim.x * 0.5F, screen.y - dim.y * 0.5F}, fs, 1.0F, col);
@@ -2008,6 +2311,8 @@ void GameplayScene::syncStatusHudOrder() {
                                return !registry_.all_of<ecs::LeadFeverEffect>(player_);
                            case StatusHudKind::ManaRegenOverTime:
                                return !registry_.all_of<ecs::ManaRegenOverTime>(player_);
+                           case StatusHudKind::LavaBurn:
+                               return !inLavaPrev_;
                            }
                            return true;
                        }),
@@ -2020,10 +2325,10 @@ void GameplayScene::removeStatusHudKind(StatusHudKind kind) {
                          statusHudOrder_.end());
 }
 
-void GameplayScene::pushStatusHud(StatusHudKind kind, std::string iconPath, Color outline) {
+void GameplayScene::pushStatusHud(StatusHudKind kind, std::string iconPath, Color outline,
+                                  StatusSign sign, bool persistent) {
     removeStatusHudKind(kind);
-    statusHudOrder_.push_back(
-        ActiveStatusHud{kind, std::move(iconPath), outline});
+    statusHudOrder_.push_back(ActiveStatusHud{kind, sign, persistent, std::move(iconPath), outline});
 }
 
 Vector2 GameplayScene::playerAimDirectionWorld() const {
@@ -2035,8 +2340,27 @@ Vector2 GameplayScene::playerAimDirectionWorld() const {
 }
 
 void GameplayScene::tickAbilityCooldowns(float fixedDt) {
-    for (float &cd : abilityCdRem_) {
-        cd = std::max(0.0F, cd - fixedDt);
+    static int manaFloatDrift = 0;
+    for (size_t i = 0; i < 3; ++i) {
+        const float prev = abilityCdRem_[i];
+        abilityCdRem_[i] = std::max(0.0F, abilityCdRem_[i] - fixedDt);
+        if (prev > 0.001F && abilityCdRem_[i] <= 0.001F) {
+            abilityFinishFlash_[i] = 0.0001F;
+            const float refund = inventory_.totalEquippedAbilityCooldownManaRefund();
+            if (refund > 0.001F && registry_.valid(player_) && registry_.all_of<ecs::Mana>(player_)) {
+                auto &mana = registry_.get<ecs::Mana>(player_);
+                mana.current = std::clamp(mana.current + refund, 0.0F, mana.max);
+                if (registry_.all_of<ecs::Transform>(player_)) {
+                    FloatingNumber fn{};
+                    fn.worldPos = registry_.get<ecs::Transform>(player_).position;
+                    fn.amount = refund;
+                    fn.isHeal = false;
+                    fn.isManaRestore = true;
+                    fn.driftX = static_cast<float>((manaFloatDrift++ % 19) - 9) * 3.5F;
+                    floatingNumbers_.push_back(fn);
+                }
+            }
+        }
     }
 }
 
@@ -2167,32 +2491,35 @@ void GameplayScene::fireCalamitySlug(const AbilityDef &slugDef, const Vector2 &d
     registry_.emplace<ecs::PierceHitRecord>(proj, ecs::PierceHitRecord{});
 }
 
-void GameplayScene::tryUseAbility(int abilityIndex) {
+bool GameplayScene::tryUseAbility(int abilityIndex) {
     if (abilityIndex < 0 || abilityIndex > 2) {
-        return;
+        return false;
     }
     if (!registry_.valid(player_) || !registry_.all_of<ecs::Mana>(player_)) {
-        return;
+        return false;
     }
     if (registry_.all_of<ecs::SlugAimState>(player_) ||
         registry_.all_of<ecs::SnareDashState>(player_)) {
-        return;
+        return false;
     }
     const int ci = std::clamp(selectedClass_, 0, std::max(0, characterCount() - 1));
     if (ci != 0) {
-        return;
+        return false;
     }
     const auto &abilities = undeadHunterAbilities().abilities;
     const AbilityDef &def = abilities[static_cast<size_t>(abilityIndex)];
     if (abilityCdRem_[static_cast<size_t>(abilityIndex)] > 0.001F) {
-        return;
+        return false;
     }
     auto &mana = registry_.get<ecs::Mana>(player_);
-    if (mana.current + 1.0e-4F < def.manaCost) {
+    const float manaMult = inventory_.totalEquippedAbilityManaCostMultiplier();
+    const float effectiveManaCost =
+        std::max(0.0F, std::floor(def.manaCost * manaMult + 1.0e-4F));
+    if (mana.current + 1.0e-4F < effectiveManaCost) {
         noManaFlashTimer_ = 1.2F;
-        return;
+        return false;
     }
-    mana.current -= def.manaCost;
+    mana.current -= effectiveManaCost;
     abilityCdRem_[static_cast<size_t>(abilityIndex)] = def.cooldown;
 
     if (abilityIndex == 0) {
@@ -2200,8 +2527,9 @@ void GameplayScene::tryUseAbility(int abilityIndex) {
         registry_.emplace_or_replace<ecs::LeadFeverEffect>(
             player_, ecs::LeadFeverEffect{leadDuration, 0.0F});
         const std::string icon = def.iconPath;
-        pushStatusHud(StatusHudKind::LeadFever, icon, {140, 220, 160, 255});
-        return;
+        pushStatusHud(StatusHudKind::LeadFever, icon, {140, 220, 160, 255}, StatusSign::Positive,
+                      false);
+        return true;
     }
     if (abilityIndex == 1) {
         const AbilityDef &snareDef = abilities[1];
@@ -2214,13 +2542,14 @@ void GameplayScene::tryUseAbility(int abilityIndex) {
         const float dashDistance = std::max(1.0F, snareDef.dashDistance);
         registry_.emplace_or_replace<ecs::SnareDashState>(
             player_, ecs::SnareDashState{dashSpeed, dashDistance, 0.0F, {-f.x, -f.y}});
-        return;
+        return true;
     }
     const AbilityDef &slugDef = abilities[2];
     const Vector2 aimDir = playerAimDirectionWorld();
     const float aimDuration = std::max(0.05F, slugDef.aimDuration);
     registry_.emplace_or_replace<ecs::SlugAimState>(
         player_, ecs::SlugAimState{aimDuration, 0.0F, aimDir});
+    return true;
 }
 
 void GameplayScene::drawHud(ResourceManager &resources) {
@@ -2467,21 +2796,13 @@ void GameplayScene::drawHud(ResourceManager &resources) {
                     DrawTexturePro(tex, src, dst, {0.0F, 0.0F}, 0.0F, WHITE);
                 }
             }
-            if (ei == 0 && rscdRatioHud > 0.001F && pit->name == "Runic Shell") {
-                DrawRectangleRec(eqR, Fade(BLACK, 0.45F * rscdRatioHud));
-                char cdBuf[16];
-                const int sec = static_cast<int>(std::ceil(static_cast<double>(rscdSecHud)));
-                std::snprintf(cdBuf, sizeof(cdBuf), "%ds", sec);
-                const float cdFs = 16.0F;
-                const Vector2 cdDim = MeasureTextEx(font, cdBuf, cdFs, 1.0F);
-                DrawTextEx(font, cdBuf,
-                           {eqR.x + (eqR.width - cdDim.x) * 0.5F + 1.0F,
-                            eqR.y + (eqR.height - cdDim.y) * 0.5F + 1.0F},
-                           cdFs, 1.0F, Fade(BLACK, 180));
-                DrawTextEx(font, cdBuf,
-                           {eqR.x + (eqR.width - cdDim.x) * 0.5F,
-                            eqR.y + (eqR.height - cdDim.y) * 0.5F},
-                           cdFs, 1.0F, {200, 220, 255, 255});
+            if (ei == 0 && pit->name == "Runic Shell" &&
+                (rscdRatioHud > 0.001F || runicShellFinishFlash_ > 0.001F)) {
+                ui::drawCooldownOverlay(
+                    eqR,
+                    ui::CooldownVisual{rscdSecHud, config::RUNIC_SHELL_COOLDOWN, runicShellFinishFlash_,
+                                       22.0F},
+                    font);
             }
         } else {
             const Texture2D slotTex = resources.getTexture(kHudEquipSlotIcons[ei]);
@@ -2587,6 +2908,16 @@ void GameplayScene::drawHud(ResourceManager &resources) {
             tRem = mr.duration > 0.001F ? std::max(0.0F, 1.0F - mr.elapsed / mr.duration) : 0.0F;
             ringCol = {140, 190, 255, 255};
             fillFallback = {25, 45, 90, 255};
+        } else if (hud.kind == StatusHudKind::LavaBurn) {
+            tRem = 1.0F;
+            ringCol = {220, 80, 60, 255};
+            fillFallback = {120, 35, 20, 255};
+        }
+        if (hud.persistent) {
+            tRem = 1.0F;
+        }
+        if (hud.sign == StatusSign::Negative) {
+            ringCol = {200, 80, 60, 255};
         }
 
         if (!hud.iconPath.empty()) {
@@ -2755,8 +3086,10 @@ void GameplayScene::drawHud(ResourceManager &resources) {
 
             if (resources.settings().showAbilityManaCost) {
                 char mcBuf[16];
-                std::snprintf(mcBuf, sizeof(mcBuf), "%.0f",
-                              static_cast<double>(ad.manaCost));
+                const float manaMult = inventory_.totalEquippedAbilityManaCostMultiplier();
+                const float dispCost =
+                    std::max(0.0F, std::floor(ad.manaCost * manaMult + 1.0e-4F));
+                std::snprintf(mcBuf, sizeof(mcBuf), "%.0f", static_cast<double>(dispCost));
                 constexpr float mcFs = 24.0F; // MANA COST FONT SIZE
                 const Vector2 mcDim = MeasureTextEx(font, mcBuf, mcFs, 1.0F);
                 const Color mcCol{80, 140, 255, 255};
@@ -2768,22 +3101,9 @@ void GameplayScene::drawHud(ResourceManager &resources) {
 
             const float cdTot = ad.cooldown;
             const float cdRem = abilityCdRem_[static_cast<size_t>(ai)];
-            if (cdTot > 0.001F && cdRem > 0.001F) {
-                const float ratio = std::min(1.0F, cdRem / cdTot);
-                DrawRectangleRec(abR, Fade(BLACK, 0.45F * ratio));
-                char cdBuf[16];
-                std::snprintf(cdBuf, sizeof(cdBuf), "%ds",
-                              static_cast<int>(std::ceil(static_cast<double>(cdRem))));
-                const float cdFs = 22.0F;
-                const Vector2 cdDim = MeasureTextEx(font, cdBuf, cdFs, 1.0F);
-                DrawTextEx(font, cdBuf,
-                           {abR.x + (abR.width - cdDim.x) * 0.5F + 1.0F,
-                            abR.y + (abR.height - cdDim.y) * 0.5F + 1.0F},
-                           cdFs, 1.0F, Fade(BLACK, 180));
-                DrawTextEx(font, cdBuf,
-                           {abR.x + (abR.width - cdDim.x) * 0.5F,
-                            abR.y + (abR.height - cdDim.y) * 0.5F},
-                           cdFs, 1.0F, {200, 220, 255, 255});
+            const float cdFlash = abilityFinishFlash_[static_cast<size_t>(ai)];
+            if ((cdTot > 0.001F && cdRem > 0.001F) || cdFlash > 0.001F) {
+                ui::drawCooldownOverlay(abR, ui::CooldownVisual{cdRem, cdTot, cdFlash, 28.0F}, font);
             }
 
             drawHudKeyBadge(font, keyLbl[ai], ax, abY);
@@ -2984,7 +3304,7 @@ void GameplayScene::drawGameOverScreen(ResourceManager &resources) {
                              RAYWHITE, ui::theme::BTN_BORDER);
 }
 
-void GameplayScene::tickChamberState(float fixedDt) {
+void GameplayScene::tickChamberState(float fixedDt, ResourceManager &resources) {
     if (!registry_.valid(player_) || !registry_.all_of<ecs::ChamberState>(player_)) {
         return;
     }
@@ -3004,6 +3324,11 @@ void GameplayScene::tickChamberState(float fixedDt) {
         if (ch.idleTimer >= ch.idleReloadThreshold - 1.0e-4F) {
             ch.shotsRemaining = ch.maxShots;
             ch.idleTimer = 0.0F;
+            const SoundHandle h = resources.getSound("assets/sounds/reload.wav");
+            if (h >= 0) {
+                const float p = 1.15F + static_cast<float>(GetRandomValue(0, 16)) / 100.0F;
+                resources.audio().playOneShot(h, p, 1.0F);
+            }
         }
     } else {
         ch.idleTimer = 0.0F;
@@ -4025,6 +4350,8 @@ void GameplayScene::drawPauseOverlay(ResourceManager &resources) {
     const Vector2 mouse = GetMousePosition();
     resumeButton_.draw(font, 24.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER, RAYWHITE,
                        ui::theme::BTN_BORDER);
+    archivePauseButton_.draw(font, 24.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER,
+                             RAYWHITE, ui::theme::BTN_BORDER);
     settingsPauseButton_.draw(font, 24.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER,
                               RAYWHITE, ui::theme::BTN_BORDER);
     mainMenuButton_.draw(font, 24.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER, RAYWHITE,

@@ -45,6 +45,11 @@ class AudioSystem {
 
     void playOneShot(SoundHandle handle, float pitch, float volumeMul = 1.0F);
     void playExclusive(SoundHandle handle, float pitch, float volumeMul = 1.0F);
+    /// Starts looping playback on the exclusive slot if not already playing; always updates volume.
+    void playExclusiveLoop(SoundHandle handle, float pitch, float volumeMul);
+    void setExclusiveVolume(SoundHandle handle, float volumeMul);
+    void stopExclusive(SoundHandle handle);
+    [[nodiscard]] bool isExclusivePlaying(SoundHandle handle) const;
     void stopAll(SoundHandle handle);
 
   private:

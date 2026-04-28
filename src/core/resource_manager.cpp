@@ -167,9 +167,13 @@ SoundHandle ResourceManager::getSound(const std::string &path) {
     }
     const std::string resolved = resolveAssetPath(path);
     const SoundHandle h = audio_.loadSound(resolved);
-    if (h >= 0) {
-        soundHandles_[path] = h;
+    if (h < 0) {
+        // Cache failures too, so per-frame callers do not spam retry/log loops.
+        soundHandles_[path] = -1;
+        TraceLog(LOG_WARNING, "Dreadcast: sound load failed for \"%s\"", resolved.c_str());
+        return -1;
     }
+    soundHandles_[path] = h;
     return h;
 }
 

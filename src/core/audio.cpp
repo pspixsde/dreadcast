@@ -1,17 +1,72 @@
 #include "core/audio.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <memory>
 #include <unordered_map>
 
 #define MINIAUDIO_IMPLEMENTATION
+// Ensure OGG/Vorbis decoding when loading .ogg ambience assets.
+#define MA_ENABLE_VORBIS
+#define MA_ENABLE_STB_VORBIS
 #include <miniaudio.h>
 
 namespace dreadcast {
 
 namespace {
+
+[[nodiscard]] bool endsWithIgnoreCase(const std::string &s, const char *suffix) {
+    const size_t sl = s.size();
+    const size_t tl = std::strlen(suffix);
+    if (sl < tl) {
+        return false;
+    }
+    const size_t off = sl - tl;
+    for (size_t i = 0; i < tl; ++i) {
+        const unsigned char a = static_cast<unsigned char>(s[off + i]);
+        const unsigned char b = static_cast<unsigned char>(suffix[i]);
+        if (std::tolower(a) != std::tolower(b)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] ma_uint32 soundFlagsForPath(const std::string &path) {
+    // Stream compressed ambience/music-like assets (not fully decoded upfront).
+    if (endsWithIgnoreCase(path, ".ogg")) {
+        return MA_SOUND_FLAG_STREAM;
+    }
+    return 0;
+}
+
+[[nodiscard]] ma_result initSoundFromFileWithFallback(ma_engine *engine, const std::string &path,
+                                                      ma_uint32 preferredFlags,
+                                                      ma_sound *outSound) {
+    if (engine == nullptr || outSound == nullptr) {
+        return MA_INVALID_ARGS;
+    }
+    const ma_uint32 attempts[] = {
+        preferredFlags,
+        0,
+        MA_SOUND_FLAG_DECODE,
+    };
+    ma_result last = MA_ERROR;
+    ma_uint32 prev = 0xFFFFFFFFu;
+    for (ma_uint32 flags : attempts) {
+        if (flags == prev) {
+            continue;
+        }
+        prev = flags;
+        last = ma_sound_init_from_file(engine, path.c_str(), flags, nullptr, nullptr, outSound);
+        if (last == MA_SUCCESS) {
+            return MA_SUCCESS;
+        }
+    }
+    return last;
+}
 
 void deviceIdToBytes(const ma_device_id &id, unsigned char *out, size_t cap) {
     const size_t n = sizeof(ma_device_id);
@@ -135,10 +190,13 @@ struct AudioSystem::Impl {
             if (!t.sound) {
                 t.sound = std::make_unique<ma_sound>();
             }
-            if (ma_sound_init_from_file(&engine, t.path.c_str(), 0, nullptr, nullptr,
-                                        t.sound.get()) != MA_SUCCESS) {
+            const ma_uint32 flags = soundFlagsForPath(t.path);
+            const ma_result rc =
+                initSoundFromFileWithFallback(&engine, t.path, flags, t.sound.get());
+            if (rc != MA_SUCCESS) {
                 t.loaded = false;
-                std::fprintf(stderr, "Dreadcast: could not reload sound \"%s\"\n", t.path.c_str());
+                std::fprintf(stderr, "Dreadcast: could not reload sound \"%s\" (ma_result=%d)\n",
+                             t.path.c_str(), static_cast<int>(rc));
             } else {
                 t.loaded = true;
             }
@@ -293,10 +351,13 @@ SoundHandle AudioSystem::loadSound(const std::string &resolvedPath) {
         auto &slot = impl_->templates.back();
         slot.path = resolvedPath;
         slot.sound = std::make_unique<ma_sound>();
-        if (ma_sound_init_from_file(&impl_->engine, resolvedPath.c_str(), 0, nullptr, nullptr,
-                                    slot.sound.get()) != MA_SUCCESS) {
+        const ma_uint32 flags = soundFlagsForPath(resolvedPath);
+        const ma_result rc =
+            initSoundFromFileWithFallback(&impl_->engine, resolvedPath, flags, slot.sound.get());
+        if (rc != MA_SUCCESS) {
             impl_->templates.pop_back();
-            std::fprintf(stderr, "Dreadcast: could not load sound \"%s\"\n", resolvedPath.c_str());
+            std::fprintf(stderr, "Dreadcast: could not load sound \"%s\" (ma_result=%d)\n",
+                         resolvedPath.c_str(), static_cast<int>(rc));
             return -1;
         }
         slot.loaded = true;
@@ -338,6 +399,43 @@ void AudioSystem::playExclusive(SoundHandle handle, float pitch, float volumeMul
     auto it = impl_->exclusiveByHandle.find(handle);
     if (it == impl_->exclusiveByHandle.end() || !it->second) {
         auto p = std::make_unique<ma_sound>();
+        const std::string &path = impl_->templates[static_cast<size_t>(handle)].path;
+        const ma_uint32 flags = soundFlagsForPath(path);
+        const ma_result rc =
+            (flags == 0)
+                ? ma_sound_init_copy(&impl_->engine,
+                                     impl_->templates[static_cast<size_t>(handle)].sound.get(), 0,
+                                     nullptr, p.get())
+                : initSoundFromFileWithFallback(&impl_->engine, path, flags, p.get());
+        if (rc != MA_SUCCESS) {
+            std::fprintf(stderr, "Dreadcast: could not create looping sound instance for \"%s\"\n",
+                         path.c_str());
+            return;
+        }
+        auto ins = impl_->exclusiveByHandle.emplace(handle, std::move(p));
+        it = ins.first;
+    }
+
+    ma_sound *s = it->second.get();
+    ma_sound_stop(s);
+    ma_sound_set_looping(s, MA_FALSE);
+    ma_sound_set_pitch(s, pitch);
+    ma_sound_set_volume(s, volumeMul * impl_->gameVolume);
+    ma_sound_seek_to_pcm_frame(s, 0);
+    ma_sound_start(s);
+}
+
+void AudioSystem::playExclusiveLoop(SoundHandle handle, float pitch, float volumeMul) {
+    if (!impl_ || !impl_->engineReady || handle < 0 ||
+        handle >= static_cast<SoundHandle>(impl_->templates.size()) ||
+        !impl_->templates[static_cast<size_t>(handle)].loaded ||
+        !impl_->templates[static_cast<size_t>(handle)].sound) {
+        return;
+    }
+
+    auto it = impl_->exclusiveByHandle.find(handle);
+    if (it == impl_->exclusiveByHandle.end() || !it->second) {
+        auto p = std::make_unique<ma_sound>();
         if (ma_sound_init_copy(&impl_->engine,
                                impl_->templates[static_cast<size_t>(handle)].sound.get(), 0,
                                nullptr, p.get()) != MA_SUCCESS) {
@@ -348,11 +446,49 @@ void AudioSystem::playExclusive(SoundHandle handle, float pitch, float volumeMul
     }
 
     ma_sound *s = it->second.get();
-    ma_sound_stop(s);
+    ma_sound_set_looping(s, MA_TRUE);
     ma_sound_set_pitch(s, pitch);
     ma_sound_set_volume(s, volumeMul * impl_->gameVolume);
+    if (!ma_sound_is_playing(s)) {
+        ma_sound_stop(s);
+        ma_sound_seek_to_pcm_frame(s, 0);
+        ma_sound_start(s);
+    }
+}
+
+void AudioSystem::setExclusiveVolume(SoundHandle handle, float volumeMul) {
+    if (!impl_ || !impl_->engineReady) {
+        return;
+    }
+    const auto it = impl_->exclusiveByHandle.find(handle);
+    if (it == impl_->exclusiveByHandle.end() || !it->second) {
+        return;
+    }
+    ma_sound_set_volume(it->second.get(), volumeMul * impl_->gameVolume);
+}
+
+void AudioSystem::stopExclusive(SoundHandle handle) {
+    if (!impl_) {
+        return;
+    }
+    const auto it = impl_->exclusiveByHandle.find(handle);
+    if (it == impl_->exclusiveByHandle.end() || !it->second) {
+        return;
+    }
+    ma_sound *s = it->second.get();
+    ma_sound_stop(s);
     ma_sound_seek_to_pcm_frame(s, 0);
-    ma_sound_start(s);
+}
+
+bool AudioSystem::isExclusivePlaying(SoundHandle handle) const {
+    if (!impl_) {
+        return false;
+    }
+    const auto it = impl_->exclusiveByHandle.find(handle);
+    if (it == impl_->exclusiveByHandle.end() || !it->second) {
+        return false;
+    }
+    return ma_sound_is_playing(it->second.get()) != 0;
 }
 
 void AudioSystem::stopAll(SoundHandle handle) {

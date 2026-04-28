@@ -38,8 +38,17 @@ struct ItemData {
     float maxManaBonus{0.0F};
     /// Passive HP/s while equipped (armor etc.).
     float hpRegenBonus{0.0F};
+    /// Flat move speed bonus while equipped.
+    float moveSpeedBonus{0.0F};
+    /// Flat fog visibility radius bonus while equipped.
+    float visionRangeBonus{0.0F};
     /// Fraction of incoming damage reflected to attacker (instant, not projectile).
     float damageReflectPercent{0.0F};
+    /// Multiplier on ability mana cost while equipped (1.0 = no change). Stacking is multiplicative
+    /// across equipped items (product).
+    float abilityManaCostMultiplier{1.0F};
+    /// Mana restored when any ability cooldown finishes (per equipped item; sums).
+    float abilityCooldownManaRefund{0.0F};
     std::string description{};
 
     [[nodiscard]] bool canStackWith(const ItemData &other) const {
@@ -130,6 +139,30 @@ struct InventoryState {
         return sum;
     }
 
+    /// Sum of `moveSpeedBonus` from all equipped items.
+    [[nodiscard]] float totalEquippedMoveSpeedBonus() const {
+        float sum = 0.0F;
+        for (size_t i = 0; i < equipped.size(); ++i) {
+            const int idx = equipped[i];
+            if (idx >= 0 && idx < static_cast<int>(items.size())) {
+                sum += items[static_cast<size_t>(idx)].moveSpeedBonus;
+            }
+        }
+        return sum;
+    }
+
+    /// Sum of `visionRangeBonus` from all equipped items.
+    [[nodiscard]] float totalEquippedVisionRangeBonus() const {
+        float sum = 0.0F;
+        for (size_t i = 0; i < equipped.size(); ++i) {
+            const int idx = equipped[i];
+            if (idx >= 0 && idx < static_cast<int>(items.size())) {
+                sum += items[static_cast<size_t>(idx)].visionRangeBonus;
+            }
+        }
+        return sum;
+    }
+
     /// Max damage reflect fraction from equipped items (single armor slot expected; sum if stacked).
     [[nodiscard]] float totalEquippedDamageReflect() const {
         float sum = 0.0F;
@@ -137,6 +170,33 @@ struct InventoryState {
             const int idx = equipped[i];
             if (idx >= 0 && idx < static_cast<int>(items.size())) {
                 sum += items[static_cast<size_t>(idx)].damageReflectPercent;
+            }
+        }
+        return sum;
+    }
+
+    /// Product of `abilityManaCostMultiplier` from all equipped items (empty slots = 1.0 each).
+    [[nodiscard]] float totalEquippedAbilityManaCostMultiplier() const {
+        float prod = 1.0F;
+        for (size_t i = 0; i < equipped.size(); ++i) {
+            const int idx = equipped[i];
+            if (idx >= 0 && idx < static_cast<int>(items.size())) {
+                const float m = items[static_cast<size_t>(idx)].abilityManaCostMultiplier;
+                if (m > 0.001F) {
+                    prod *= m;
+                }
+            }
+        }
+        return prod;
+    }
+
+    /// Sum of `abilityCooldownManaRefund` from equipped items.
+    [[nodiscard]] float totalEquippedAbilityCooldownManaRefund() const {
+        float sum = 0.0F;
+        for (size_t i = 0; i < equipped.size(); ++i) {
+            const int idx = equipped[i];
+            if (idx >= 0 && idx < static_cast<int>(items.size())) {
+                sum += items[static_cast<size_t>(idx)].abilityCooldownManaRefund;
             }
         }
         return sum;

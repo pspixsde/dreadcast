@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -40,6 +41,9 @@ class EditorScene final : public Scene {
     [[nodiscard]] Vector2 worldMouseFromScreen(const Vector2 &screenMouse) const;
     [[nodiscard]] Selection pickSelection(const Vector2 &worldMouse) const;
     [[nodiscard]] Rectangle toolbarPanelRect() const;
+    [[nodiscard]] Rectangle pickerPanelRect() const;
+    [[nodiscard]] int pickerRowCount() const;
+    [[nodiscard]] float pickerMaxScroll() const;
     /// Hit target for blocking world clicks (includes dropdown column past the panel edge).
     [[nodiscard]] Rectangle editorUiHitRect() const;
     [[nodiscard]] bool isMouseOverEditorUi(Vector2 screenMouse) const;
@@ -47,6 +51,7 @@ class EditorScene final : public Scene {
     [[nodiscard]] ResizeHandle lavaHandleAt(const Vector2 &worldMouse, const LavaData &w) const;
     void drawWorldGrid() const;
     void drawToolbar(const Font &font, Vector2 mouse);
+    void drawPickerPanel(const Font &font, Vector2 mouse);
     void drawEditorWorld(const Font &font);
     void drawAltOverlays(const Font &font);
     void drawWallResizeHandles(const Font &font, const WallData &w) const;
@@ -101,7 +106,8 @@ class EditorScene final : public Scene {
     int selectedEnemyType_{0};
     /// Index into item kind table (see `handlePlacement` / `ItemSpawnData::kind`).
     int selectedItemKind_{0};
-    EditorTab activeTab_{EditorTab::Elements};
+    std::optional<EditorTab> pickerOpen_{};
+    float pickerScrollY_{0.0F};
 
     std::vector<std::string> mapFiles_{};
     int currentMapIndex_{0};

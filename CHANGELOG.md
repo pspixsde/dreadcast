@@ -2,6 +2,64 @@
 
 All notable changes to **Dreadcast** will be documented in this file.
 
+## v0.12.4 — 2026-04-28
+
+### Added
+
+- **Pulse Link** (`pulse_link`) ring: multiplicative **ability mana cost** reduction while equipped, flat **mana on each ability cooldown finish**, HUD + floating text support, editor item row, and catalog data.
+- **Audio:** `AudioSystem` **exclusive-loop** helpers (`playExclusiveLoop`, `setExclusiveVolume`, `stopExclusive`, `isExclusivePlaying`) for ambience / sustained effects.
+- **SFX / ambience:** `reload.wav` on chamber reload; `gulp.wav` on vial use; **Pure Blood** looping `pureblood.wav` with volume fade over HoT; **Cordial Manic** `fastheartbeat.wav` (exclusive, pitched to duration); **lava** proximity loop `lava.wav` with near/far radii; `lavahiss.wav` per lava damage tick; `amuletpickup.wav` for amulet ground pickups.
+- **Skill tree:** Major/minor layout, larger nodes, four side skills with routed gameplay effects (`applySkillTreeEffects` each frame) and skill icons under `assets/textures/skills/`.
+- **Archive (codex)** scene with **Items / Abilities / Skills / Enemies** tabs, list + detail panels, and **lore** blocks where defined; reachable from **main menu** and **pause**.
+- **Editor:** **Old Casket** label + **56×40** world hit-test and isometric quad preview; **300×600** toolbar with **Select**, vertical **Elements / Items / Units** tabs, **adjacent scrollable picker**, and **bottom preview** slot.
+
+### Changed
+
+- **Wall / solid collision:** Concave polygon separation uses **nearest-edge** push-out instead of centroid-based escape.
+- **Editor toolbar UX:** Picker opens beside the toolbar; mouse wheel scrolls the picker when hovered (map zoom otherwise).
+- **Lava ambience asset:** Runtime proximity loop now uses `assets/sounds/lava.wav` (replacing `.ogg` source in prior notes).
+- **Debug overlay:** Lava audio diagnostics are folded into the existing **F3 fog debug** panel (single toggle for both).
+
+### Fixed
+
+- **Pickup SFX:** Amulets now play a dedicated pickup sound instead of falling through silent.
+
+### Internal
+
+- **`allCatalogItems()`** catalog vector for read-only UI (Archive).
+- **`skill_tree_archive_entries()`** for Archive skill tab.
+
+## v0.12.3 — 2026-04-27
+
+### Added
+
+- **Audio:** New SFX integrated for item/ability events: `ringpickup.wav`, `armorpickup.wav`, `vialpickup.wav`, `1start.wav`, `1scatterattack.wav`, `2throw.wav`, and `2hit.wav`.
+- **Items:** Added two amulets in `assets/data/items.json`:
+  - **Frayed Amulet** (`frayed_amulet`, Tarnished): **+30 Move Speed**.
+  - **Vigilant Eye** (`vigilant_eye`, Blighted): **+40 Fog Vision**, plus **+15** after standing still for **2s**.
+- **Status effects:** Added positive/negative segmentation metadata for HUD statuses and introduced **Lava Burn** as a persistent negative status while standing in lava.
+- **Inventory UI:** When the inventory panel is open, merging into a **stackable** slot (bag, gear, or consumable) plays the same diagonal **sheen** as ability cooldown finish (no gray overlay or desaturation). Lower-right HUD consumable slots are unchanged.
+
+### Changed
+
+- **Combat input:** Ranged shots are now blocked while melee attack flow is active (entire melee phase, not only hit frames).
+- **Lead Fever SFX:** While Lead Fever is active, ranged fire now uses `1scatterattack.wav` (random pitch) instead of the base gun shot.
+- **Deadlight Snare SFX:** Snare cast plays `2throw.wav`; snare impact now plays `2hit.wav`.
+- **Pickup SFX routing:** Ground pickups now play contextual sounds with random pitch: vial, ring, or armor categories (amulets remain silent).
+- **Vigilant Eye behavior:** Fog visibility transitions now animate smoothly when equipping/unequipping and when entering/leaving the stillness bonus state.
+- **Cooldown overlays (items + abilities):** Cooldown text is larger, no longer shows the trailing `s`, and now uses a clockwise radial dark mask from 12 o'clock, icon desaturation during cooldown, and a diagonal finish **sheen** when cooldown completes (wide clipped parallelogram / two triangles instead of a thick line, for a cleaner glint).
+- **Character select:** **Attack → Ranged** lists curse bolt **damage**, **range**, and **projectile speed** (world units/s). Removed the separate “mana cost per shot” line; **Abilities** blurb defers basic bolt stats to the Attack section.
+- **Player ranged tuning:** Curse bolt and Lead Fever pellet **speed** now comes from **`rangedProjectileSpeed`** in `assets/data/characters.json` (via `PlayerCombatBase`), not only `config::PROJECTILE_SPEED`.
+
+### Fixed
+
+- **Editor → Items tab:** Item picker includes all current catalog rows with **dynamic row height** in the clip area so draw and hit-test stay aligned.
+
+### Internal
+
+- **Item stats model:** Added `moveSpeedBonus` and `visionRangeBonus` support to item data parsing, runtime inventory aggregation, and embedded fallback catalogs.
+- **UI rendering:** Consolidated cooldown visuals into a shared `ui::drawCooldownOverlay` helper used by ability and Runic Shell overlays; diagonal finish sheen is shared as `ui::drawItemStackSheenFlash` for cooldown completion and inventory stack merges.
+
 ## v0.12.2 — 2026-04-26
 
 ### Added

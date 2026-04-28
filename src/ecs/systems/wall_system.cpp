@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 #include <entt/entt.hpp>
@@ -115,30 +116,43 @@ void separateFromSolidPolygon(Vector2 &pos, const Sprite &spr,
     if (n < 3 || !aabbOverlapsPolygonFill(pos, spr, poly)) {
         return;
     }
-    Vector2 centroid{0.0F, 0.0F};
-    for (const Vector2 &v : poly) {
-        centroid.x += v.x;
-        centroid.y += v.y;
-    }
-    const float inv = 1.0F / static_cast<float>(n);
-    centroid.x *= inv;
-    centroid.y *= inv;
+    const Rectangle er = entityRect(pos, spr);
+    const Vector2 mid{er.x + er.width * 0.5F, er.y + er.height * 0.5F};
 
-    for (int iter = 0; iter < 48; ++iter) {
-        if (!aabbOverlapsPolygonFill(pos, spr, poly)) {
-            return;
-        }
-        float dx = pos.x - centroid.x;
-        float dy = pos.y - centroid.y;
-        const float len = std::sqrt(dx * dx + dy * dy);
-        if (len < 1.0e-3F) {
-            pos.x += 4.0F;
+    float bestDistSq = std::numeric_limits<float>::infinity();
+    Vector2 bestProj = mid;
+    for (int i = 0; i < n; ++i) {
+        const Vector2 a = poly[static_cast<size_t>(i)];
+        const Vector2 b = poly[static_cast<size_t>((i + 1) % n)];
+        const Vector2 ab{b.x - a.x, b.y - a.y};
+        const float lenSq = ab.x * ab.x + ab.y * ab.y;
+        if (lenSq < 1.0e-6F) {
             continue;
         }
-        dx /= len;
-        dy /= len;
-        pos.x += dx * 4.0F;
-        pos.y += dy * 4.0F;
+        float t = ((mid.x - a.x) * ab.x + (mid.y - a.y) * ab.y) / lenSq;
+        t = std::clamp(t, 0.0F, 1.0F);
+        const Vector2 q{a.x + ab.x * t, a.y + ab.y * t};
+        const float dx = mid.x - q.x;
+        const float dy = mid.y - q.y;
+        const float dSq = dx * dx + dy * dy;
+        if (dSq < bestDistSq) {
+            bestDistSq = dSq;
+            bestProj = q;
+        }
+    }
+
+    Vector2 nrm{mid.x - bestProj.x, mid.y - bestProj.y};
+    float nl = std::sqrt(nrm.x * nrm.x + nrm.y * nrm.y);
+    if (nl < 1.0e-3F) {
+        nrm = {0.0F, -1.0F};
+        nl = 1.0F;
+    }
+    nrm.x /= nl;
+    nrm.y /= nl;
+
+    for (int it = 0; it < 8 && aabbOverlapsPolygonFill(pos, spr, poly); ++it) {
+        pos.x += nrm.x * 2.0F;
+        pos.y += nrm.y * 2.0F;
     }
 }
 
