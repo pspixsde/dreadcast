@@ -65,6 +65,9 @@ struct DisassembleRecipe {
 /// Map `ITEM` / editor kind string → item instance. Empty item if unknown id.
 [[nodiscard]] ItemData makeItemFromMapKind(const std::string &kind);
 
+/// All items from the loaded catalog (order not guaranteed). Refreshed by `loadGameData()`.
+[[nodiscard]] const std::vector<ItemData> &allCatalogItems();
+
 /// Undead Hunter ability bar (must call `loadGameData()` before gameplay).
 [[nodiscard]] const CharacterAbilities &undeadHunterAbilities();
 

@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "config.hpp"
+#include "core/audio.hpp"
 #include "core/camera.hpp"
 #include "core/timer.hpp"
 #include "game/items.hpp"
@@ -27,15 +28,20 @@ struct FloatingNumber {
     Vector2 worldPos{};
     float amount{0.0F};
     bool isHeal{false};
+    /// Ability cooldown refund (cyan); drawn even when damage numbers are hidden.
+    bool isManaRestore{false};
     float lifetime{0.85F};
     float elapsed{0.0F};
     float driftX{0.0F};
 };
 
-enum class StatusHudKind { HealOverTime, ManicEffect, LeadFever, ManaRegenOverTime };
+enum class StatusHudKind { HealOverTime, ManicEffect, LeadFever, ManaRegenOverTime, LavaBurn };
+enum class StatusSign { Positive, Negative };
 
 struct ActiveStatusHud {
     StatusHudKind kind{StatusHudKind::HealOverTime};
+    StatusSign sign{StatusSign::Positive};
+    bool persistent{false};
     std::string iconPath{};
     Color outline{WHITE};
 };
@@ -59,23 +65,26 @@ class GameplayScene final : public Scene {
     void spawnLavas(const MapData &map);
     void applyPlayerMaxHpFromEquipment();
     void applyPlayerMaxManaFromEquipment();
-    void tickHealOverTime(float fixedDt);
+    void applyPlayerMoveSpeedFromEquipment();
+    void tickVigilantEye(float frameDt);
+    void tickHealOverTime(float fixedDt, ResourceManager &resources);
     void tickManaRegenOverTime(float fixedDt);
-    void tickLavaHazard(float fixedDt);
-    void tickManicEffect(float fixedDt);
+    void tickLavaHazard(float fixedDt, ResourceManager &resources);
+    void tickManicEffect(float fixedDt, ResourceManager &resources);
     void tickRunicShellCooldown(float fixedDt);
     void checkRunicShellTrigger();
-    void tryUseConsumableSlot(int slotIndex);
-    void tryUseConsumableBagSlot(int bagSlot);
-    void applyVialHealOverTime(bool wasAlreadyActive);
+    void tryUseConsumableSlot(int slotIndex, ResourceManager &resources);
+    void tryUseConsumableBagSlot(int bagSlot, ResourceManager &resources);
+    void applyVialHealOverTime(bool wasAlreadyActive, ResourceManager &resources);
     void applyVialRawSpiritMana(bool wasAlreadyActive);
-    [[nodiscard]] bool tryApplyCordialManic();
+    [[nodiscard]] bool tryApplyCordialManic(ResourceManager &resources);
     [[nodiscard]] Vector2 worldMouseFromScreen(const Vector2 &screenMouse) const;
 
     void syncStatusHudOrder();
-    void pushStatusHud(StatusHudKind kind, std::string iconPath, Color outline);
+    void pushStatusHud(StatusHudKind kind, std::string iconPath, Color outline,
+                       StatusSign sign = StatusSign::Positive, bool persistent = false);
     void removeStatusHudKind(StatusHudKind kind);
-    void tryUseAbility(int abilityIndex);
+    [[nodiscard]] bool tryUseAbility(int abilityIndex);
     void tickAbilityCooldowns(float fixedDt);
     void tickLeadFeverEffect(float fixedDt);
     void tickSlugAim(float fixedDt, ResourceManager &resources);
@@ -94,7 +103,9 @@ class GameplayScene final : public Scene {
     void drawDamageVignette();
     void drawFloatingCombatNumbers(ResourceManager &resources);
     void tickFloatingNumbers(float frameDt);
-    void tickChamberState(float fixedDt);
+    void tickChamberState(float fixedDt, ResourceManager &resources);
+    void applySkillTreeEffects();
+    [[nodiscard]] float lavaAmbientLoudnessFromPlayer() const;
     void drawChamberPelletArc(float portraitCx, float portraitCy, float portraitR);
     void drawMinimapOverlay(bool fullScreen, ResourceManager &resources);
     void tickAnvilUi(InputManager &input, ResourceManager &resources, const ui::AnvilUiLayout &layout);
@@ -135,6 +146,7 @@ class GameplayScene final : public Scene {
     InventoryState inventory_{};
 
     ui::Button resumeButton_{};
+    ui::Button archivePauseButton_{};
     ui::Button settingsPauseButton_{};
     ui::Button mainMenuButton_{};
     ui::Button retryButton_{};
@@ -148,12 +160,15 @@ class GameplayScene final : public Scene {
     float hotRefreshFlashTimer_{0.0F};
     float spiritRefreshFlashTimer_{0.0F};
     float lavaDamageAccumulator_{0.0F};
+    bool inLavaPrev_{false};
     float runicShellFlashTimer_{0.0F};
+    float runicShellFinishFlash_{0.0F};
     float snareImpactFlash_{0.0F};
     Vector2 snareImpactWorld_{0.0F, 0.0F};
     float skillPointFlashTimer_{0.0F};
 
     float abilityCdRem_[3]{0.0F, 0.0F, 0.0F};
+    float abilityFinishFlash_[3]{0.0F, 0.0F, 0.0F};
     std::vector<ActiveStatusHud> statusHudOrder_{};
 
     bool hoveringHudElement_{false};
@@ -212,6 +227,11 @@ class GameplayScene final : public Scene {
     bool fogDbgMaskSkipped_{false};
     int fogDbgBoundarySamples_{0};
     int fogDbgFanVerts_{0};
+
+    float lavaAudioDbgLastLoudness_{0.0F};
+    float lavaAudioDbgLastTargetVol_{0.0F};
+    SoundHandle lavaAudioDbgLastHandle_{-1};
+    bool lavaAudioDbgLastPlaying_{false};
 };
 
 } // namespace dreadcast

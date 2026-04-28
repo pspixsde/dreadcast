@@ -131,8 +131,23 @@ std::string joinPath(const std::string &base, const std::string &relative) {
     if (j.contains("hpRegenBonus") && j["hpRegenBonus"].is_number()) {
         it.hpRegenBonus = j["hpRegenBonus"].get<float>();
     }
+    if (j.contains("moveSpeedBonus") && j["moveSpeedBonus"].is_number()) {
+        it.moveSpeedBonus = j["moveSpeedBonus"].get<float>();
+    }
+    if (j.contains("visionRangeBonus") && j["visionRangeBonus"].is_number()) {
+        it.visionRangeBonus = j["visionRangeBonus"].get<float>();
+    }
     if (j.contains("damageReflectPercent") && j["damageReflectPercent"].is_number()) {
         it.damageReflectPercent = j["damageReflectPercent"].get<float>();
+    }
+    if (j.contains("abilityManaCostMultiplier") && j["abilityManaCostMultiplier"].is_number()) {
+        it.abilityManaCostMultiplier = j["abilityManaCostMultiplier"].get<float>();
+    }
+    if (j.contains("abilityCooldownManaRefund") && j["abilityCooldownManaRefund"].is_number()) {
+        it.abilityCooldownManaRefund = j["abilityCooldownManaRefund"].get<float>();
+    }
+    if (it.abilityManaCostMultiplier <= 0.001F) {
+        it.abilityManaCostMultiplier = 1.0F;
     }
     if (j.contains("description") && j["description"].is_string()) {
         it.description = j["description"].get<std::string>();
@@ -254,6 +269,7 @@ void loadItemsFromJson(std::unordered_map<std::string, ItemData> &catalog) {
     numF("meleeRange", c.meleeRange);
     numF("rangedDamage", c.rangedDamage);
     numF("rangedRange", c.rangedRange);
+    numF("rangedProjectileSpeed", c.rangedProjectileSpeed);
     numF("moveSpeed", c.moveSpeed);
     numF("visionRange", c.visionRange);
     numF("levelMaxHpGain", c.levelMaxHpGain);
@@ -289,7 +305,7 @@ void seedCharactersFallback(std::vector<CharacterClass> &out) {
       "name": "Undead Hunter",
       "description": "",
       "bio": "A hunter cast out over rumors of dark blood. A cursed beast and cruel men tore his life apart; he died on his family's floor vowing vengeance — and woke in the Dread Pit, half-dead and hungry in ways that no longer feel human.",
-      "detailAbilities": "- Ranged curse bolt (LMB) — mana cost, hits at range.\n- Three-hit melee combo (RMB) — frontal cone, hold to loop, per-hit knockback.\n- [1] Lead Fever — 6s: shots become 4 randomly scattered pellets (full damage) with knockback; 25 mana, 20s cooldown.\n- [2] Deadlight Snare — throw a net forward, dash back; on hit, pull nearby foes together and stun 2s; 20 mana, 20s cooldown.\n- [3] Calamity Slug — channel 1s, then a huge piercing shot for 50 damage with sideways knockback; 30 mana, 25s cooldown.\n- Built for aggression: close the gap, manage mana, punish mistakes.",
+      "detailAbilities": "- Ranged curse bolt (LMB) — hits at range; see Attack for damage, range, and bolt speed.\n- Three-hit melee combo (RMB) — frontal cone, hold to loop, per-hit knockback.\n- [1] Lead Fever — 6s: shots become 4 randomly scattered pellets (full damage) with knockback; 25 mana, 20s cooldown.\n- [2] Deadlight Snare — throw a net forward, dash back; on hit, pull nearby foes together and stun 2s; 20 mana, 20s cooldown.\n- [3] Calamity Slug — channel 1s, then a huge piercing shot for 50 damage with sideways knockback; 30 mana, 25s cooldown.\n- Built for aggression: close the gap, manage mana, punish mistakes.",
       "hpRegen": 0.5,
       "manaRegen": 0.5,
       "baseMaxHp": 100,
@@ -298,6 +314,7 @@ void seedCharactersFallback(std::vector<CharacterClass> &out) {
       "meleeRange": 60,
       "rangedDamage": 10,
       "rangedRange": 800,
+      "rangedProjectileSpeed": 600,
       "moveSpeed": 280,
       "visionRange": 500,
       "levelMaxHpGain": 10,
@@ -345,7 +362,10 @@ void seedItemCatalogFallback(std::unordered_map<std::string, ItemData> &catalog)
     {"id":"runic_shell","name":"Runic Shell","iconPath":"assets/textures/items/runic_shell_icon.png","equipSlot":"Armor","rarity":"Cursed","isConsumable":false,"isStackable":false,"maxStack":1,"stackCount":1,"maxHpBonus":25,"description":"+25 Max HP\nBelow 30% HP: releases an energy shockwave dealing 30 damage,\nknocking back enemies, and healing 30 HP. 30s cooldown."},
     {"id":"vial_cordial_manic","name":"Vial of Cordial Manic","iconPath":"assets/textures/items/vial_cordial_manic_icon.png","equipSlot":"Armor","rarity":"Lucid","isConsumable":true,"isStackable":true,"maxStack":3,"stackCount":1,"description":"Doubles movement speed and grants invincibility for 7 seconds.\nNo HP regen and slowly lose 40% of max HP during the effect.\nCannot be used below 40% max HP."},
     {"id":"vial_raw_spirit","name":"Vial of Raw Spirit","iconPath":"assets/textures/items/vial_raw_spirit_icon.png","equipSlot":"Armor","rarity":"Clouded","isConsumable":true,"isStackable":true,"maxStack":5,"stackCount":1,"description":"Regenerates 50 mana over 6 seconds."},
-    {"id":"hollow_ring","name":"Hollow Ring","iconPath":"assets/textures/items/hollow_ring_icon.png","equipSlot":"Ring","rarity":"Tarnished","isConsumable":false,"isStackable":false,"maxStack":1,"stackCount":1,"maxManaBonus":15,"description":"+15 Max Mana"}
+    {"id":"hollow_ring","name":"Hollow Ring","iconPath":"assets/textures/items/hollow_ring_icon.png","equipSlot":"Ring","rarity":"Tarnished","isConsumable":false,"isStackable":false,"maxStack":1,"stackCount":1,"maxManaBonus":15,"description":"+15 Max Mana"},
+    {"id":"frayed_amulet","name":"Frayed Amulet","iconPath":"assets/textures/items/frayed_amulet_icon.png","equipSlot":"Amulet","rarity":"Tarnished","isConsumable":false,"isStackable":false,"maxStack":1,"stackCount":1,"moveSpeedBonus":30,"description":"+30 Move Speed"},
+    {"id":"vigilant_eye","name":"Vigilant Eye","iconPath":"assets/textures/items/vigilant_eye_icon.png","equipSlot":"Amulet","rarity":"Blighted","isConsumable":false,"isStackable":false,"maxStack":1,"stackCount":1,"visionRangeBonus":40,"description":"+40 Fog Vision\nAfter standing still for 2s: +15 additional vision."},
+    {"id":"pulse_link","name":"Pulse Link","iconPath":"assets/textures/items/pulse_link_icon.png","equipSlot":"Ring","rarity":"Blighted","isConsumable":false,"isStackable":false,"maxStack":1,"stackCount":1,"abilityManaCostMultiplier":0.85,"abilityCooldownManaRefund":5,"description":"All abilities cost 15% less mana.\nWhen any ability's cooldown expires, restore 5 mana."}
   ]
 })JSON";
     try {
@@ -386,12 +406,21 @@ void seedAbilitiesFallback(CharacterAbilities &out) {
 }
 
 std::unordered_map<std::string, ItemData> g_itemCatalog{};
+std::vector<ItemData> g_catalogItemsList{};
 CharacterAbilities g_undeadHunterAbilities{};
 std::vector<CharacterClass> g_characters{};
 bool g_gameDataLoaded{false};
 
 std::vector<ForgeRecipe> g_forgeRecipes{};
 std::vector<DisassembleRecipe> g_disassembleRecipes{};
+
+void rebuildCatalogItemsList() {
+    g_catalogItemsList.clear();
+    g_catalogItemsList.reserve(g_itemCatalog.size());
+    for (const auto &kv : g_itemCatalog) {
+        g_catalogItemsList.push_back(kv.second);
+    }
+}
 
 void seedCraftingRecipes() {
     g_forgeRecipes.clear();
@@ -449,6 +478,7 @@ bool loadGameData() {
     const bool itemsOk = !newItems.empty();
     if (itemsOk) {
         g_itemCatalog = std::move(newItems);
+        rebuildCatalogItemsList();
     } else {
         TraceLog(LOG_ERROR, "Dreadcast: item catalog empty after JSON and fallback.");
     }
@@ -488,6 +518,8 @@ ItemData makeItemFromMapKind(const std::string &kind) {
     return it->second;
 }
 
+const std::vector<ItemData> &allCatalogItems() { return g_catalogItemsList; }
+
 const CharacterAbilities &undeadHunterAbilities() { return g_undeadHunterAbilities; }
 
 int characterCount() { return static_cast<int>(g_characters.size()); }
@@ -505,7 +537,7 @@ const CharacterClass &characterAt(int index) {
             "apart; he died on his family's floor vowing vengeance — and woke in the Dread Pit, "
             "half-dead and hungry in ways that no longer feel human.";
         kFallback.detailAbilities =
-            "- Ranged curse bolt (LMB) — mana cost, hits at range.\n"
+            "- Ranged curse bolt (LMB) — hits at range; see Attack for damage, range, and bolt speed.\n"
             "- Three-hit melee combo (RMB) — frontal cone, hold to loop, per-hit knockback.\n"
             "- [1] Lead Fever — 6s: shots become 4 randomly scattered pellets (full damage) with "
             "knockback; 25 mana, 20s cooldown.\n"
@@ -522,6 +554,7 @@ const CharacterClass &characterAt(int index) {
         kFallback.meleeRange = 60.0F;
         kFallback.rangedDamage = 10.0F;
         kFallback.rangedRange = 800.0F;
+        kFallback.rangedProjectileSpeed = 600.0F;
         kFallback.moveSpeed = 280.0F;
         kFallback.visionRange = 500.0F;
         kFallback.levelMaxHpGain = 10.0F;

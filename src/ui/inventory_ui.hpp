@@ -76,12 +76,14 @@ class InventoryUI {
         if (open_) {
             contextOpen_ = false;
             rarityInfoOpen_ = false;
+            invStackSheenNeedBaseline_ = true;
         } else {
             dragging_ = false;
             dragItemIndex_ = -1;
             dragSourceBag_ = -1;
             dragSourceEquip_ = -1;
             dragSourceConsumable_ = -1;
+            clearInvStackSheenState();
         }
     }
     [[nodiscard]] bool isOpen() const { return open_; }
@@ -93,12 +95,14 @@ class InventoryUI {
         if (open_) {
             contextOpen_ = false;
             rarityInfoOpen_ = false;
+            invStackSheenNeedBaseline_ = true;
         } else {
             dragging_ = false;
             dragItemIndex_ = -1;
             dragSourceBag_ = -1;
             dragSourceEquip_ = -1;
             dragSourceConsumable_ = -1;
+            clearInvStackSheenState();
         }
     }
 
@@ -110,10 +114,12 @@ class InventoryUI {
     /// `runicShellCdSeconds` = remaining seconds (for display).
     void draw(const Font &font, dreadcast::ResourceManager &resources, int screenW, int screenH,
               const InventoryState &inv, float playerHpRatio = 1.0F,
-              float runicShellCdRatio = 0.0F, float runicShellCdSeconds = 0.0F);
+              float runicShellCdRatio = 0.0F, float runicShellCdSeconds = 0.0F,
+              float runicShellFinishFlashSec = 0.0F);
     void drawWithoutDragGhost(const Font &font, dreadcast::ResourceManager &resources, int screenW,
                               int screenH, const InventoryState &inv, float playerHpRatio = 1.0F,
-                              float runicShellCdRatio = 0.0F, float runicShellCdSeconds = 0.0F);
+                              float runicShellCdRatio = 0.0F, float runicShellCdSeconds = 0.0F,
+                              float runicShellFinishFlashSec = 0.0F);
     void drawDragGhost(dreadcast::ResourceManager &resources, const InventoryState &inv) const;
 
     /// Draw a 7:5 item icon at fixed `ITEM_ICON_DRAW_*` size (centered in `slotRect`).
@@ -128,6 +134,25 @@ class InventoryUI {
     [[nodiscard]] int hitTestConsumableSlot(Vector2 mouse, int screenW, int screenH) const;
 
   private:
+    struct InvSlotStackTrack {
+        int lastPoolIdx{-1};
+        int lastStackCount{0};
+    };
+
+    void clearInvStackSheenState();
+    void tickInvStackSheen();
+    void finishOpenInventoryStackFrame(InventoryState &inv);
+
+    static constexpr int kInvStackSheenEquipCount = 3; // == EquipSlot::COUNT
+    // Inventory-only: glint on stackable merge (same sheen as cooldown finish; no desat).
+    std::array<float, BAG_SLOT_COUNT> invStackSheenBag_{};
+    std::array<float, kInvStackSheenEquipCount> invStackSheenEquip_{};
+    std::array<float, CONSUMABLE_SLOT_COUNT> invStackSheenCons_{};
+    std::array<InvSlotStackTrack, BAG_SLOT_COUNT> invBagStackTrack_{};
+    std::array<InvSlotStackTrack, kInvStackSheenEquipCount> invEquipStackTrack_{};
+    std::array<InvSlotStackTrack, CONSUMABLE_SLOT_COUNT> invConsStackTrack_{};
+    bool invStackSheenNeedBaseline_{true};
+
     bool open_{false};
 
     static constexpr const char *kSlotLabels[] = {"Armor", "Amulet", "Ring"};

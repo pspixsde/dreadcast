@@ -12,12 +12,27 @@
 #include "core/types.hpp"
 #include "ecs/components.hpp"
 #include "game/game_data.hpp"
+#include "core/resource_manager.hpp"
 
 namespace dreadcast::ecs {
 
+namespace {
+void playReloadSfx(ResourceManager *resources) {
+    if (resources == nullptr) {
+        return;
+    }
+    const SoundHandle h = resources->getSound("assets/sounds/reload.wav");
+    if (h >= 0) {
+        // Keep the same pitch spread, shifted up so the sample fits chamber reload timing better.
+        const float p = 1.15F + static_cast<float>(GetRandomValue(0, 16)) / 100.0F;
+        resources->audio().playOneShot(h, p, 1.0F);
+    }
+}
+} // namespace
+
 bool combat_player_ranged(entt::registry &registry, const InputManager &input,
                           const Camera2D &camera, entt::entity player, float &noManaFlashTimer,
-                          Vector2 aimScreenPos) {
+                          Vector2 aimScreenPos, ResourceManager *resources) {
     (void)noManaFlashTimer;
     if (!registry.valid(player) || !input.isMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
         return false;
@@ -28,6 +43,12 @@ bool combat_player_ranged(entt::registry &registry, const InputManager &input,
     if (registry.all_of<SlugAimState>(player)) {
         return false;
     }
+    if (registry.all_of<MeleeAttacker>(player)) {
+        const auto &melee = registry.get<MeleeAttacker>(player);
+        if (melee.phase != MeleeAttacker::Phase::Idle) {
+            return false;
+        }
+    }
 
     auto &chamber = registry.get_or_emplace<ChamberState>(player);
     if (chamber.isReloading) {
@@ -37,6 +58,7 @@ bool combat_player_ranged(entt::registry &registry, const InputManager &input,
         chamber.isReloading = true;
         chamber.reloadTimer = 0.0F;
         chamber.reloadDuration = config::CHAMBER_RELOAD_TIME;
+        playReloadSfx(resources);
         return false;
     }
 
@@ -58,8 +80,11 @@ bool combat_player_ranged(entt::registry &registry, const InputManager &input,
     const bool leadFever = registry.all_of<LeadFeverEffect>(player);
 
     float shotDamage = config::PROJECTILE_DAMAGE;
+    float shotSpeed = config::PROJECTILE_SPEED;
     if (registry.all_of<PlayerCombatBase>(player)) {
-        shotDamage = registry.get<PlayerCombatBase>(player).rangedDamage;
+        const auto &pcb = registry.get<PlayerCombatBase>(player);
+        shotDamage = pcb.rangedDamage;
+        shotSpeed = pcb.rangedProjectileSpeed;
     }
     if (registry.all_of<PlayerLevel>(player)) {
         shotDamage += registry.get<PlayerLevel>(player).rangedDamageBonus;
@@ -87,11 +112,11 @@ bool combat_player_ranged(entt::registry &registry, const InputManager &input,
                 proj, Transform{{pt.position.x + d.x * spawnDist, pt.position.y + d.y * spawnDist},
                                 std::atan2f(d.y, d.x)});
             registry.emplace<Velocity>(
-                proj, Velocity{{d.x * config::PROJECTILE_SPEED, d.y * config::PROJECTILE_SPEED}});
+                proj, Velocity{{d.x * shotSpeed, d.y * shotSpeed}});
             registry.emplace<Sprite>(proj, Sprite{{120, 220, 140, 255}, 9.0F, 9.0F});
             registry.emplace<Projectile>(
                 proj,
-                Projectile{shotDamage, config::PROJECTILE_SPEED,
+                Projectile{shotDamage, shotSpeed,
                            config::PROJECTILE_MAX_RANGE, 0.0F, d, true, entt::null, false,
                            knockback});
         }
@@ -105,9 +130,9 @@ bool combat_player_ranged(entt::registry &registry, const InputManager &input,
         proj, Transform{{pt.position.x + dir.x * spawnDist, pt.position.y + dir.y * spawnDist},
                         std::atan2f(dir.y, dir.x)});
     registry.emplace<Velocity>(proj,
-                               Velocity{{dir.x * config::PROJECTILE_SPEED, dir.y * config::PROJECTILE_SPEED}});
+                               Velocity{{dir.x * shotSpeed, dir.y * shotSpeed}});
     registry.emplace<Sprite>(proj, Sprite{{255, 240, 120, 255}, 10.0F, 10.0F});
-    registry.emplace<Projectile>(proj, Projectile{shotDamage, config::PROJECTILE_SPEED,
+    registry.emplace<Projectile>(proj, Projectile{shotDamage, shotSpeed,
                                                     config::PROJECTILE_MAX_RANGE, 0.0F, dir, true,
                                                     entt::null, false, 0.0F});
     --chamber.shotsRemaining;
@@ -116,6 +141,7 @@ bool combat_player_ranged(entt::registry &registry, const InputManager &input,
         chamber.isReloading = true;
         chamber.reloadTimer = 0.0F;
         chamber.reloadDuration = config::CHAMBER_RELOAD_TIME;
+        playReloadSfx(resources);
     }
     return true;
 }

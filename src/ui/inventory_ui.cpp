@@ -9,6 +9,7 @@
 #include "config.hpp"
 #include "game/item_rarity.hpp"
 #include "core/resource_manager.hpp"
+#include "ui/cooldown_overlay.hpp"
 #include "ui/theme.hpp"
 
 namespace dreadcast::ui {
@@ -33,6 +34,9 @@ constexpr float kColumnGap = 120.0F;
 constexpr float kInvPanelW =
     kInvPaddingX + kEquipColumnInnerW + kColumnGap + kBagGridW + kInvPaddingX;
 constexpr float kInvPanelH = 500.0F;
+/// Same as cooldown finish flash; keep in sync with `drawItemStackSheenFlash` default duration
+/// and `GameplayScene` (0.30s) so the sweep and timer retire together.
+constexpr float kStackSheenTotalSec = 0.30F;
 /// Left edge of the carried grid (relative to panel origin).
 constexpr float kBagGridLeft = kInvPaddingX + kEquipColumnInnerW + kColumnGap;
 /// Top of slot rows (aligned: armor row = bag row 0).
@@ -241,6 +245,155 @@ void InventoryUI::drawItemIcon(const dreadcast::ItemData &it, dreadcast::Resourc
     DrawTexturePro(tex, src, dst, {0.0F, 0.0F}, 0.0F, tint);
 }
 
+void InventoryUI::clearInvStackSheenState() {
+    for (float &f : invStackSheenBag_) {
+        f = 0.0F;
+    }
+    for (float &f : invStackSheenEquip_) {
+        f = 0.0F;
+    }
+    for (float &f : invStackSheenCons_) {
+        f = 0.0F;
+    }
+    for (auto &t : invBagStackTrack_) {
+        t = InvSlotStackTrack{};
+    }
+    for (auto &t : invEquipStackTrack_) {
+        t = InvSlotStackTrack{};
+    }
+    for (auto &t : invConsStackTrack_) {
+        t = InvSlotStackTrack{};
+    }
+}
+
+void InventoryUI::tickInvStackSheen() {
+    const float dt = GetFrameTime();
+    auto adv = [dt](float &f) {
+        if (f > 0.0F) {
+            f += dt;
+            if (f > kStackSheenTotalSec) {
+                f = 0.0F;
+            }
+        }
+    };
+    for (float &f : invStackSheenBag_) {
+        adv(f);
+    }
+    for (float &f : invStackSheenEquip_) {
+        adv(f);
+    }
+    for (float &f : invStackSheenCons_) {
+        adv(f);
+    }
+}
+
+void InventoryUI::finishOpenInventoryStackFrame(InventoryState &inv) {
+    if (invStackSheenNeedBaseline_) {
+        for (int i = 0; i < dreadcast::BAG_SLOT_COUNT; ++i) {
+            const int idx = inv.bagSlots[static_cast<size_t>(i)];
+            if (idx < 0) {
+                invBagStackTrack_[static_cast<size_t>(i)] = InvSlotStackTrack{};
+                continue;
+            }
+            const auto &it = inv.items[static_cast<size_t>(idx)];
+            if (it.isStackable) {
+                invBagStackTrack_[static_cast<size_t>(i)] = {idx, it.stackCount};
+            } else {
+                invBagStackTrack_[static_cast<size_t>(i)] = {idx, 0};
+            }
+        }
+        for (int i = 0; i < kInvStackSheenEquipCount; ++i) {
+            const int idx = inv.equipped[static_cast<size_t>(i)];
+            if (idx < 0) {
+                invEquipStackTrack_[static_cast<size_t>(i)] = InvSlotStackTrack{};
+                continue;
+            }
+            const auto &it = inv.items[static_cast<size_t>(idx)];
+            if (it.isStackable) {
+                invEquipStackTrack_[static_cast<size_t>(i)] = {idx, it.stackCount};
+            } else {
+                invEquipStackTrack_[static_cast<size_t>(i)] = {idx, 0};
+            }
+        }
+        for (int i = 0; i < dreadcast::CONSUMABLE_SLOT_COUNT; ++i) {
+            const int idx = inv.consumableSlots[static_cast<size_t>(i)];
+            if (idx < 0) {
+                invConsStackTrack_[static_cast<size_t>(i)] = InvSlotStackTrack{};
+                continue;
+            }
+            const auto &it = inv.items[static_cast<size_t>(idx)];
+            if (it.isStackable) {
+                invConsStackTrack_[static_cast<size_t>(i)] = {idx, it.stackCount};
+            } else {
+                invConsStackTrack_[static_cast<size_t>(i)] = {idx, 0};
+            }
+        }
+        invStackSheenNeedBaseline_ = false;
+    } else {
+        for (int i = 0; i < dreadcast::BAG_SLOT_COUNT; ++i) {
+            const int idx = inv.bagSlots[static_cast<size_t>(i)];
+            if (idx < 0) {
+                invBagStackTrack_[static_cast<size_t>(i)] = InvSlotStackTrack{};
+                continue;
+            }
+            const auto &it = inv.items[static_cast<size_t>(idx)];
+            if (it.isStackable) {
+                if (invBagStackTrack_[static_cast<size_t>(i)].lastPoolIdx != idx) {
+                    invBagStackTrack_[static_cast<size_t>(i)] = {idx, it.stackCount};
+                } else if (it.stackCount > invBagStackTrack_[static_cast<size_t>(i)].lastStackCount) {
+                    invStackSheenBag_[static_cast<size_t>(i)] = 0.0001F;
+                    invBagStackTrack_[static_cast<size_t>(i)].lastStackCount = it.stackCount;
+                } else {
+                    invBagStackTrack_[static_cast<size_t>(i)].lastStackCount = it.stackCount;
+                }
+            } else if (invBagStackTrack_[static_cast<size_t>(i)].lastPoolIdx != idx) {
+                invBagStackTrack_[static_cast<size_t>(i)] = {idx, 0};
+            }
+        }
+        for (int i = 0; i < kInvStackSheenEquipCount; ++i) {
+            const int idx = inv.equipped[static_cast<size_t>(i)];
+            if (idx < 0) {
+                invEquipStackTrack_[static_cast<size_t>(i)] = InvSlotStackTrack{};
+                continue;
+            }
+            const auto &it = inv.items[static_cast<size_t>(idx)];
+            if (it.isStackable) {
+                if (invEquipStackTrack_[static_cast<size_t>(i)].lastPoolIdx != idx) {
+                    invEquipStackTrack_[static_cast<size_t>(i)] = {idx, it.stackCount};
+                } else if (it.stackCount > invEquipStackTrack_[static_cast<size_t>(i)].lastStackCount) {
+                    invStackSheenEquip_[static_cast<size_t>(i)] = 0.0001F;
+                    invEquipStackTrack_[static_cast<size_t>(i)].lastStackCount = it.stackCount;
+                } else {
+                    invEquipStackTrack_[static_cast<size_t>(i)].lastStackCount = it.stackCount;
+                }
+            } else if (invEquipStackTrack_[static_cast<size_t>(i)].lastPoolIdx != idx) {
+                invEquipStackTrack_[static_cast<size_t>(i)] = {idx, 0};
+            }
+        }
+        for (int i = 0; i < dreadcast::CONSUMABLE_SLOT_COUNT; ++i) {
+            const int idx = inv.consumableSlots[static_cast<size_t>(i)];
+            if (idx < 0) {
+                invConsStackTrack_[static_cast<size_t>(i)] = InvSlotStackTrack{};
+                continue;
+            }
+            const auto &it = inv.items[static_cast<size_t>(idx)];
+            if (it.isStackable) {
+                if (invConsStackTrack_[static_cast<size_t>(i)].lastPoolIdx != idx) {
+                    invConsStackTrack_[static_cast<size_t>(i)] = {idx, it.stackCount};
+                } else if (it.stackCount > invConsStackTrack_[static_cast<size_t>(i)].lastStackCount) {
+                    invStackSheenCons_[static_cast<size_t>(i)] = 0.0001F;
+                    invConsStackTrack_[static_cast<size_t>(i)].lastStackCount = it.stackCount;
+                } else {
+                    invConsStackTrack_[static_cast<size_t>(i)].lastStackCount = it.stackCount;
+                }
+            } else if (invConsStackTrack_[static_cast<size_t>(i)].lastPoolIdx != idx) {
+                invConsStackTrack_[static_cast<size_t>(i)] = {idx, 0};
+            }
+        }
+    }
+    tickInvStackSheen();
+}
+
 void InventoryUI::removeItemFromPool(InventoryState &inv, int itemIdx) {
     if (removeItemCb_) {
         removeItemCb_(itemIdx);
@@ -394,6 +547,16 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv,
         rarityInfoOpen_ = false;
         return action;
     }
+
+    struct FinInvStackFrame {
+        InventoryUI *self{nullptr};
+        InventoryState *st{nullptr};
+        ~FinInvStackFrame() {
+            if (self != nullptr && st != nullptr) {
+                self->finishOpenInventoryStackFrame(*st);
+            }
+        }
+    } finInvStack{this, &inv};
 
     const int sw = config::WINDOW_WIDTH;
     const int sh = config::WINDOW_HEIGHT;
@@ -969,7 +1132,7 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv,
 void InventoryUI::drawWithoutDragGhost(const Font &font, dreadcast::ResourceManager &resources,
                                        int screenW, int screenH, const InventoryState &inv,
                                        float playerHpRatio, float runicShellCdRatio,
-                                       float runicShellCdSeconds) {
+                                       float runicShellCdSeconds, float runicShellFinishFlashSec) {
     if (!open_) {
         return;
     }
@@ -1033,21 +1196,17 @@ void InventoryUI::drawWithoutDragGhost(const Font &font, dreadcast::ResourceMana
         } else {
             const Color tint = ghost ? Fade(RAYWHITE, 0.35F) : RAYWHITE;
             InventoryUI::drawItemIcon(*pit, resources, r, tint);
-            if (i == 0 && runicShellCdRatio > 0.001F && pit->name == "Runic Shell") {
-                DrawRectangleRec(r, Fade(BLACK, 0.45F * runicShellCdRatio));
-                char cdBuf[16];
-                const int sec = static_cast<int>(std::ceil(static_cast<double>(runicShellCdSeconds)));
-                std::snprintf(cdBuf, sizeof(cdBuf), "%ds", sec);
-                const float cdFs = 18.0F;
-                const Vector2 cdDim = MeasureTextEx(font, cdBuf, cdFs, 1.0F);
-                DrawTextEx(font, cdBuf,
-                           {r.x + (r.width - cdDim.x) * 0.5F + 1.0F,
-                            r.y + (r.height - cdDim.y) * 0.5F + 1.0F},
-                           cdFs, 1.0F, Fade(BLACK, 180));
-                DrawTextEx(font, cdBuf,
-                           {r.x + (r.width - cdDim.x) * 0.5F,
-                            r.y + (r.height - cdDim.y) * 0.5F},
-                           cdFs, 1.0F, {200, 220, 255, 255});
+            if (pit->isStackable && invStackSheenEquip_[static_cast<size_t>(i)] > 0.001F) {
+                drawItemStackSheenFlash(r, invStackSheenEquip_[static_cast<size_t>(i)],
+                                        kStackSheenTotalSec);
+            }
+            if (i == 0 && pit->name == "Runic Shell" &&
+                (runicShellCdRatio > 0.001F || runicShellFinishFlashSec > 0.001F)) {
+                drawCooldownOverlay(
+                    r,
+                    CooldownVisual{runicShellCdSeconds, config::RUNIC_SHELL_COOLDOWN,
+                                   runicShellFinishFlashSec, 22.0F},
+                    font);
             }
         }
     }
@@ -1066,6 +1225,10 @@ void InventoryUI::drawWithoutDragGhost(const Font &font, dreadcast::ResourceMana
             const Color tint = ghost ? Fade(RAYWHITE, 0.35F) : RAYWHITE;
             const auto &it = *pit;
             InventoryUI::drawItemIcon(it, resources, r, tint);
+            if (it.isStackable && invStackSheenCons_[static_cast<size_t>(i)] > 0.001F) {
+                drawItemStackSheenFlash(r, invStackSheenCons_[static_cast<size_t>(i)],
+                                        kStackSheenTotalSec);
+            }
             if (it.name == "Vial of Cordial Manic" && playerHpRatio < 0.40F - 1.0e-4F) {
                 drawCordialManicBlockedOverlay(r);
             }
@@ -1100,6 +1263,10 @@ void InventoryUI::drawWithoutDragGhost(const Font &font, dreadcast::ResourceMana
             const Color tint = ghost ? Fade(RAYWHITE, 0.35F) : RAYWHITE;
             const auto &it = *pit;
             InventoryUI::drawItemIcon(it, resources, r, tint);
+            if (it.isStackable && invStackSheenBag_[static_cast<size_t>(i)] > 0.001F) {
+                drawItemStackSheenFlash(r, invStackSheenBag_[static_cast<size_t>(i)],
+                                        kStackSheenTotalSec);
+            }
             if (it.name == "Vial of Cordial Manic" && playerHpRatio < 0.40F - 1.0e-4F) {
                 drawCordialManicBlockedOverlay(r);
             }
@@ -1341,9 +1508,9 @@ void InventoryUI::drawWithoutDragGhost(const Font &font, dreadcast::ResourceMana
 
 void InventoryUI::draw(const Font &font, dreadcast::ResourceManager &resources, int screenW, int screenH,
                        const InventoryState &inv, float playerHpRatio, float runicShellCdRatio,
-                       float runicShellCdSeconds) {
+                       float runicShellCdSeconds, float runicShellFinishFlashSec) {
     drawWithoutDragGhost(font, resources, screenW, screenH, inv, playerHpRatio, runicShellCdRatio,
-                         runicShellCdSeconds);
+                         runicShellCdSeconds, runicShellFinishFlashSec);
     drawDragGhost(resources, inv);
 }
 

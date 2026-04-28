@@ -21,6 +21,8 @@ struct CharacterClass {
     float meleeRange{60.0F};
     float rangedDamage{10.0F};
     float rangedRange{800.0F};
+    /// Curse bolt travel speed (world units/s); keep aligned with player `Projectile` speed in combat.
+    float rangedProjectileSpeed{600.0F};
     float moveSpeed{280.0F};
     float visionRange{500.0F};
     float levelMaxHpGain{10.0F};

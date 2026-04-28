@@ -15,6 +15,7 @@ class MenuScene final : public Scene {
 
   private:
     ui::Button playButton_{};
+    ui::Button archiveButton_{};
     ui::Button settingsButton_{};
     ui::Button quitButton_{};
     ui::Button changeClassButton_{};

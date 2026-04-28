@@ -111,10 +111,19 @@ inline constexpr float FOG_EDGE_SOFTEN_PIXELS = 17.0F;
 inline constexpr float LAVA_SPEED_MULTIPLIER = 0.5F;
 inline constexpr float LAVA_DAMAGE_PER_TICK = 8.0F;
 inline constexpr float LAVA_DAMAGE_INTERVAL = 0.5F;
+/// Proximity lava ambience: silent beyond this distance (world units) to nearest lava AABB edge.
+inline constexpr float LAVA_AMBIENT_FAR = 500.0F;
+/// Full volume at or inside this distance to the nearest lava edge.
+inline constexpr float LAVA_AMBIENT_NEAR = 200.0F;
 
 /// Vial of Raw Spirit (consumable)
 inline constexpr float RAW_SPIRIT_MANA_TOTAL = 50.0F;
 inline constexpr float RAW_SPIRIT_DURATION = 6.0F;
+
+inline constexpr float VIGILANT_EYE_STILL_SECONDS = 2.0F;
+inline constexpr float VIGILANT_EYE_STILL_BONUS = 15.0F;
+inline constexpr float VIGILANT_EYE_BASE_BONUS = 40.0F;
+inline constexpr float VIGILANT_EYE_LERP_RATE = 6.0F;
 
 /// Angular samples for world-space vision polygon (ray cast per direction).
 inline constexpr int FOG_VISIBILITY_SAMPLES = 360;
