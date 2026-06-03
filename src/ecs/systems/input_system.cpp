@@ -6,6 +6,7 @@
 #include <raylib.h>
 
 #include "config.hpp"
+#include "game/item_effects.hpp"
 #include "core/input.hpp"
 #include "core/iso_utils.hpp"
 #include "core/types.hpp"
@@ -38,7 +39,10 @@ void input_system(entt::registry &registry, const InputManager &input, const Cam
             move.x += 1.0F;
         }
 
-        if (registry.all_of<SnareDashState>(entity)) {
+        if (registry.all_of<KnockbackState>(entity)) {
+            // Being knocked back (e.g. Warden push): velocity is owned by the knockback decay in
+            // the fixed-step tick; don't let movement input override it.
+        } else if (registry.all_of<SnareDashState>(entity)) {
             // Velocity set by tickSnareDash each fixed step.
         } else if (registry.all_of<SlugAimState>(entity)) {
             vel.value.x = 0.0F;
@@ -52,8 +56,7 @@ void input_system(entt::registry &registry, const InputManager &input, const Cam
                 const Vec2 worldDir = Vec2Normalize(dreadcast::isoToWorld(move));
                 const Vec2 isoDir = dreadcast::worldToIso(worldDir);
                 const float isoLen = Vec2Length(isoDir);
-                float speedMul =
-                    registry.all_of<ManicEffect>(entity) ? config::MANIC_SPEED_MULTIPLIER : 1.0F;
+                float speedMul = dreadcast::playerManicSpeedMultiplierOrOne(registry, entity);
                 bool onLava = false;
                 for (const auto le : registry.view<Lava, Transform>()) {
                     const auto &lt = registry.get<Transform>(le);
@@ -68,6 +71,9 @@ void input_system(entt::registry &registry, const InputManager &input, const Cam
                 }
                 if (onLava) {
                     speedMul *= config::LAVA_SPEED_MULTIPLIER;
+                }
+                if (const auto *slow = registry.try_get<PlayerSlow>(entity)) {
+                    speedMul *= slow->multiplier;
                 }
                 float moveSpeed = config::PLAYER_MOVE_SPEED;
                 if (registry.all_of<PlayerMoveStats>(entity)) {

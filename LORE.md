@@ -34,6 +34,26 @@ When **mortals** arrive there, they are **fated** to have their minds **eroded**
 
 The Pit has **many dwellers** and is said to contain **nine circles** (structure and geography to be expanded later).
 
+### The Nine Arenas (draft)
+
+The Dread Pit is currently conceived as **nine arenas**. Details are still in progress; the entries below are the first established notes.
+
+1. **Arena I — The Grey Threshold**  
+   Grey, drained, almost boring. A handful of souls lie scattered across the ground—most unconscious or asleep, others barely moving.  
+   Rumors and half-seen visions suggest **unbaptized infants drifting overhead** (TBD: whether this is literal, symbolic, or both).
+
+   This is the game’s **start location**: relatively small, suited to onboarding and early orientation (tutorial and preparation beats TBD).
+
+   As the protagonist arrives in the Pit, they hear a voice and recognize it almost immediately: **Vareth**.  
+   In the world of the living, Vareth is treated like a children’s boogeyman. Myth says he was the **first sinner**, one whose crimes—often tied to dark magic—were so severe that the universe did not wait for death: he was dragged into the Pit **alive**.  
+   In the Pit, he is real and present, and his reputation is contradictory. The protagonist does not know whether he serves the Pit, governs part of it, or suffers under it like everyone else. They only know one thing with certainty: **something is wrong about their arrival**, and Vareth is tied to it.
+
+2. **Arena II — Obsession and Madness**  
+   Weather shifts constantly and violently, but most of it is unreal—hallucinated climate laid over real torment. The exception is the wind: sudden blasts that punch into tortured bodies, always catching them off guard before rising into hurricane force.  
+   In gameplay terms, this wind manifests as a roaming hazard: a literal moving force that sweeps through the map, drags entities toward it, and deals heavy damage.
+
+   Visual tone: mostly dark, with muted palettes and sickly organic textures—brown-white brain-like mass, rot, and damp flesh.
+
 ---
 
 ## Characters

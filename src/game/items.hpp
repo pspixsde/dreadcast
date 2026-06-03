@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include "game/item_effects_types.hpp"
+
 namespace dreadcast {
 
 enum class EquipSlot { Armor, Amulet, Ring, COUNT };
@@ -50,6 +52,9 @@ struct ItemData {
     /// Mana restored when any ability cooldown finishes (per equipped item; sums).
     float abilityCooldownManaRefund{0.0F};
     std::string description{};
+    /// Data-driven triggers/actions (see `assets/data/items.json`). Filled at load; may be
+    /// synthesized from legacy numeric fields when JSON has no `effects` array.
+    std::vector<ItemEffectDef> effects{};
 
     [[nodiscard]] bool canStackWith(const ItemData &other) const {
         if (!isStackable || !other.isStackable || !isConsumable || !other.isConsumable ||
@@ -101,105 +106,6 @@ struct InventoryState {
             }
         }
         return -1;
-    }
-
-    /// Sum of `maxHpBonus` from all equipped items.
-    [[nodiscard]] float totalEquippedMaxHpBonus() const {
-        float sum = 0.0F;
-        for (size_t i = 0; i < equipped.size(); ++i) {
-            const int idx = equipped[i];
-            if (idx >= 0 && idx < static_cast<int>(items.size())) {
-                sum += items[static_cast<size_t>(idx)].maxHpBonus;
-            }
-        }
-        return sum;
-    }
-
-    /// Sum of `maxManaBonus` from all equipped items.
-    [[nodiscard]] float totalEquippedMaxManaBonus() const {
-        float sum = 0.0F;
-        for (size_t i = 0; i < equipped.size(); ++i) {
-            const int idx = equipped[i];
-            if (idx >= 0 && idx < static_cast<int>(items.size())) {
-                sum += items[static_cast<size_t>(idx)].maxManaBonus;
-            }
-        }
-        return sum;
-    }
-
-    /// Sum of `hpRegenBonus` from all equipped items.
-    [[nodiscard]] float totalEquippedHpRegenBonus() const {
-        float sum = 0.0F;
-        for (size_t i = 0; i < equipped.size(); ++i) {
-            const int idx = equipped[i];
-            if (idx >= 0 && idx < static_cast<int>(items.size())) {
-                sum += items[static_cast<size_t>(idx)].hpRegenBonus;
-            }
-        }
-        return sum;
-    }
-
-    /// Sum of `moveSpeedBonus` from all equipped items.
-    [[nodiscard]] float totalEquippedMoveSpeedBonus() const {
-        float sum = 0.0F;
-        for (size_t i = 0; i < equipped.size(); ++i) {
-            const int idx = equipped[i];
-            if (idx >= 0 && idx < static_cast<int>(items.size())) {
-                sum += items[static_cast<size_t>(idx)].moveSpeedBonus;
-            }
-        }
-        return sum;
-    }
-
-    /// Sum of `visionRangeBonus` from all equipped items.
-    [[nodiscard]] float totalEquippedVisionRangeBonus() const {
-        float sum = 0.0F;
-        for (size_t i = 0; i < equipped.size(); ++i) {
-            const int idx = equipped[i];
-            if (idx >= 0 && idx < static_cast<int>(items.size())) {
-                sum += items[static_cast<size_t>(idx)].visionRangeBonus;
-            }
-        }
-        return sum;
-    }
-
-    /// Max damage reflect fraction from equipped items (single armor slot expected; sum if stacked).
-    [[nodiscard]] float totalEquippedDamageReflect() const {
-        float sum = 0.0F;
-        for (size_t i = 0; i < equipped.size(); ++i) {
-            const int idx = equipped[i];
-            if (idx >= 0 && idx < static_cast<int>(items.size())) {
-                sum += items[static_cast<size_t>(idx)].damageReflectPercent;
-            }
-        }
-        return sum;
-    }
-
-    /// Product of `abilityManaCostMultiplier` from all equipped items (empty slots = 1.0 each).
-    [[nodiscard]] float totalEquippedAbilityManaCostMultiplier() const {
-        float prod = 1.0F;
-        for (size_t i = 0; i < equipped.size(); ++i) {
-            const int idx = equipped[i];
-            if (idx >= 0 && idx < static_cast<int>(items.size())) {
-                const float m = items[static_cast<size_t>(idx)].abilityManaCostMultiplier;
-                if (m > 0.001F) {
-                    prod *= m;
-                }
-            }
-        }
-        return prod;
-    }
-
-    /// Sum of `abilityCooldownManaRefund` from equipped items.
-    [[nodiscard]] float totalEquippedAbilityCooldownManaRefund() const {
-        float sum = 0.0F;
-        for (size_t i = 0; i < equipped.size(); ++i) {
-            const int idx = equipped[i];
-            if (idx >= 0 && idx < static_cast<int>(items.size())) {
-                sum += items[static_cast<size_t>(idx)].abilityCooldownManaRefund;
-            }
-        }
-        return sum;
     }
 
     /// Rewrites slot indices that equal `from` to `to` (-1 ignored).

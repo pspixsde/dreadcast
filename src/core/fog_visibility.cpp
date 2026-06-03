@@ -1,11 +1,14 @@
 #include "core/fog_visibility.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <vector>
 
 #include "config.hpp"
 #include "core/poly_helpers.hpp"
 #include "ecs/components.hpp"
+#include "game/map_data.hpp"
 
 namespace dreadcast {
 namespace {
@@ -93,8 +96,6 @@ void buildVisibilityPolygonWorld(Vector2 playerWorld, entt::registry &registry, 
         for (const auto w : walls) {
             const auto &t = registry.get<ecs::Transform>(w);
             const auto &wall = registry.get<ecs::Wall>(w);
-            const Rectangle rect{t.position.x - wall.halfW, t.position.y - wall.halfH,
-                                 wall.halfW * 2.0F, wall.halfH * 2.0F};
 
             const float dx = t.position.x - playerWorld.x;
             const float dy = t.position.y - playerWorld.y;
@@ -103,6 +104,19 @@ void buildVisibilityPolygonWorld(Vector2 playerWorld, entt::registry &registry, 
                 continue;
             }
 
+            if (wall.angle != 0.0F) {
+                const std::array<Vector2, 4> corners = orientedBoxCorners(
+                    t.position.x, t.position.y, wall.halfW, wall.halfH, wall.angle);
+                const std::vector<Vector2> poly(corners.begin(), corners.end());
+                const float tHit = rayDistanceToPolygonEdges(playerWorld, dir, dist, poly);
+                if (tHit < dist) {
+                    dist = tHit;
+                }
+                continue;
+            }
+
+            const Rectangle rect{t.position.x - wall.halfW, t.position.y - wall.halfH,
+                                 wall.halfW * 2.0F, wall.halfH * 2.0F};
             const float tHit = rayAabb2D(playerWorld, dir, maxRadius, rect);
             if (tHit < dist) {
                 dist = tHit;

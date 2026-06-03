@@ -11,7 +11,7 @@
 #include "core/resource_manager.hpp"
 #include "game/character.hpp"
 #include "game/game_data.hpp"
-#include "scenes/archive_scene.hpp"
+#include "scenes/codex_scene.hpp"
 #include "scenes/character_select_scene.hpp"
 #include "scenes/gameplay_scene.hpp"
 #include "scenes/scene_manager.hpp"
@@ -36,8 +36,8 @@ void MenuScene::update(SceneManager &scenes, InputManager &input, ResourceManage
         scenes.replace(std::make_unique<GameplayScene>(selectedClassIndex_));
         return;
     }
-    if (archiveButton_.wasClicked(mouse, click)) {
-        scenes.push(std::make_unique<ArchiveScene>());
+    if (codexButton_.wasClicked(mouse, click)) {
+        scenes.push(std::make_unique<CodexScene>());
         return;
     }
     if (settingsButton_.wasClicked(mouse, click)) {
@@ -102,8 +102,8 @@ void MenuScene::draw(ResourceManager &resources) {
     playButton_.label = "Play";
     playButton_.rect = {btnX, h * 0.5F + 20.0F, btnW, btnH};
 
-    archiveButton_.rect = {btnX, h * 0.5F + 85.0F, btnW, btnH};
-    archiveButton_.label = "Archive";
+    codexButton_.rect = {btnX, h * 0.5F + 85.0F, btnW, btnH};
+    codexButton_.label = "Codex";
 
     settingsButton_.rect = {btnX, h * 0.5F + 150.0F, btnW, btnH};
     settingsButton_.label = "Settings";
@@ -116,8 +116,8 @@ void MenuScene::draw(ResourceManager &resources) {
                           ui::theme::BTN_BORDER);
     playButton_.draw(font, btnFont, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER, RAYWHITE,
                      ui::theme::BTN_BORDER);
-    archiveButton_.draw(font, btnFont, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER, RAYWHITE,
-                        ui::theme::BTN_BORDER);
+    codexButton_.draw(font, btnFont, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER, RAYWHITE,
+                      ui::theme::BTN_BORDER);
     settingsButton_.draw(font, btnFont, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER, RAYWHITE,
                          ui::theme::BTN_BORDER);
     quitButton_.draw(font, btnFont, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER, RAYWHITE,

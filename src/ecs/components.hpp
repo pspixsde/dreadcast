@@ -1,6 +1,8 @@
 #pragma once
 
+#include <array>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include <entt/entt.hpp>
@@ -103,13 +105,35 @@ struct NameTag {
     const char *name{"Unknown"};
 };
 
-enum class EnemyType : int { Imp = 0, Hellhound = 1 };
+enum class EnemyType : int { Imp = 0, Hellhound = 1, Warden = 2, Dreg = 3 };
+
+/// Maps `assets/data/enemies.json` `behavior` string to runtime AI branch.
+inline EnemyType enemyTypeFromBehavior(const std::string &behavior) {
+    if (behavior == "melee_chaser") {
+        return EnemyType::Hellhound;
+    }
+    if (behavior == "mid_bruiser") {
+        return EnemyType::Warden;
+    }
+    if (behavior == "dreg_swarmer") {
+        return EnemyType::Dreg;
+    }
+    return EnemyType::Imp;
+}
 
 struct EnemyAI {
     EnemyType type{EnemyType::Imp};
     float shootCooldown{2.0F};
     float shootTimer{0.0F};
     float minShootRange{60.0F};
+    float preferredRange{220.0F};
+    float kiteSpeed{145.0F};
+    float advanceSpeed{100.0F};
+    float panicRange{80.0F};
+    float strafeBias{0.4F};
+    float projectileDamage{15.0F};
+    float projectileSpeed{400.0F};
+    float projectileRange{400.0F};
     float meleeDamage{0.0F};
     float meleeRange{0.0F};
     float meleeCooldown{1.0F};
@@ -117,6 +141,70 @@ struct EnemyAI {
     float chaseSpeed{0.0F};
     Vector2 prevPosition{0.0F, 0.0F};
     float stuckTimer{0.0F};
+    /// Relentless aggro that never calms and always tracks the live player position (Node-spawned
+    /// Dregs). Bypasses agitation range / line-of-sight calm-down.
+    bool permanentAggro{false};
+};
+
+/// Temporary movement-speed multiplier on an enemy (e.g. Dregs bursting out of a Node). Removed
+/// when `elapsed >= duration`.
+struct EnemySpeedBuff {
+    float multiplier{1.5F};
+    float duration{2.0F};
+    float elapsed{0.0F};
+};
+
+/// Tag for entities that should not be displaced by knockback or unit separation (e.g. Nodes).
+struct Immovable {};
+
+/// Stationary Dreg spawner. Dormant until the player enters `triggerRadius`; on activation it
+/// bursts `burstCount` Dregs, then (while the player stays inside the enlarged active area) emits
+/// `sustainCount` Dregs every `sustainInterval` seconds. If the player leaves the active area for
+/// `dormantDelay` seconds it goes dormant again and regenerates to full health. Destroyed for XP.
+struct NodeSpawner {
+    /// Dormant detection radius (player must enter this to wake the Node).
+    float triggerRadius{350.0F};
+    /// Active area once awake.
+    float activeRadius{700.0F};
+    /// While dormant, taking damage temporarily expands the trigger radius to this value.
+    float damageTriggerRadius{700.0F};
+    /// How long a hit keeps the trigger radius expanded (seconds).
+    float damageTriggerDuration{6.0F};
+    int burstCount{8};
+    int sustainCount{3};
+    float sustainInterval{3.0F};
+    float dormantDelay{6.0F};
+    /// Dreg burst speed buff (50% faster for 2s).
+    float buffMultiplier{1.5F};
+    float buffDuration{2.0F};
+
+    bool active{false};
+    float sustainTimer{0.0F};
+    /// Counts up while the player is outside the active area; resets when inside.
+    float dormantTimer{0.0F};
+    /// Counts down while the damage-expanded trigger radius is in effect (dormant only).
+    float damageTriggerTimer{0.0F};
+    /// Last observed health, for detecting damage between ticks (-1 = uninitialized).
+    float prevHealth{-1.0F};
+};
+
+/// Static Warden combat tuning from enemy archetype data (separate from runtime `WardenState`).
+struct WardenTuning {
+    float chaseSpeed{210.0F};
+    float preferredRange{170.0F};
+    float attackDamage{35.0F};
+    float attackCooldown{1.6F};
+    float attackTelegraph{0.5F};
+    float attackRange{235.0F};
+    float attackLineLength{245.0F};
+    float attackLineHalfWidth{40.0F};
+    float closeRange{95.0F};
+    float abilityChargeTime{2.0F};
+    float abilityCooldown{10.0F};
+    float abilityKnockback{680.0F};
+    float abilityKnockbackDuration{0.3F};
+    float slowMultiplier{0.8F};
+    float slowDuration{4.0F};
 };
 
 struct ManaShard {
@@ -128,10 +216,12 @@ struct ItemPickup {
     int itemIndex{-1};
 };
 
-/// Axis-aligned wall block in world space (`Transform::position` is center).
+/// Wall block in world space (`Transform::position` is center). `angle` (radians) rotates the box
+/// about its center; 0 keeps it axis-aligned.
 struct Wall {
     float halfW{32.0F};
     float halfH{32.0F};
+    float angle{0.0F};
 };
 
 /// Walk-through lava hazard (`Transform::position` is center).
@@ -151,46 +241,96 @@ struct Agitation {
     bool hasLastKnownPos{false};
 };
 
-/// World interactable (casket, etc.); `name` shown in prompt.
+/// Stable classification for gameplay F-use handling (prefer over string `name`). `OldCasket`
+/// covers every loot-casket tier (Old/Sealed/Wrought); the tier only affects the rolled contents
+/// and the display `name`, not the F-use behavior.
+enum class InteractableKind : uint8_t { Generic = 0, Anvil, OldCasket };
+
+/// World interactable (casket, anvil, …); `name` shown in prompt.
 struct Interactable {
+    InteractableKind interactionKind{InteractableKind::Generic};
     std::string name{"Unknown"};
     bool opened{false};
 };
 
-/// Smooth heal-over-time on the player (one active instance; re-applying replaces).
-struct HealOverTime {
-    float totalHeal{40.0F};
-    float duration{8.0F};
-    float elapsed{0.0F};
-    float healedSoFar{0.0F};
+/// Per-casket loot contents (item catalog ids; empty entries are skipped on open).
+struct CasketLoot {
+    std::array<std::string, 3> itemSlots{};
 };
 
-/// Vial of Raw Spirit: mana restored over time (one active instance; re-applying replaces).
-struct ManaRegenOverTime {
-    float totalMana{50.0F};
-    float duration{6.0F};
-    float elapsed{0.0F};
-    float regenedSoFar{0.0F};
-};
-
-/// Vial of Cordial Manic: speed + invuln + HP drain, blocks external regen / HOT.
-struct ManicEffect {
-    float duration{7.0F};
-    float elapsed{0.0F};
-    float hpDrainTotal{0.0F};
-    float hpDrained{0.0F};
-};
-
-/// Active knockback: enemy skips AI and decelerates until elapsed >= duration.
+/// Active knockback: the entity skips its normal movement control and decelerates with friction
+/// until elapsed >= duration. Used for both enemies (AI) and the player (input gating).
 struct KnockbackState {
     float duration{0.25F};
     float elapsed{0.0F};
 };
 
-/// Runic Shell triggered-ability cooldown on the player.
-struct RunicShellCooldown {
-    float remaining{0.0F};
+/// Per-Warden runtime state: telegraphed line slam + close-range push ability.
+struct WardenState {
+    float attackCooldownTimer{0.0F};
+    bool telegraphActive{false};
+    float telegraphTimer{0.0F};
+    /// Direction frozen at slam commit; the line origin tracks the Warden's live position so the
+    /// strike zone follows it (e.g. if it is knocked back mid-cast).
+    Vector2 attackDir{1.0F, 0.0F};
+    /// Brief countdown for the slam-landed flash VFX.
+    float slamFlashTimer{0.0F};
+    /// Close-range push ability.
+    float abilityCooldownTimer{0.0F};
+    float closeContactTimer{0.0F};
+    float abilityFlashTimer{0.0F};
+    /// One-shot SFX requests consumed (reset) by the gameplay scene.
+    bool attackSfxPending{false};
+    bool abilitySfxPending{false};
+};
+
+/// Timed movement slow on the player (multiplier < 1). Removed when elapsed >= duration.
+struct PlayerSlow {
+    float multiplier{0.8F};
+    float duration{3.0F};
+    float elapsed{0.0F};
+};
+
+/// Runtime payloads for item-driven timed effects (vials, Runic Shell cooldown, etc.).
+struct ActiveItemEffectHot {
+    float totalHeal{40.0F};
+    float duration{8.0F};
+    float elapsed{0.0F};
+    float healedSoFar{0.0F};
+    std::string sourceCatalogId{};
+};
+
+struct ActiveItemEffectManaRot {
+    float totalMana{50.0F};
+    float duration{6.0F};
+    float elapsed{0.0F};
+    float regenedSoFar{0.0F};
+    std::string sourceCatalogId{};
+};
+
+struct ActiveItemEffectManic {
+    float duration{7.0F};
+    float elapsed{0.0F};
+    float hpDrainTotal{0.0F};
+    float hpDrained{0.0F};
+    float speedMultiplier{2.0F};
+    std::string sourceCatalogId{};
+};
+
+struct ActiveItemEffectRunicCd {
+    float remaining{30.0F};
     float total{30.0F};
+    std::string sourceCatalogId{};
+};
+
+using ActiveItemEffectEntry =
+    std::variant<ActiveItemEffectHot, ActiveItemEffectManaRot, ActiveItemEffectManic,
+                 ActiveItemEffectRunicCd>;
+
+/// One player entity holds a vector of active item effect instances (replaces separate HoT/Manic
+/// components).
+struct ActiveItemEffects {
+    std::vector<ActiveItemEffectEntry> entries{};
 };
 
 /// Enemy cannot act until elapsed &gt;= duration (AI skipped). Knockback still applies.

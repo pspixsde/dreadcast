@@ -9,7 +9,7 @@
 
 namespace dreadcast {
 
-class ArchiveScene final : public Scene {
+class CodexScene final : public Scene {
   public:
     void update(SceneManager &scenes, InputManager &input, ResourceManager &resources,
                 float frameDt) override;

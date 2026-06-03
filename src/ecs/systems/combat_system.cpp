@@ -10,6 +10,7 @@
 #include "core/input.hpp"
 #include "core/iso_utils.hpp"
 #include "core/types.hpp"
+#include "ecs/combat_resolution.hpp"
 #include "ecs/components.hpp"
 #include "game/game_data.hpp"
 #include "core/resource_manager.hpp"
@@ -21,7 +22,7 @@ void playReloadSfx(ResourceManager *resources) {
     if (resources == nullptr) {
         return;
     }
-    const SoundHandle h = resources->getSound("assets/sounds/reload.wav");
+    const SoundHandle h = resources->getSound("assets/sounds/combat/chamber_reload.wav");
     if (h >= 0) {
         // Keep the same pitch spread, shifted up so the sample fits chamber reload timing better.
         const float p = 1.15F + static_cast<float>(GetRandomValue(0, 16)) / 100.0F;
@@ -182,17 +183,23 @@ void applyMeleeSwingHit(entt::registry &registry, entt::entity player, MeleeAtta
             continue;
         }
 
-        auto &health = registry.get<Health>(e);
-        health.current -= melee.damage * dmgScale;
+        {
+            const float hitDmg = melee.damage * dmgScale;
+            const DamagePacket pkt{player, hitDmg, DamageCategory::MeleePlayerVsEnemy};
+            (void)resolveDamage(registry, e, pkt, {});
+        }
 
         if (registry.all_of<Agitation>(e)) {
             registry.get<Agitation>(e).agitationRange += 100.0F;
         }
 
-        auto &vel = registry.get_or_emplace<Velocity>(e);
-        vel.value.x = nd.x * melee.knockback * kbScale;
-        vel.value.y = nd.y * melee.knockback * kbScale;
-        registry.emplace_or_replace<KnockbackState>(e, KnockbackState{config::KNOCKBACK_DURATION, 0.0F});
+        if (!registry.all_of<Immovable>(e)) {
+            auto &vel = registry.get_or_emplace<Velocity>(e);
+            vel.value.x = nd.x * melee.knockback * kbScale;
+            vel.value.y = nd.y * melee.knockback * kbScale;
+            registry.emplace_or_replace<KnockbackState>(e,
+                                                        KnockbackState{config::KNOCKBACK_DURATION, 0.0F});
+        }
     }
 
     melee.hitAppliedThisSwing = true;

@@ -7,7 +7,9 @@
 #include <string>
 
 #include "config.hpp"
+#include "game/item_effects.hpp"
 #include "game/item_rarity.hpp"
+#include "game/item_transaction.hpp"
 #include "core/resource_manager.hpp"
 #include "ui/cooldown_overlay.hpp"
 #include "ui/theme.hpp"
@@ -394,150 +396,43 @@ void InventoryUI::finishOpenInventoryStackFrame(InventoryState &inv) {
     tickInvStackSheen();
 }
 
-void InventoryUI::removeItemFromPool(InventoryState &inv, int itemIdx) {
-    if (removeItemCb_) {
-        removeItemCb_(itemIdx);
-    } else {
-        inv.removeItemAtIndex(itemIdx);
-    }
+void InventoryUI::tryEquipFromBag(InvCtx &ctx, int bagIndex) {
+    (void)equipGearFromBagSlot(ctx, bagIndex);
 }
 
-void InventoryUI::tryEquipFromBag(InventoryState &inv, int bagIndex) {
-    if (bagIndex < 0 || bagIndex >= dreadcast::BAG_SLOT_COUNT) {
-        return;
-    }
-    const int itemIdx = inv.bagSlots[static_cast<size_t>(bagIndex)];
-    if (itemIdx < 0 || itemIdx >= static_cast<int>(inv.items.size())) {
-        return;
-    }
-    // Consumables are not equippable into gear slots (Armor/Amulet/Ring).
-    if (inv.items[static_cast<size_t>(itemIdx)].isConsumable) {
-        return;
-    }
-    const EquipSlot targetSlot = inv.items[static_cast<size_t>(itemIdx)].slot;
-    const int si = static_cast<int>(targetSlot);
-    int &eq = inv.equipped[static_cast<size_t>(si)];
-    if (eq >= 0) {
-        std::swap(eq, inv.bagSlots[static_cast<size_t>(bagIndex)]);
-    } else {
-        eq = itemIdx;
-        inv.bagSlots[static_cast<size_t>(bagIndex)] = -1;
-    }
+void InventoryUI::tryEquipConsumableFromBag(InvCtx &ctx, int bagIndex) {
+    (void)tryEquipConsumableFromBagSlot(ctx, bagIndex);
 }
 
-void InventoryUI::tryEquipConsumableFromBag(InventoryState &inv, int bagIndex) {
-    if (bagIndex < 0 || bagIndex >= dreadcast::BAG_SLOT_COUNT) {
-        return;
-    }
-    const int itemIdx = inv.bagSlots[static_cast<size_t>(bagIndex)];
-    if (itemIdx < 0 || itemIdx >= static_cast<int>(inv.items.size())) {
-        return;
-    }
-    if (!inv.items[static_cast<size_t>(itemIdx)].isConsumable) {
-        return;
-    }
-    auto &src = inv.items[static_cast<size_t>(itemIdx)];
-    for (int i = 0; i < dreadcast::CONSUMABLE_SLOT_COUNT; ++i) {
-        const int dstIdx = inv.consumableSlots[static_cast<size_t>(i)];
-        if (dstIdx < 0 || dstIdx >= static_cast<int>(inv.items.size())) {
-            continue;
+void InventoryUI::tryUnequipConsumableToBag(InvCtx &ctx, int consumableSlotIndex) {
+    (void)tryUnequipConsumableToBagSlot(ctx, consumableSlotIndex);
+}
+
+void InventoryUI::tryUnequip(InvCtx &ctx, EquipSlot slot) {
+    (void)tryUnequipGearToBag(ctx, slot);
+}
+
+void InventoryUI::moveEquippedToBagSlot(InvCtx &ctx, EquipSlot slot, int bagIdx) {
+    (void)moveEquippedGearToBagSlot(ctx, slot, bagIdx);
+}
+
+void InventoryUI::swapBagSlots(InvCtx &ctx, int a, int b) {
+    (void)swapBagSlotIndices(ctx, a, b);
+}
+
+void InventoryUI::notifyPoolIndexRewritten(int removedIdx, int oldLastIdx) {
+    auto rewrite = [&](int &ix) {
+        if (ix == removedIdx) {
+            ix = -1;
+        } else if (ix == oldLastIdx) {
+            ix = removedIdx;
         }
-        auto &dst = inv.items[static_cast<size_t>(dstIdx)];
-        if (!dst.canStackWith(src) || dst.stackCount >= dst.maxStack) {
-            continue;
-        }
-        const int canTake = std::min(dst.maxStack - dst.stackCount, src.stackCount);
-        dst.stackCount += canTake;
-        src.stackCount -= canTake;
-        if (src.stackCount <= 0) {
-            inv.bagSlots[static_cast<size_t>(bagIndex)] = -1;
-            removeItemFromPool(inv, itemIdx);
-            return;
-        }
-    }
-    const int empty = inv.firstEmptyConsumableSlot();
-    if (empty >= 0) {
-        inv.consumableSlots[static_cast<size_t>(empty)] = itemIdx;
-        inv.bagSlots[static_cast<size_t>(bagIndex)] = -1;
-    }
+    };
+    rewrite(dragItemIndex_);
+    rewrite(contextItemIndex_);
 }
 
-void InventoryUI::tryUnequipConsumableToBag(InventoryState &inv, int consumableSlotIndex) {
-    if (consumableSlotIndex < 0 || consumableSlotIndex >= dreadcast::CONSUMABLE_SLOT_COUNT) {
-        return;
-    }
-    const int itemIdx = inv.consumableSlots[static_cast<size_t>(consumableSlotIndex)];
-    if (itemIdx < 0 || itemIdx >= static_cast<int>(inv.items.size())) {
-        return;
-    }
-    auto &src = inv.items[static_cast<size_t>(itemIdx)];
-    for (int i = 0; i < dreadcast::BAG_SLOT_COUNT; ++i) {
-        const int dstIdx = inv.bagSlots[static_cast<size_t>(i)];
-        if (dstIdx < 0 || dstIdx >= static_cast<int>(inv.items.size())) {
-            continue;
-        }
-        auto &dst = inv.items[static_cast<size_t>(dstIdx)];
-        if (!dst.canStackWith(src) || dst.stackCount >= dst.maxStack) {
-            continue;
-        }
-        const int canTake = std::min(dst.maxStack - dst.stackCount, src.stackCount);
-        dst.stackCount += canTake;
-        src.stackCount -= canTake;
-        if (src.stackCount <= 0) {
-            inv.consumableSlots[static_cast<size_t>(consumableSlotIndex)] = -1;
-            removeItemFromPool(inv, itemIdx);
-            return;
-        }
-    }
-    const int bag = inv.firstEmptyBagSlot();
-    if (bag < 0) {
-        return;
-    }
-    inv.bagSlots[static_cast<size_t>(bag)] = itemIdx;
-    inv.consumableSlots[static_cast<size_t>(consumableSlotIndex)] = -1;
-}
-
-void InventoryUI::tryUnequip(InventoryState &inv, EquipSlot slot) {
-    const int itemIdx = inv.equipped[static_cast<size_t>(slot)];
-    if (itemIdx < 0) {
-        return;
-    }
-    const int bag = inv.firstEmptyBagSlot();
-    if (bag < 0) {
-        return;
-    }
-    inv.bagSlots[static_cast<size_t>(bag)] = itemIdx;
-    inv.equipped[static_cast<size_t>(slot)] = -1;
-}
-
-void InventoryUI::moveEquippedToBagSlot(InventoryState &inv, EquipSlot slot, int bagIdx) {
-    if (bagIdx < 0 || bagIdx >= dreadcast::BAG_SLOT_COUNT) {
-        return;
-    }
-    const int eIdx = inv.equipped[static_cast<size_t>(slot)];
-    if (eIdx < 0) {
-        return;
-    }
-    const int bIdx = inv.bagSlots[static_cast<size_t>(bagIdx)];
-    if (bIdx < 0) {
-        inv.bagSlots[static_cast<size_t>(bagIdx)] = eIdx;
-        inv.equipped[static_cast<size_t>(slot)] = -1;
-        return;
-    }
-    if (inv.items[static_cast<size_t>(bIdx)].slot == slot) {
-        inv.equipped[static_cast<size_t>(slot)] = bIdx;
-        inv.bagSlots[static_cast<size_t>(bagIdx)] = eIdx;
-    }
-}
-
-void InventoryUI::swapBagSlots(InventoryState &inv, int a, int b) {
-    if (a < 0 || b < 0 || a >= dreadcast::BAG_SLOT_COUNT || b >= dreadcast::BAG_SLOT_COUNT) {
-        return;
-    }
-    std::swap(inv.bagSlots[static_cast<size_t>(a)], inv.bagSlots[static_cast<size_t>(b)]);
-}
-
-InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv,
+InventoryAction InventoryUI::update(InputManager &input, InvCtx &invCtx,
                                     bool separateDropsWhenFull, const AnvilUiLayout *anvilLayout) {
     InventoryAction action{};
     if (!open_) {
@@ -547,6 +442,10 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv,
         rarityInfoOpen_ = false;
         return action;
     }
+    if (invCtx.inventory == nullptr) {
+        return action;
+    }
+    InventoryState &inv = *invCtx.inventory;
 
     struct FinInvStackFrame {
         InventoryUI *self{nullptr};
@@ -622,9 +521,9 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv,
 
                 // Non-consumable: Equip (bag) / Unequip (gear)
                 if (fromBag) {
-                    tryEquipFromBag(inv, contextBagSlot_);
+                    tryEquipFromBag(invCtx, contextBagSlot_);
                 } else if (fromGear) {
-                    tryUnequip(inv, static_cast<EquipSlot>(contextEquipSlot_));
+                    tryUnequip(invCtx, static_cast<EquipSlot>(contextEquipSlot_));
                 }
                 contextOpen_ = false;
                 return action;
@@ -634,18 +533,23 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv,
             if (CheckCollisionPointRec(mouse, contextOpt1_)) {
                 if (itemIsConsumable) {
                     if (fromBag) {
-                        // Equip to first empty consumable slot.
                         const int toCons = inv.firstEmptyConsumableSlot();
                         if (toCons >= 0) {
-                            inv.consumableSlots[static_cast<size_t>(toCons)] = contextItemIndex_;
-                            inv.bagSlots[static_cast<size_t>(contextBagSlot_)] = -1;
+                            const dreadcast::Endpoint src{dreadcast::EndpointKind::Bag, contextBagSlot_};
+                            const dreadcast::Endpoint dst{dreadcast::EndpointKind::Consumable, toCons};
+                            (void)dreadcast::move(invCtx, src, dst,
+                                                  dreadcast::MovePolicy::TryMerge |
+                                                      dreadcast::MovePolicy::AllowSwap);
                         }
                     } else if (fromConsumableSlot) {
-                        // Unequip to first empty bag slot.
                         const int toBag = inv.firstEmptyBagSlot();
                         if (toBag >= 0) {
-                            inv.bagSlots[static_cast<size_t>(toBag)] = contextItemIndex_;
-                            inv.consumableSlots[static_cast<size_t>(contextConsumableSlot_)] = -1;
+                            const dreadcast::Endpoint src{dreadcast::EndpointKind::Consumable,
+                                                          contextConsumableSlot_};
+                            const dreadcast::Endpoint dst{dreadcast::EndpointKind::Bag, toBag};
+                            (void)dreadcast::move(invCtx, src, dst,
+                                                  dreadcast::MovePolicy::TryMerge |
+                                                      dreadcast::MovePolicy::AllowSwap);
                         }
                     }
                     contextOpen_ = false;
@@ -690,29 +594,27 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv,
             }
 
             if (contextShowSeparate_ && CheckCollisionPointRec(mouse, contextOpt3_)) {
-                const int srcPool = contextItemIndex_;
                 const bool fromBagSrc = contextBagSlot_ >= 0;
                 const bool fromConsSrc = contextConsumableSlot_ >= 0;
-                if (srcPool >= 0 && srcPool < static_cast<int>(inv.items.size()) &&
-                    (fromBagSrc || fromConsSrc)) {
-                    auto &srcIt = inv.items[static_cast<size_t>(srcPool)];
-                    if (srcIt.isStackable && srcIt.stackCount >= 2) {
-                        ItemData one = srcIt;
-                        one.stackCount = 1;
-                        --srcIt.stackCount;
-                        const int newIdx = inv.addItem(std::move(one));
-                        const int empty = inv.firstEmptyBagSlot();
-                        if (empty >= 0) {
-                            inv.bagSlots[static_cast<size_t>(empty)] = newIdx;
-                        } else if (separateDropsWhenFull) {
-                            action.type = InventoryAction::SeparateDropWorld;
-                            action.itemIndex = newIdx;
-                        } else {
-                            // Revert: could not place split stack. `srcIt` is a reference into
-                            // `inv.items`; addItem may have invalidated it via reallocation, so
-                            // re-resolve by index after popping the appended item.
-                            inv.items.pop_back();
-                            ++inv.items[static_cast<size_t>(srcPool)].stackCount;
+                dreadcast::Endpoint src{};
+                if (fromBagSrc) {
+                    src = dreadcast::Endpoint{dreadcast::EndpointKind::Bag, contextBagSlot_};
+                } else if (fromConsSrc) {
+                    src = dreadcast::Endpoint{dreadcast::EndpointKind::Consumable, contextConsumableSlot_};
+                }
+                int newIdx = -1;
+                const dreadcast::TxResult splitR =
+                    dreadcast::splitStackableOneUnitToNewPool(invCtx, src, &newIdx);
+                if (splitR == dreadcast::TxResult::Ok) {
+                } else if (splitR == dreadcast::TxResult::Partial && newIdx >= 0) {
+                    if (separateDropsWhenFull) {
+                        action.type = InventoryAction::SeparateDropWorld;
+                        action.itemIndex = newIdx;
+                    } else {
+                        (void)dreadcast::removePoolItem(invCtx, newIdx);
+                        ItemData &srcIt = inv.items[static_cast<size_t>(contextItemIndex_)];
+                        if (srcIt.stackCount >= 1) {
+                            ++srcIt.stackCount;
                         }
                     }
                 }
@@ -844,7 +746,7 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv,
             if (eqShift >= 0) {
                 const int eqIdx = inv.equipped[static_cast<size_t>(eqShift)];
                 if (eqIdx >= 0) {
-                    tryUnequip(inv, static_cast<EquipSlot>(eqShift));
+                    tryUnequip(invCtx, static_cast<EquipSlot>(eqShift));
                 }
                 return action;
             }
@@ -852,7 +754,7 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv,
             if (consShift >= 0) {
                 const int cIdx = inv.consumableSlots[static_cast<size_t>(consShift)];
                 if (cIdx >= 0) {
-                    tryUnequipConsumableToBag(inv, consShift);
+                    tryUnequipConsumableToBag(invCtx, consShift);
                 }
                 return action;
             }
@@ -861,9 +763,9 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv,
                 const int idx = inv.bagSlots[static_cast<size_t>(b)];
                 if (idx >= 0 && idx < static_cast<int>(inv.items.size())) {
                     if (inv.items[static_cast<size_t>(idx)].isConsumable) {
-                        tryEquipConsumableFromBag(inv, b);
+                        tryEquipConsumableFromBag(invCtx, b);
                     } else {
-                        tryEquipFromBag(inv, b);
+                        tryEquipFromBag(invCtx, b);
                     }
                 }
             }
@@ -975,62 +877,24 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv,
             }
         }
 
+        const dreadcast::MovePolicy kInvMove =
+            dreadcast::MovePolicy::TryMerge | dreadcast::MovePolicy::AllowSwap;
+
         if (dragSourceBag_ >= 0) {
             if (eqHit >= 0) {
                 const auto targetEq = static_cast<EquipSlot>(eqHit);
                 if (inv.items[static_cast<size_t>(dragItemIndex_)].slot == targetEq) {
-                    tryEquipFromBag(inv, dragSourceBag_);
+                    tryEquipFromBag(invCtx, dragSourceBag_);
                 }
             } else if (bagHit >= 0 && bagHit != dragSourceBag_) {
-                const int dstPool = inv.bagSlots[static_cast<size_t>(bagHit)];
-                const int srcPool = dragItemIndex_;
-                if (dstPool >= 0 && srcPool >= 0 &&
-                    inv.items[static_cast<size_t>(srcPool)].canStackWith(
-                        inv.items[static_cast<size_t>(dstPool)])) {
-                    auto &dstIt = inv.items[static_cast<size_t>(dstPool)];
-                    auto &srcIt = inv.items[static_cast<size_t>(srcPool)];
-                    const int space = dstIt.maxStack - dstIt.stackCount;
-                    const int move = std::min(space, srcIt.stackCount);
-                    if (move > 0) {
-                        dstIt.stackCount += move;
-                        srcIt.stackCount -= move;
-                        if (srcIt.stackCount <= 0) {
-                            inv.bagSlots[static_cast<size_t>(dragSourceBag_)] = -1;
-                            removeItemFromPool(inv, srcPool);
-                        }
-                    } else {
-                        swapBagSlots(inv, dragSourceBag_, bagHit);
-                    }
-                } else {
-                    swapBagSlots(inv, dragSourceBag_, bagHit);
-                }
+                const dreadcast::Endpoint src{dreadcast::EndpointKind::Bag, dragSourceBag_};
+                const dreadcast::Endpoint dst{dreadcast::EndpointKind::Bag, bagHit};
+                (void)dreadcast::move(invCtx, src, dst, kInvMove);
             } else if (consHit >= 0 &&
                        inv.items[static_cast<size_t>(dragItemIndex_)].isConsumable) {
-                const int dstPool = inv.consumableSlots[static_cast<size_t>(consHit)];
-                const int srcPool = dragItemIndex_;
-                bool merged = false;
-                if (dstPool >= 0 && srcPool >= 0 &&
-                    inv.items[static_cast<size_t>(srcPool)].canStackWith(
-                        inv.items[static_cast<size_t>(dstPool)])) {
-                    auto &dstIt = inv.items[static_cast<size_t>(dstPool)];
-                    auto &srcIt = inv.items[static_cast<size_t>(srcPool)];
-                    const int space = dstIt.maxStack - dstIt.stackCount;
-                    const int move = std::min(space, srcIt.stackCount);
-                    if (move > 0) {
-                        dstIt.stackCount += move;
-                        srcIt.stackCount -= move;
-                        merged = true;
-                        if (srcIt.stackCount <= 0) {
-                            inv.bagSlots[static_cast<size_t>(dragSourceBag_)] = -1;
-                            removeItemFromPool(inv, srcPool);
-                        }
-                    }
-                }
-                if (!merged) {
-                    const int prev = inv.consumableSlots[static_cast<size_t>(consHit)];
-                    inv.consumableSlots[static_cast<size_t>(consHit)] = dragItemIndex_;
-                    inv.bagSlots[static_cast<size_t>(dragSourceBag_)] = prev;
-                }
+                const dreadcast::Endpoint src{dreadcast::EndpointKind::Bag, dragSourceBag_};
+                const dreadcast::Endpoint dst{dreadcast::EndpointKind::Consumable, consHit};
+                (void)dreadcast::move(invCtx, src, dst, kInvMove);
             } else if (outsidePanel) {
                 action.type = InventoryAction::Drop;
                 action.itemIndex = dragItemIndex_;
@@ -1040,7 +904,7 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv,
             }
         } else if (dragSourceEquip_ >= 0) {
             if (bagHit >= 0) {
-                moveEquippedToBagSlot(inv, static_cast<EquipSlot>(dragSourceEquip_), bagHit);
+                moveEquippedToBagSlot(invCtx, static_cast<EquipSlot>(dragSourceEquip_), bagHit);
             } else if (outsidePanel) {
                 action.type = InventoryAction::Drop;
                 action.itemIndex = dragItemIndex_;
@@ -1050,61 +914,14 @@ InventoryAction InventoryUI::update(InputManager &input, InventoryState &inv,
             }
         } else if (dragSourceConsumable_ >= 0) {
             if (consHit >= 0 && consHit != dragSourceConsumable_) {
-                const int dstPool = inv.consumableSlots[static_cast<size_t>(consHit)];
-                const int srcPool = dragItemIndex_;
-                bool merged = false;
-                if (dstPool >= 0 && srcPool >= 0 &&
-                    inv.items[static_cast<size_t>(srcPool)].canStackWith(
-                        inv.items[static_cast<size_t>(dstPool)])) {
-                    auto &dstIt = inv.items[static_cast<size_t>(dstPool)];
-                    auto &srcIt = inv.items[static_cast<size_t>(srcPool)];
-                    const int space = dstIt.maxStack - dstIt.stackCount;
-                    const int move = std::min(space, srcIt.stackCount);
-                    if (move > 0) {
-                        dstIt.stackCount += move;
-                        srcIt.stackCount -= move;
-                        merged = true;
-                        if (srcIt.stackCount <= 0) {
-                            inv.consumableSlots[static_cast<size_t>(dragSourceConsumable_)] = -1;
-                            removeItemFromPool(inv, srcPool);
-                        }
-                    }
-                }
-                if (!merged) {
-                    std::swap(inv.consumableSlots[static_cast<size_t>(dragSourceConsumable_)],
-                              inv.consumableSlots[static_cast<size_t>(consHit)]);
-                }
+                const dreadcast::Endpoint a{dreadcast::EndpointKind::Consumable, dragSourceConsumable_};
+                const dreadcast::Endpoint b{dreadcast::EndpointKind::Consumable, consHit};
+                (void)dreadcast::swapEndpoints(invCtx, a, b);
             } else if (bagHit >= 0) {
-                const int bIdx = inv.bagSlots[static_cast<size_t>(bagHit)];
-                if (bIdx < 0) {
-                    inv.bagSlots[static_cast<size_t>(bagHit)] = dragItemIndex_;
-                    inv.consumableSlots[static_cast<size_t>(dragSourceConsumable_)] = -1;
-                } else if (inv.items[static_cast<size_t>(bIdx)].isConsumable) {
-                    const int srcPool = dragItemIndex_;
-                    bool merged = false;
-                    if (srcPool >= 0 &&
-                        inv.items[static_cast<size_t>(srcPool)].canStackWith(
-                            inv.items[static_cast<size_t>(bIdx)])) {
-                        auto &dstIt = inv.items[static_cast<size_t>(bIdx)];
-                        auto &srcIt = inv.items[static_cast<size_t>(srcPool)];
-                        const int space = dstIt.maxStack - dstIt.stackCount;
-                        const int move = std::min(space, srcIt.stackCount);
-                        if (move > 0) {
-                            dstIt.stackCount += move;
-                            srcIt.stackCount -= move;
-                            merged = true;
-                            if (srcIt.stackCount <= 0) {
-                                inv.consumableSlots[static_cast<size_t>(dragSourceConsumable_)] =
-                                    -1;
-                                removeItemFromPool(inv, srcPool);
-                            }
-                        }
-                    }
-                    if (!merged) {
-                        inv.bagSlots[static_cast<size_t>(bagHit)] = dragItemIndex_;
-                        inv.consumableSlots[static_cast<size_t>(dragSourceConsumable_)] = bIdx;
-                    }
-                }
+                const dreadcast::Endpoint src{dreadcast::EndpointKind::Consumable,
+                                               dragSourceConsumable_};
+                const dreadcast::Endpoint dst{dreadcast::EndpointKind::Bag, bagHit};
+                (void)dreadcast::move(invCtx, src, dst, kInvMove);
             } else if (outsidePanel) {
                 action.type = InventoryAction::Drop;
                 action.itemIndex = dragItemIndex_;
@@ -1200,7 +1017,7 @@ void InventoryUI::drawWithoutDragGhost(const Font &font, dreadcast::ResourceMana
                 drawItemStackSheenFlash(r, invStackSheenEquip_[static_cast<size_t>(i)],
                                         kStackSheenTotalSec);
             }
-            if (i == 0 && pit->name == "Runic Shell" &&
+            if (i == 0 && pit->catalogId == "runic_shell" &&
                 (runicShellCdRatio > 0.001F || runicShellFinishFlashSec > 0.001F)) {
                 drawCooldownOverlay(
                     r,
@@ -1229,7 +1046,8 @@ void InventoryUI::drawWithoutDragGhost(const Font &font, dreadcast::ResourceMana
                 drawItemStackSheenFlash(r, invStackSheenCons_[static_cast<size_t>(i)],
                                         kStackSheenTotalSec);
             }
-            if (it.name == "Vial of Cordial Manic" && playerHpRatio < 0.40F - 1.0e-4F) {
+            if (it.catalogId == "vial_cordial_manic" &&
+                playerHpRatio < cordialManicMinHpFractionFromItem(it) - 1.0e-4F) {
                 drawCordialManicBlockedOverlay(r);
             }
             if (it.isStackable && it.stackCount >= 1) {
@@ -1267,7 +1085,8 @@ void InventoryUI::drawWithoutDragGhost(const Font &font, dreadcast::ResourceMana
                 drawItemStackSheenFlash(r, invStackSheenBag_[static_cast<size_t>(i)],
                                         kStackSheenTotalSec);
             }
-            if (it.name == "Vial of Cordial Manic" && playerHpRatio < 0.40F - 1.0e-4F) {
+            if (it.catalogId == "vial_cordial_manic" &&
+                playerHpRatio < cordialManicMinHpFractionFromItem(it) - 1.0e-4F) {
                 drawCordialManicBlockedOverlay(r);
             }
             if (it.isStackable && it.stackCount >= 1) {

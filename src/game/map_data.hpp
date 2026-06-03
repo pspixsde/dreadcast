@@ -1,6 +1,8 @@
 #pragma once
 
 #include <array>
+#include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -16,10 +18,28 @@ struct WallData {
     float cy{0.0F};
     float halfW{32.0F};
     float halfH{32.0F};
+    /// Rotation about the center in radians (0 = axis-aligned).
+    float angle{0.0F};
 };
 
 inline bool operator==(const WallData &a, const WallData &b) {
-    return a.cx == b.cx && a.cy == b.cy && a.halfW == b.halfW && a.halfH == b.halfH;
+    return a.cx == b.cx && a.cy == b.cy && a.halfW == b.halfW && a.halfH == b.halfH &&
+           a.angle == b.angle;
+}
+
+/// World-space corners of an oriented box (TL, TR, BR, BL in local order, rotated by `angle`).
+inline std::array<Vector2, 4> orientedBoxCorners(float cx, float cy, float halfW, float halfH,
+                                                  float angle) {
+    const float c = std::cos(angle);
+    const float s = std::sin(angle);
+    const auto rot = [&](float lx, float ly) -> Vector2 {
+        return {cx + lx * c - ly * s, cy + lx * s + ly * c};
+    };
+    return {rot(-halfW, -halfH), rot(halfW, -halfH), rot(halfW, halfH), rot(-halfW, halfH)};
+}
+
+inline std::array<Vector2, 4> wallCorners(const WallData &w) {
+    return orientedBoxCorners(w.cx, w.cy, w.halfW, w.halfH, w.angle);
 }
 
 /// Walk-through hazard volume (same layout as walls; serialized as `LAVA`).
@@ -81,15 +101,86 @@ inline bool operator==(const AnvilData &a, const AnvilData &b) {
     return a.cx == b.cx && a.cy == b.cy;
 }
 
-/// Old Casket position and up to three loot item ids (`CASKET cx cy [k0] [k1] [k2]`).
+/// Dreg spawner placement (`NODE cx cy` in `.map` files). Tuning is fixed in `NodeSpawner`.
+struct NodeData {
+    float cx{0.0F};
+    float cy{0.0F};
+};
+
+inline bool operator==(const NodeData &a, const NodeData &b) {
+    return a.cx == b.cx && a.cy == b.cy;
+}
+
+/// Loot casket tiers. Contents are no longer authored in the editor; the tier alone decides the
+/// per-session roll (item-count odds, per-slot rarity odds, minimum-rarity guarantee). See
+/// `rollCasketLoot` in `game/game_data.hpp`.
+enum class CasketTier : std::uint8_t { Old = 0, Sealed, Wrought };
+
+/// Lowercase token used in `.map` files (`CASKET cx cy <token>`).
+[[nodiscard]] inline const char *casketTierToken(CasketTier t) {
+    switch (t) {
+    case CasketTier::Sealed:
+        return "sealed";
+    case CasketTier::Wrought:
+        return "wrought";
+    case CasketTier::Old:
+    default:
+        return "old";
+    }
+}
+
+/// Human-readable name shown on the interaction prompt and editor labels.
+[[nodiscard]] inline const char *casketTierDisplayName(CasketTier t) {
+    switch (t) {
+    case CasketTier::Sealed:
+        return "Sealed Casket";
+    case CasketTier::Wrought:
+        return "Wrought Casket";
+    case CasketTier::Old:
+    default:
+        return "Old Casket";
+    }
+}
+
+/// Tint used for the casket sprite/editor quad so tiers read apart at a glance.
+[[nodiscard]] inline Color casketTierColor(CasketTier t) {
+    switch (t) {
+    case CasketTier::Sealed:
+        return {72, 98, 124, 255};
+    case CasketTier::Wrought:
+        return {126, 96, 48, 255};
+    case CasketTier::Old:
+    default:
+        return {90, 70, 55, 255};
+    }
+}
+
+/// Parses a `.map` casket tier token. Returns false for anything else (e.g. legacy item ids).
+[[nodiscard]] inline bool casketTierFromToken(const std::string &s, CasketTier &out) {
+    if (s == "old") {
+        out = CasketTier::Old;
+        return true;
+    }
+    if (s == "sealed") {
+        out = CasketTier::Sealed;
+        return true;
+    }
+    if (s == "wrought") {
+        out = CasketTier::Wrought;
+        return true;
+    }
+    return false;
+}
+
+/// Casket placement + loot tier (`CASKET cx cy <tier>`). Loot is rolled per session at spawn.
 struct CasketData {
     float cx{1050.0F};
     float cy{0.0F};
-    std::array<std::string, 3> itemSlots{};
+    CasketTier tier{CasketTier::Old};
 };
 
 inline bool operator==(const CasketData &a, const CasketData &b) {
-    return a.cx == b.cx && a.cy == b.cy && a.itemSlots == b.itemSlots;
+    return a.cx == b.cx && a.cy == b.cy && a.tier == b.tier;
 }
 
 struct MapData {
@@ -100,14 +191,14 @@ struct MapData {
     std::vector<ItemSpawnData> itemSpawns{};
     std::vector<SolidShapeData> solidShapes{};
     std::vector<AnvilData> anvils{};
-    CasketData casket{};
-    bool hasCasket{true};
+    std::vector<CasketData> caskets{};
+    std::vector<NodeData> nodes{};
 
     [[nodiscard]] bool operator==(const MapData &o) const {
         return playerSpawn.x == o.playerSpawn.x && playerSpawn.y == o.playerSpawn.y &&
-               hasCasket == o.hasCasket && casket == o.casket && walls == o.walls &&
+               caskets == o.caskets && walls == o.walls &&
                lavas == o.lavas && enemies == o.enemies && itemSpawns == o.itemSpawns &&
-               solidShapes == o.solidShapes && anvils == o.anvils;
+               solidShapes == o.solidShapes && anvils == o.anvils && nodes == o.nodes;
     }
 
     bool saveToFile(const std::string &path) const {
@@ -125,7 +216,11 @@ struct MapData {
         }
         out << "PLAYER_SPAWN " << playerSpawn.x << ' ' << playerSpawn.y << '\n';
         for (const WallData &w : walls) {
-            out << "WALL " << w.cx << ' ' << w.cy << ' ' << w.halfW << ' ' << w.halfH << '\n';
+            out << "WALL " << w.cx << ' ' << w.cy << ' ' << w.halfW << ' ' << w.halfH;
+            if (w.angle != 0.0F) {
+                out << ' ' << w.angle;
+            }
+            out << '\n';
         }
         for (const LavaData &lv : lavas) {
             out << "LAVA " << lv.cx << ' ' << lv.cy << ' ' << lv.halfW << ' ' << lv.halfH << '\n';
@@ -149,17 +244,11 @@ struct MapData {
         for (const AnvilData &an : anvils) {
             out << "ANVIL " << an.cx << ' ' << an.cy << '\n';
         }
-        if (hasCasket) {
-            out << "CASKET " << casket.cx << ' ' << casket.cy;
-            for (const std::string &k : casket.itemSlots) {
-                out << ' ';
-                if (k.empty()) {
-                    out << '-';
-                } else {
-                    out << k;
-                }
-            }
-            out << '\n';
+        for (const NodeData &nd : nodes) {
+            out << "NODE " << nd.cx << ' ' << nd.cy << '\n';
+        }
+        for (const CasketData &ck : caskets) {
+            out << "CASKET " << ck.cx << ' ' << ck.cy << ' ' << casketTierToken(ck.tier) << '\n';
         }
         return out.good();
     }
@@ -183,6 +272,9 @@ struct MapData {
             } else if (tag == "WALL") {
                 WallData w{};
                 iss >> w.cx >> w.cy >> w.halfW >> w.halfH;
+                if (!(iss >> w.angle)) {
+                    w.angle = 0.0F;
+                }
                 parsed.walls.push_back(w);
             } else if (tag == "LAVA") {
                 LavaData lv{};
@@ -216,21 +308,24 @@ struct MapData {
                 AnvilData an{};
                 iss >> an.cx >> an.cy;
                 parsed.anvils.push_back(an);
+            } else if (tag == "NODE") {
+                NodeData nd{};
+                iss >> nd.cx >> nd.cy;
+                parsed.nodes.push_back(nd);
             } else if (tag == "CASKET") {
-                iss >> parsed.casket.cx >> parsed.casket.cy;
-                parsed.hasCasket = true;
+                CasketData ck{};
+                iss >> ck.cx >> ck.cy;
+                // Tier token may sit anywhere after the coords; legacy fixed-loot item ids (and the
+                // `-` placeholder) are ignored, leaving the default `Old` tier.
                 std::string tok;
-                for (size_t i = 0; i < 3 && iss >> tok; ++i) {
-                    if (tok != "-" && !tok.empty()) {
-                        parsed.casket.itemSlots[i] = tok;
+                while (iss >> tok) {
+                    CasketTier t{};
+                    if (casketTierFromToken(tok, t)) {
+                        ck.tier = t;
+                        break;
                     }
                 }
-                // Legacy `CASKET x y` only: keep classic two-drop defaults.
-                if (parsed.casket.itemSlots[0].empty() && parsed.casket.itemSlots[1].empty() &&
-                    parsed.casket.itemSlots[2].empty()) {
-                    parsed.casket.itemSlots[0] = "iron_armor";
-                    parsed.casket.itemSlots[1] = "vial_pure_blood";
-                }
+                parsed.caskets.push_back(ck);
             }
         }
         if (parsed.walls.empty()) {
@@ -244,12 +339,11 @@ struct MapData {
 inline MapData defaultMapData() {
     MapData map{};
     map.playerSpawn = {-100.0F, 0.0F};
-    map.hasCasket = true;
-    map.casket.cx = 1050.0F;
-    map.casket.cy = 0.0F;
-    map.casket.itemSlots[0] = "iron_armor";
-    map.casket.itemSlots[1] = "vial_pure_blood";
-    map.casket.itemSlots[2] = "";
+    CasketData defaultCasket{};
+    defaultCasket.cx = 1050.0F;
+    defaultCasket.cy = 0.0F;
+    defaultCasket.tier = CasketTier::Old;
+    map.caskets.push_back(defaultCasket);
     map.walls = {
         {-220.0F, 0.0F, 22.0F, 190.0F},   {-40.0F, -210.0F, 220.0F, 22.0F},
         {-40.0F, 210.0F, 220.0F, 22.0F},   {180.0F, 95.0F, 22.0F, 75.0F},

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "recipes": [
+    {
+      "id": "forge_barbed_tunic",
+      "kind": "forge",
+      "inputs": [
+        { "itemId": "vial_pure_blood", "count": 1 },
+        { "itemId": "iron_armor", "count": 1 }
+      ],
+      "outputs": [{ "itemId": "barbed_tunic", "count": 1 }]
+    },
+    {
+      "id": "disassemble_barbed_tunic",
+      "kind": "disassemble",
+      "inputs": [{ "itemId": "barbed_tunic", "count": 1 }],
+      "outputs": [
+        { "itemId": "vial_pure_blood", "count": 1 },
+        { "itemId": "iron_armor", "count": 1 }
+      ]
+    }
+  ]
+}

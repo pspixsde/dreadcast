@@ -35,28 +35,6 @@ inline constexpr float PROJECTILE_SPEED = 600.0F;
 inline constexpr float PROJECTILE_MAX_RANGE = 800.0F;
 inline constexpr float PROJECTILE_RADIUS = 5.0F;
 
-inline constexpr float ENEMY_PROJECTILE_SPEED = 400.0F;
-inline constexpr float ENEMY_PROJECTILE_MAX_RANGE = 400.0F;
-
-inline constexpr float IMP_AGITATION_RANGE = 350.0F;
-inline constexpr float ENEMY_CALM_DOWN_DELAY = 5.0F;
-inline constexpr float IMP_SPRITE_SIZE = 40.0F;
-inline constexpr float IMP_PREFERRED_RANGE = 220.0F;
-inline constexpr float IMP_KITE_SPEED = 145.0F;
-inline constexpr float IMP_ADVANCE_SPEED = 100.0F;
-inline constexpr float IMP_STRAFE_BIAS = 0.4F;
-/// Below this distance Imps kite harder to avoid melee; above it they prioritize chasing in the
-/// outer preferred band.
-inline constexpr float IMP_PANIC_RANGE = 80.0F;
-
-inline constexpr float HELLHOUND_HP = 60.0F;
-inline constexpr float HELLHOUND_DAMAGE = 15.0F;
-inline constexpr float HELLHOUND_SPRITE_SIZE = 48.0F;
-inline constexpr float HELLHOUND_CHASE_SPEED = 210.0F;
-inline constexpr float HELLHOUND_MELEE_RANGE = 44.0F;
-inline constexpr float HELLHOUND_MELEE_COOLDOWN = 1.0F;
-inline constexpr float HELLHOUND_AGITATION_RANGE = 420.0F;
-
 inline constexpr float PLAYER_BASE_MAX_HP = 100.0F;
 
 inline constexpr float INTERACT_RANGE = 80.0F;
@@ -68,6 +46,8 @@ inline constexpr float MANIC_DURATION = 7.0F;
 inline constexpr float MANIC_HP_DRAIN_PERCENT = 0.40F;
 inline constexpr float MANIC_SPEED_MULTIPLIER = 2.0F;
 inline constexpr float MANIC_MIN_HP_FRACTION = 0.40F;
+/// Cordial Manic heartbeat SFX fades from silent to full over this many seconds.
+inline constexpr float MANIC_HEARTBEAT_VOLUME_RAMP_DURATION = 2.0F;
 
 inline constexpr float MELEE_DAMAGE = 20.0F;
 /// Base speed applied to enemies on RMB melee hits (scaled per combo swing).
@@ -77,19 +57,7 @@ inline constexpr float MELEE_COOLDOWN = 0.4F;
 inline constexpr float KNOCKBACK_DURATION = 0.25F;
 inline constexpr float KNOCKBACK_FRICTION = 0.90F;
 
-inline constexpr float IMP_SHOOT_COOLDOWN = 2.0F;
-inline constexpr float IMP_MIN_SHOOT_RANGE = 60.0F;
-
 inline constexpr float MANA_SHARD_AMOUNT = 20.0F;
-
-/// Enemy steering: lerp current velocity toward AI desired velocity (per second scale, clamped).
-inline constexpr float ENEMY_STEER_RATE = 12.0F;
-/// When seeking last known player position, stop searching inside this radius (world units).
-inline constexpr float ENEMY_SEEK_ARRIVE_RADIUS = 22.0F;
-/// Time before enemy is considered stuck against a wall (seconds).
-inline constexpr float ENEMY_STUCK_THRESHOLD = 0.25F;
-/// Minimum displacement per tick to not be considered stuck (world units).
-inline constexpr float ENEMY_STUCK_MIN_DISP = 1.5F;
 
 /// Max distance from player (world units) to interact with ground loot.
 inline constexpr float LOOT_PICKUP_RANGE = 80.0F;
