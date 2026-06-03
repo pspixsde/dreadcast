@@ -13,6 +13,8 @@
 #include "core/audio.hpp"
 #include "core/camera.hpp"
 #include "core/timer.hpp"
+#include "game/equipment_snapshot.hpp"
+#include "game/item_transaction.hpp"
 #include "game/items.hpp"
 #include "game/map_data.hpp"
 #include "scenes/scene.hpp"
@@ -21,6 +23,8 @@
 #include "ui/skill_tree_ui.hpp"
 
 namespace dreadcast {
+
+class ResourceManager;
 
 struct AbilityDef;
 
@@ -67,17 +71,10 @@ class GameplayScene final : public Scene {
     void applyPlayerMaxManaFromEquipment();
     void applyPlayerMoveSpeedFromEquipment();
     void tickVigilantEye(float frameDt);
-    void tickHealOverTime(float fixedDt, ResourceManager &resources);
-    void tickManaRegenOverTime(float fixedDt);
     void tickLavaHazard(float fixedDt, ResourceManager &resources);
-    void tickManicEffect(float fixedDt, ResourceManager &resources);
-    void tickRunicShellCooldown(float fixedDt);
-    void checkRunicShellTrigger();
     void tryUseConsumableSlot(int slotIndex, ResourceManager &resources);
     void tryUseConsumableBagSlot(int bagSlot, ResourceManager &resources);
-    void applyVialHealOverTime(bool wasAlreadyActive, ResourceManager &resources);
-    void applyVialRawSpiritMana(bool wasAlreadyActive);
-    [[nodiscard]] bool tryApplyCordialManic(ResourceManager &resources);
+    void rebuildEquipmentSnapshot();
     [[nodiscard]] Vector2 worldMouseFromScreen(const Vector2 &screenMouse) const;
 
     void syncStatusHudOrder();
@@ -90,6 +87,8 @@ class GameplayScene final : public Scene {
     void tickSlugAim(float fixedDt, ResourceManager &resources);
     void tickSnareDash(float fixedDt);
     void tickStunnedEnemies(float fixedDt);
+    /// Decays player knockback (with friction) and expires the Warden movement slow.
+    void tickPlayerDebuffs(float fixedDt);
     void spawnSnareProjectile(const AbilityDef &snareDef, const Vector2 &dirWorld);
     void fireCalamitySlug(const AbilityDef &slugDef, const Vector2 &dirWorld);
     [[nodiscard]] Vector2 playerAimDirectionWorld() const;
@@ -106,6 +105,10 @@ class GameplayScene final : public Scene {
     void tickChamberState(float fixedDt, ResourceManager &resources);
     void applySkillTreeEffects();
     [[nodiscard]] float lavaAmbientLoudnessFromPlayer() const;
+    /// Stops proximity lava ambience (exclusive loop). Call when gameplay simulation is not running
+    /// or when leaving the scene — the fixed-step path that updates this loop is skipped while paused
+    /// or game over, and stacked scenes (Settings/Codex) do not receive updates for this scene.
+    void stopProximityLavaAmbient(ResourceManager &resources);
     void drawChamberPelletArc(float portraitCx, float portraitCy, float portraitR);
     void drawMinimapOverlay(bool fullScreen, ResourceManager &resources);
     void tickAnvilUi(InputManager &input, ResourceManager &resources, const ui::AnvilUiLayout &layout);
@@ -114,9 +117,9 @@ class GameplayScene final : public Scene {
     [[nodiscard]] ui::AnvilUiLayout buildAnvilUiLayout() const;
     void handleInventoryAnvilAction(const ui::InventoryAction &action);
     void applyAnvilForgeSlotPlace(int slot, int poolIdx);
-    bool tryReturnPoolItemToBagOrDrop(int poolIdx);
     void clearDisassembleOutputPool();
     void commitDisassembleRecipe();
+    void wireInventoryIndexHolders();
     void drawFogOfWarLegacy();
     void initFogResources();
     void unloadFogResources();
@@ -128,10 +131,10 @@ class GameplayScene final : public Scene {
     void spawnItemPickupAtPlayer(int itemIndex);
     void spawnItemPickupAtWorld(const Vector2 &worldPos, int itemIndex);
 
-    /// Wraps `InventoryState::removeItemAtIndex` (swap-with-last) and rewrites every other
-    /// place a pool index can live: ground `ItemPickup`s, `forgeSlots_`, `disassembleInputIndex_`,
-    /// `disassembleOutputPool_`. All callers must use this helper instead of removing directly.
-    void removeInventoryItemAndRewrite(int idx);
+    [[nodiscard]] InvCtx makeInvCtx();
+    InvCtx &mutInvCtx();
+    [[nodiscard]] MovePolicy inventoryPlacePolicy() const;
+    [[nodiscard]] ReturnPolicy inventoryReturnPolicy() const;
 
     entt::registry registry_{};
     GameCamera camera_{};
@@ -144,9 +147,12 @@ class GameplayScene final : public Scene {
     ui::InventoryUI inventoryUi_{};
     ui::SkillTreeUI skillTreeUi_{};
     InventoryState inventory_{};
+    IndexHolderRegistry indexHolders_{};
+    InvCtx invCtxScratch_{};
+    PlayerEquipmentSnapshot equipSnapshot_{};
 
     ui::Button resumeButton_{};
-    ui::Button archivePauseButton_{};
+    ui::Button codexPauseButton_{};
     ui::Button settingsPauseButton_{};
     ui::Button mainMenuButton_{};
     ui::Button retryButton_{};
@@ -174,7 +180,7 @@ class GameplayScene final : public Scene {
     bool hoveringHudElement_{false};
     std::vector<FloatingNumber> floatingNumbers_{};
     std::unordered_map<entt::entity, float> hpBeforeFixedStep_{};
-    std::unordered_map<entt::entity, bool> hellhoundPrevAgitated_{};
+    std::unordered_map<entt::entity, bool> enemyPrevAgitated_{};
     std::unordered_set<entt::entity> deathSfxPlayed_{};
 
     MapData loadedMap_{};
@@ -208,7 +214,6 @@ class GameplayScene final : public Scene {
 
     /// Cached from settings each frame for virtual aiming.
     float aimMouseSensitivity_{1.0F};
-    bool bagPriorityShiftIntoInventory_{false};
     Vector2 aimScreenPos_{0.0F, 0.0F};
     bool aimScreenInit_{false};
 
@@ -232,6 +237,9 @@ class GameplayScene final : public Scene {
     float lavaAudioDbgLastTargetVol_{0.0F};
     SoundHandle lavaAudioDbgLastHandle_{-1};
     bool lavaAudioDbgLastPlaying_{false};
+
+    /// Last `ResourceManager` passed to `update` — used in `onExit` to stop exclusive SFX.
+    ResourceManager *lastResources_{nullptr};
 };
 
 } // namespace dreadcast

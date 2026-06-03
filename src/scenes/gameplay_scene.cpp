@@ -4,8 +4,10 @@
 #include <cstdio>
 #include <cmath>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
+#include <variant>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -22,29 +24,77 @@
 #include "core/iso_utils.hpp"
 #include "core/audio.hpp"
 #include "core/resource_manager.hpp"
+#include "game/crafting.hpp"
+#include "game/equipment_snapshot.hpp"
+#include "game/item_effects.hpp"
+#include "game/item_transaction.hpp"
 #include "game/item_rarity.hpp"
+#include "ecs/combat_resolution.hpp"
 #include "ecs/components.hpp"
+#include "ecs/enemy_factory.hpp"
 #include "ecs/systems/collision_system.hpp"
 #include "ecs/systems/combat_system.hpp"
 #include "ecs/systems/death_system.hpp"
 #include "ecs/systems/enemy_ai_system.hpp"
 #include "ecs/systems/input_system.hpp"
 #include "ecs/systems/movement_system.hpp"
+#include "ecs/systems/node_system.hpp"
 #include "ecs/systems/projectile_system.hpp"
 #include "ecs/systems/render_system.hpp"
 #include "ecs/systems/wall_system.hpp"
 #include "game/character.hpp"
 #include "game/game_data.hpp"
 #include "game/map_data.hpp"
+#include "game/world_interaction.hpp"
 #include "scenes/menu_scene.hpp"
 #include "scenes/scene_manager.hpp"
 #include "ui/cooldown_overlay.hpp"
+#include "ui/slot_widget.hpp"
 #include "scenes/settings_scene.hpp"
-#include "scenes/archive_scene.hpp"
+#include "scenes/codex_scene.hpp"
 
 namespace dreadcast {
 
 namespace {
+
+const ecs::ActiveItemEffectHot *fxFindHot(const entt::registry &reg, entt::entity pl) {
+    const auto *afx = reg.try_get<ecs::ActiveItemEffects>(pl);
+    if (afx == nullptr) {
+        return nullptr;
+    }
+    for (const auto &en : afx->entries) {
+        if (const auto *h = std::get_if<ecs::ActiveItemEffectHot>(&en)) {
+            return h;
+        }
+    }
+    return nullptr;
+}
+
+const ecs::ActiveItemEffectManic *fxFindManic(const entt::registry &reg, entt::entity pl) {
+    const auto *afx = reg.try_get<ecs::ActiveItemEffects>(pl);
+    if (afx == nullptr) {
+        return nullptr;
+    }
+    for (const auto &en : afx->entries) {
+        if (const auto *m = std::get_if<ecs::ActiveItemEffectManic>(&en)) {
+            return m;
+        }
+    }
+    return nullptr;
+}
+
+const ecs::ActiveItemEffectManaRot *fxFindManaRot(const entt::registry &reg, entt::entity pl) {
+    const auto *afx = reg.try_get<ecs::ActiveItemEffects>(pl);
+    if (afx == nullptr) {
+        return nullptr;
+    }
+    for (const auto &en : afx->entries) {
+        if (const auto *mr = std::get_if<ecs::ActiveItemEffectManaRot>(&en)) {
+            return mr;
+        }
+    }
+    return nullptr;
+}
 
 // Single-texture overlay: samples fog mask (R=white fog). Outputs black with alpha so default
 // alpha-blend darkens the framebuffer like mix(scene, black, m*fogStrength) without needing a
@@ -79,10 +129,11 @@ void main() {
 }
 )";
 
-void spawnWallBlock(entt::registry &reg, float cx, float cy, float halfW, float halfH) {
+void spawnWallBlock(entt::registry &reg, float cx, float cy, float halfW, float halfH,
+                    float angle = 0.0F) {
     const auto e = reg.create();
     reg.emplace<ecs::Transform>(e, ecs::Transform{{cx, cy}, 0.0F});
-    reg.emplace<ecs::Wall>(e, ecs::Wall{halfW, halfH});
+    reg.emplace<ecs::Wall>(e, ecs::Wall{halfW, halfH, angle});
 }
 
 void spawnLavaBlock(entt::registry &reg, float cx, float cy, float halfW, float halfH) {
@@ -214,12 +265,14 @@ void drawHudShortcutKeyBadgeRight(const Font &font, const char *keyTxt, float sl
 
 } // namespace
 
-GameplayScene::GameplayScene(int selectedClassIndex) : selectedClass_(selectedClassIndex) {
-    inventoryUi_.setRemoveItemCallback(
-        [this](int idx) { this->removeInventoryItemAndRewrite(idx); });
-}
+GameplayScene::GameplayScene(int selectedClassIndex) : selectedClass_(selectedClassIndex) {}
 
-GameplayScene::~GameplayScene() { unloadFogResources(); }
+GameplayScene::~GameplayScene() {
+    unloadFogResources();
+    if (lastResources_) {
+        stopProximityLavaAmbient(*lastResources_);
+    }
+}
 
 void GameplayScene::onEnter() {
     camera_.init(config::WINDOW_WIDTH, config::WINDOW_HEIGHT);
@@ -230,7 +283,12 @@ void GameplayScene::onEnter() {
     }
 }
 
-void GameplayScene::onExit() { unloadFogResources(); }
+void GameplayScene::onExit() {
+    unloadFogResources();
+    if (lastResources_) {
+        stopProximityLavaAmbient(*lastResources_);
+    }
+}
 
 void GameplayScene::initFogResources() {
     if (fogResourcesReady_) {
@@ -320,8 +378,8 @@ void GameplayScene::drawWorldContent(ResourceManager &resources) {
         const Vector2 pIso = worldToIso(pWorld);
         const float t = static_cast<float>(GetTime());
 
-        if (registry_.all_of<ecs::HealOverTime>(player_)) {
-            const auto &hot = registry_.get<ecs::HealOverTime>(player_);
+        if (const ecs::ActiveItemEffectHot *hotDraw = fxFindHot(registry_, player_)) {
+            const auto &hot = *hotDraw;
             const float tRem = hot.duration > 0.001F
                                    ? std::max(0.0F, 1.0F - hot.elapsed / hot.duration)
                                    : 0.0F;
@@ -351,8 +409,8 @@ void GameplayScene::drawWorldContent(ResourceManager &resources) {
             DrawCircleLinesV(pIso, gr, Fade({120, 255, 160, 255}, 0.22F * pulse * tRem));
         }
 
-        if (registry_.all_of<ecs::ManicEffect>(player_)) {
-            const auto &me = registry_.get<ecs::ManicEffect>(player_);
+        if (const ecs::ActiveItemEffectManic *manicDraw = fxFindManic(registry_, player_)) {
+            const auto &me = *manicDraw;
             const float tRem = me.duration > 0.001F
                                    ? std::max(0.0F, 1.0F - me.elapsed / me.duration)
                                    : 0.0F;
@@ -441,6 +499,61 @@ void GameplayScene::drawWorldContent(ResourceManager &resources) {
         DrawCircleV(iso, 6.0F, Fade({255, 200, 80, 255}, 0.25F * pulse));
     }
 
+    // Warden slam telegraph / impact flash and close-range push ring.
+    for (const auto we : registry_.view<ecs::WardenState, ecs::WardenTuning, ecs::Transform>()) {
+        const auto &ws = registry_.get<ecs::WardenState>(we);
+        const auto &tune = registry_.get<ecs::WardenTuning>(we);
+        const auto &wt = registry_.get<ecs::Transform>(we);
+        if (ws.telegraphActive || ws.slamFlashTimer > 0.001F) {
+            const Vector2 f = ws.attackDir;
+            const Vector2 p{-f.y, f.x};
+            const float L = tune.attackLineLength;
+            const float hw = tune.attackLineHalfWidth;
+            const Vector2 o = wt.position;
+            const Vector2 c0 = worldToIso({o.x + p.x * hw, o.y + p.y * hw});
+            const Vector2 c1 = worldToIso({o.x + f.x * L + p.x * hw, o.y + f.y * L + p.y * hw});
+            const Vector2 c2 = worldToIso({o.x + f.x * L - p.x * hw, o.y + f.y * L - p.y * hw});
+            const Vector2 c3 = worldToIso({o.x - p.x * hw, o.y - p.y * hw});
+            float fillA = 0.18F;
+            float edgeA = 0.55F;
+            Color col{210, 70, 60, 255};
+            if (ws.telegraphActive) {
+                const float prog =
+                    1.0F - std::clamp(ws.telegraphTimer / tune.attackTelegraph, 0.0F, 1.0F);
+                const float pulse = 0.5F + 0.5F * std::sinf(static_cast<float>(GetTime()) * 16.0F);
+                fillA = 0.10F + 0.28F * prog + 0.08F * pulse;
+                edgeA = 0.4F + 0.5F * prog;
+            } else {
+                const float k = ws.slamFlashTimer / 0.28F;
+                col = Color{255, 150, 90, 255};
+                fillA = 0.55F * k;
+                edgeA = 0.9F * k;
+            }
+            DrawTriangle(c0, c1, c2, Fade(col, fillA));
+            DrawTriangle(c0, c2, c3, Fade(col, fillA));
+            DrawLineEx(c0, c1, 2.0F, Fade(col, edgeA));
+            DrawLineEx(c1, c2, 2.0F, Fade(col, edgeA));
+            DrawLineEx(c2, c3, 2.0F, Fade(col, edgeA));
+            DrawLineEx(c3, c0, 2.0F, Fade(col, edgeA));
+        }
+        if (ws.abilityFlashTimer > 0.001F) {
+            const Vector2 iso = worldToIso(wt.position);
+            const float prog = 1.0F - ws.abilityFlashTimer / 0.45F;
+            const float ringR = tune.closeRange * (0.5F + 0.9F * prog);
+            const float alpha = std::max(0.0F, 1.0F - prog);
+            DrawRing(iso, ringR - 5.0F, ringR + 3.0F, 0.0F, 360.0F, 48,
+                     Fade({170, 130, 220, 255}, 0.8F * alpha));
+        }
+    }
+
+    // Player slow debuff aura (Warden push).
+    if (registry_.valid(player_) && registry_.all_of<ecs::PlayerSlow, ecs::Transform>(player_)) {
+        const Vector2 iso = worldToIso(registry_.get<ecs::Transform>(player_).position);
+        const float pulse = 0.5F + 0.5F * std::sinf(static_cast<float>(GetTime()) * 6.0F);
+        DrawCircleV(iso, 26.0F, Fade({130, 110, 200, 255}, 0.12F + 0.06F * pulse));
+        DrawCircleLinesV(iso, 26.0F, Fade({150, 130, 220, 255}, 0.4F * pulse));
+    }
+
     if (runicShellFlashTimer_ > 0.001F && registry_.valid(player_) &&
         registry_.all_of<ecs::Transform>(player_)) {
         const Vector2 pWorld = registry_.get<ecs::Transform>(player_).position;
@@ -465,7 +578,7 @@ void GameplayScene::drawWorldContent(ResourceManager &resources) {
 
 void GameplayScene::spawnWalls(const MapData &map) {
     for (const WallData &w : map.walls) {
-        spawnWallBlock(registry_, w.cx, w.cy, w.halfW, w.halfH);
+        spawnWallBlock(registry_, w.cx, w.cy, w.halfW, w.halfH, w.angle);
     }
 }
 
@@ -509,7 +622,7 @@ void GameplayScene::spawnWorld() {
     anvilBenchForgeSlot_ = -1;
     anvilBenchDisOutSlot_ = -1;
     anvilBenchDragPoolIdx_ = -1;
-    hellhoundPrevAgitated_.clear();
+    enemyPrevAgitated_.clear();
     deathSfxPlayed_.clear();
     skillTreeUi_.resetProgress();
 
@@ -569,49 +682,43 @@ void GameplayScene::spawnWorld() {
         registry_.emplace<ecs::Transform>(anv, ecs::Transform{{an.cx, an.cy}, 0.0F});
         registry_.emplace<ecs::Velocity>(anv, ecs::Velocity{});
         registry_.emplace<ecs::Sprite>(anv, ecs::Sprite{{140, 110, 80, 255}, 52.0F, 36.0F});
-        registry_.emplace<ecs::Interactable>(anv, ecs::Interactable{"Anvil", false});
+        registry_.emplace<ecs::Interactable>(
+            anv, ecs::Interactable{ecs::InteractableKind::Anvil, std::string{"Anvil"}, false});
     }
 
     for (const EnemySpawnData &p : map.enemies) {
+        const EnemyArchetype *arch = enemyArchetypeById(p.type);
+        if (arch == nullptr) {
+            TraceLog(LOG_WARNING,
+                     "Dreadcast: unknown enemy type \"%s\" at (%.1f, %.1f) — skipped.",
+                     p.type.c_str(), p.x, p.y);
+            continue;
+        }
+        ecs::spawnEnemyFromArchetype(registry_, *arch, {p.x, p.y});
+    }
+
+    for (const NodeData &nd : map.nodes) {
         const auto e = registry_.create();
-        registry_.emplace<ecs::Transform>(e, ecs::Transform{{p.x, p.y}, 0.0F});
-        registry_.emplace<ecs::Velocity>(e, ecs::Velocity{});
-        const bool hellhound = (p.type == "hellhound");
-        const Color tint = hellhound ? Color{160, 70, 40, 255} : Color{220, 90, 60, 255};
-        const float size =
-            hellhound ? config::HELLHOUND_SPRITE_SIZE : config::IMP_SPRITE_SIZE;
-        registry_.emplace<ecs::Sprite>(e, ecs::Sprite{tint, size, size});
-        registry_.emplace<ecs::Facing>(e, ecs::Facing{});
-        const float hp = hellhound ? config::HELLHOUND_HP : 50.0F;
-        registry_.emplace<ecs::Health>(e, ecs::Health{hp, hp});
+        registry_.emplace<ecs::Transform>(e, ecs::Transform{{nd.cx, nd.cy}, 0.0F});
+        registry_.emplace<ecs::Sprite>(e, ecs::Sprite{{120, 180, 110, 255}, 52.0F, 52.0F});
+        registry_.emplace<ecs::Health>(e, ecs::Health{150.0F, 150.0F});
         registry_.emplace<ecs::Enemy>(e);
-        registry_.emplace<ecs::NameTag>(e, ecs::NameTag{hellhound ? "Hellhound" : "Imp"});
-        registry_.emplace<ecs::EnemyAI>(e, ecs::EnemyAI{
-                                               hellhound ? ecs::EnemyType::Hellhound
-                                                         : ecs::EnemyType::Imp,
-                                               config::IMP_SHOOT_COOLDOWN,
-                                               config::IMP_SHOOT_COOLDOWN,
-                                               config::IMP_MIN_SHOOT_RANGE,
-                                               hellhound ? config::HELLHOUND_DAMAGE : 0.0F,
-                                               hellhound ? config::HELLHOUND_MELEE_RANGE : 0.0F,
-                                               config::HELLHOUND_MELEE_COOLDOWN,
-                                               0.0F,
-                                               hellhound ? config::HELLHOUND_CHASE_SPEED : 0.0F});
-        registry_.emplace<ecs::Agitation>(
-            e, ecs::Agitation{hellhound ? config::HELLHOUND_AGITATION_RANGE
-                                        : config::IMP_AGITATION_RANGE,
-                              config::ENEMY_CALM_DOWN_DELAY, 0.0F, false});
-        registry_.emplace<ecs::EnemyXpReward>(e, ecs::EnemyXpReward{hellhound ? 30.0F : 25.0F});
+        registry_.emplace<ecs::NameTag>(e, ecs::NameTag{"Node"});
+        registry_.emplace<ecs::NodeSpawner>(e, ecs::NodeSpawner{});
+        registry_.emplace<ecs::Immovable>(e);
+        registry_.emplace<ecs::EnemyXpReward>(e, ecs::EnemyXpReward{65.0F});
         registry_.emplace<ecs::EnemyDisplayLevel>(e, ecs::EnemyDisplayLevel{1});
     }
 
-    if (map.hasCasket) {
+    for (const CasketData &ck : map.caskets) {
         const auto casket = registry_.create();
-        registry_.emplace<ecs::Transform>(
-            casket, ecs::Transform{{map.casket.cx, map.casket.cy}, 0.0F});
+        registry_.emplace<ecs::Transform>(casket, ecs::Transform{{ck.cx, ck.cy}, 0.0F});
         registry_.emplace<ecs::Velocity>(casket, ecs::Velocity{});
-        registry_.emplace<ecs::Sprite>(casket, ecs::Sprite{{90, 70, 55, 255}, 56.0F, 40.0F});
-        registry_.emplace<ecs::Interactable>(casket, ecs::Interactable{"Old Casket", false});
+        registry_.emplace<ecs::Sprite>(casket, ecs::Sprite{casketTierColor(ck.tier), 56.0F, 40.0F});
+        registry_.emplace<ecs::Interactable>(
+            casket, ecs::Interactable{ecs::InteractableKind::OldCasket,
+                                      std::string{casketTierDisplayName(ck.tier)}, false});
+        registry_.emplace<ecs::CasketLoot>(casket, ecs::CasketLoot{rollCasketLoot(ck.tier)});
     }
 
     for (const ItemSpawnData &isp : map.itemSpawns) {
@@ -625,6 +732,27 @@ void GameplayScene::spawnWorld() {
 
     prevPlayerHp_ = cls.baseMaxHp;
     applySkillTreeEffects();
+    rebuildEquipmentSnapshot();
+    wireInventoryIndexHolders();
+}
+
+void GameplayScene::rebuildEquipmentSnapshot() {
+    equipSnapshot_ = buildEquipmentSnapshot(inventory_);
+}
+
+void GameplayScene::wireInventoryIndexHolders() {
+    indexHolders_.clear();
+    indexHolders_.add([this](int removedIdx, int oldLastIdx) {
+        auto rewrite = [&](int &slot) {
+            if (slot == removedIdx) {
+                slot = -1;
+            } else if (slot == oldLastIdx) {
+                slot = removedIdx;
+            }
+        };
+        rewrite(anvilBenchDragPoolIdx_);
+        inventoryUi_.notifyPoolIndexRewritten(removedIdx, oldLastIdx);
+    });
 }
 
 void GameplayScene::applySkillTreeEffects() {
@@ -676,6 +804,13 @@ float GameplayScene::lavaAmbientLoudnessFromPlayer() const {
     return std::clamp(std::sqrt(combinedPower), 0.0F, 1.0F);
 }
 
+void GameplayScene::stopProximityLavaAmbient(ResourceManager &resources) {
+    const SoundHandle lavaAmb = resources.getSound("assets/sounds/ambient/lava_loop.wav");
+    if (lavaAmb >= 0) {
+        resources.audio().stopExclusive(lavaAmb);
+    }
+}
+
 Vector2 GameplayScene::worldMouseFromScreen(const Vector2 &screenMouse) const {
     const Vector2 isoMouse = GetScreenToWorld2D(screenMouse, camera_.camera());
     return isoToWorld(isoMouse);
@@ -686,7 +821,7 @@ void GameplayScene::applyPlayerMaxManaFromEquipment() {
         return;
     }
     auto &mp = registry_.get<ecs::Mana>(player_);
-    const float bonus = inventory_.totalEquippedMaxManaBonus();
+    const float bonus = equipSnapshot_.maxManaBonus;
     const float baseMana = registry_.all_of<ecs::PlayerClassStats>(player_)
                                ? registry_.get<ecs::PlayerClassStats>(player_).baseMaxMana
                                : 100.0F;
@@ -706,7 +841,7 @@ void GameplayScene::applyPlayerMoveSpeedFromEquipment() {
     const int classIdx = std::clamp(selectedClass_, 0, std::max(0, characterCount() - 1));
     const float baseSpeed = characterAt(classIdx).moveSpeed;
     auto &stats = registry_.get<ecs::PlayerMoveStats>(player_);
-    stats.moveSpeed = baseSpeed + inventory_.totalEquippedMoveSpeedBonus();
+    stats.moveSpeed = baseSpeed + equipSnapshot_.moveSpeedBonus;
 }
 
 void GameplayScene::tickVigilantEye(float frameDt) {
@@ -732,14 +867,32 @@ void GameplayScene::tickVigilantEye(float frameDt) {
     const bool hasVigilantEye =
         amuletIdx >= 0 && amuletIdx < static_cast<int>(inventory_.items.size()) &&
         inventory_.items[static_cast<size_t>(amuletIdx)].catalogId == "vigilant_eye";
-    if (hasVigilantEye && state.stillSeconds >= config::VIGILANT_EYE_STILL_SECONDS) {
+    float stillNeedSec = config::VIGILANT_EYE_STILL_SECONDS;
+    if (hasVigilantEye && amuletIdx >= 0 && amuletIdx < static_cast<int>(inventory_.items.size())) {
+        if (const auto stand =
+                findVigilantStandingBonusAction(&inventory_.items[static_cast<size_t>(amuletIdx)])) {
+            if (stand->standingStillSeconds > 0.001F) {
+                stillNeedSec = stand->standingStillSeconds;
+            }
+        }
+    }
+    if (hasVigilantEye && state.stillSeconds >= stillNeedSec) {
         state.stillBonusActive = true;
     } else if (!hasVigilantEye) {
         state.stillBonusActive = false;
     }
 
-    const float equippedBonus = inventory_.totalEquippedVisionRangeBonus();
-    const float stillBonus = (hasVigilantEye && state.stillBonusActive) ? config::VIGILANT_EYE_STILL_BONUS : 0.0F;
+    const float equippedBonus = equipSnapshot_.visionRangeBonus;
+    float stillBonus = 0.0F;
+    if (hasVigilantEye && amuletIdx >= 0 && amuletIdx < static_cast<int>(inventory_.items.size())) {
+        if (const auto stand =
+                findVigilantStandingBonusAction(&inventory_.items[static_cast<size_t>(amuletIdx)])) {
+            stillBonus =
+                state.stillBonusActive ? stand->standingVisionBonus : 0.0F;
+        } else {
+            stillBonus = state.stillBonusActive ? config::VIGILANT_EYE_STILL_BONUS : 0.0F;
+        }
+    }
     const float target = state.baseRange + equippedBonus + stillBonus;
     const float t = std::min(1.0F, frameDt * config::VIGILANT_EYE_LERP_RATE);
     state.currentRange += (target - state.currentRange) * t;
@@ -751,7 +904,7 @@ void GameplayScene::applyPlayerMaxHpFromEquipment() {
         return;
     }
     auto &hp = registry_.get<ecs::Health>(player_);
-    const float bonus = inventory_.totalEquippedMaxHpBonus();
+    const float bonus = equipSnapshot_.maxHpBonus;
     const float baseHp = registry_.all_of<ecs::PlayerClassStats>(player_)
                              ? registry_.get<ecs::PlayerClassStats>(player_).baseMaxHp
                              : config::PLAYER_BASE_MAX_HP;
@@ -766,85 +919,9 @@ void GameplayScene::applyPlayerMaxHpFromEquipment() {
     prevPlayerHp_ = hp.current;
 }
 
-void GameplayScene::tickHealOverTime(float fixedDt, ResourceManager &resources) {
-    if (!registry_.valid(player_) || !registry_.all_of<ecs::Health>(player_)) {
-        return;
-    }
-    auto &hpEarly = registry_.get<ecs::Health>(player_);
-    if (hpEarly.current <= 0.001F) {
-        if (registry_.all_of<ecs::HealOverTime>(player_)) {
-            const SoundHandle pb = resources.getSound("assets/sounds/pureblood.wav");
-            if (pb >= 0) {
-                resources.audio().stopExclusive(pb);
-            }
-            registry_.remove<ecs::HealOverTime>(player_);
-        }
-        return;
-    }
-    if (!registry_.all_of<ecs::HealOverTime>(player_)) {
-        return;
-    }
-    auto &hot = registry_.get<ecs::HealOverTime>(player_);
-    hot.elapsed += fixedDt;
-
-    const SoundHandle pbSnd = resources.getSound("assets/sounds/pureblood.wav");
-    if (pbSnd >= 0 && resources.audio().isExclusivePlaying(pbSnd)) {
-        const float v = std::exp(-3.0F * hot.elapsed / config::HOT_DURATION);
-        resources.audio().setExclusiveVolume(pbSnd, v);
-    }
-
-    // Healing is suppressed while Cordial Manic is active; timer still runs.
-    if (!registry_.all_of<ecs::ManicEffect>(player_)) {
-        auto &hp = registry_.get<ecs::Health>(player_);
-        const float rate = hot.totalHeal / hot.duration;
-        float add = rate * fixedDt;
-        const float remainingHeal = hot.totalHeal - hot.healedSoFar;
-        if (add > remainingHeal) {
-            add = remainingHeal;
-        }
-        hot.healedSoFar += add;
-        hp.current = std::min(hp.max, hp.current + add);
-    }
-
-    if (hot.elapsed >= hot.duration - 1.0e-4F || hot.healedSoFar >= hot.totalHeal - 1.0e-3F) {
-        if (pbSnd >= 0) {
-            resources.audio().stopExclusive(pbSnd);
-        }
-        registry_.remove<ecs::HealOverTime>(player_);
-    }
-}
-
-void GameplayScene::tickManaRegenOverTime(float fixedDt) {
-    if (!registry_.valid(player_) || !registry_.all_of<ecs::Mana>(player_)) {
-        return;
-    }
-    if (registry_.all_of<ecs::Health>(player_) &&
-        registry_.get<ecs::Health>(player_).current <= 0.001F) {
-        return;
-    }
-    if (!registry_.all_of<ecs::ManaRegenOverTime>(player_)) {
-        return;
-    }
-    auto &mrot = registry_.get<ecs::ManaRegenOverTime>(player_);
-    mrot.elapsed += fixedDt;
-    auto &mp = registry_.get<ecs::Mana>(player_);
-    const float rate = mrot.totalMana / mrot.duration;
-    float add = rate * fixedDt;
-    const float remaining = mrot.totalMana - mrot.regenedSoFar;
-    if (add > remaining) {
-        add = remaining;
-    }
-    mrot.regenedSoFar += add;
-    mp.current = std::min(mp.max, mp.current + add);
-    if (mrot.elapsed >= mrot.duration - 1.0e-4F ||
-        mrot.regenedSoFar >= mrot.totalMana - 1.0e-3F) {
-        registry_.remove<ecs::ManaRegenOverTime>(player_);
-    }
-}
-
 void GameplayScene::tickLavaHazard(float fixedDt, ResourceManager &resources) {
     const float loudness = lavaAmbientLoudnessFromPlayer();
-    const SoundHandle lavaAmb = resources.getSound("assets/sounds/lava.wav");
+    const SoundHandle lavaAmb = resources.getSound("assets/sounds/ambient/lava_loop.wav");
     float targetVol = 0.0F;
     bool lavaPlaying = false;
     if (lavaAmb >= 0) {
@@ -898,10 +975,14 @@ void GameplayScene::tickLavaHazard(float fixedDt, ResourceManager &resources) {
     lavaDamageAccumulator_ += fixedDt;
     while (lavaDamageAccumulator_ >= config::LAVA_DAMAGE_INTERVAL) {
         lavaDamageAccumulator_ -= config::LAVA_DAMAGE_INTERVAL;
-        auto &hp = registry_.get<ecs::Health>(player_);
-        hp.current -= config::LAVA_DAMAGE_PER_TICK;
-        hp.current = std::max(0.0F, hp.current);
-        const SoundHandle hiss = resources.getSound("assets/sounds/lavahiss.wav");
+        ecs::CombatResolutionOpts lavaOpts{};
+        lavaOpts.victimEquip = &equipSnapshot_;
+        lavaOpts.victimInventory = &inventory_;
+        ecs::DamagePacket lavaPkt{};
+        lavaPkt.amount = config::LAVA_DAMAGE_PER_TICK;
+        lavaPkt.category = ecs::DamageCategory::Environmental;
+        (void)ecs::resolveDamage(registry_, player_, lavaPkt, lavaOpts);
+        const SoundHandle hiss = resources.getSound("assets/sounds/ambient/lava_damage_hiss.wav");
         if (hiss >= 0) {
             const float p = 0.85F + static_cast<float>(GetRandomValue(0, 30)) / 100.0F;
             resources.audio().playOneShot(hiss, p, 1.0F);
@@ -921,60 +1002,41 @@ void GameplayScene::tryUseConsumableSlot(int slotIndex, ResourceManager &resourc
     if (!it.isConsumable) {
         return;
     }
-    if (it.name == "Vial of Pure Blood") {
-        const bool wasHot =
-            registry_.valid(player_) && registry_.all_of<ecs::HealOverTime>(player_);
-        it.stackCount -= 1;
-        if (it.stackCount <= 0) {
-            inventory_.consumableSlots[static_cast<size_t>(slotIndex)] = -1;
-            removeInventoryItemAndRewrite(idx);
-        }
-        applyVialHealOverTime(wasHot, resources);
-        {
-            const SoundHandle g = resources.getSound("assets/sounds/gulp.wav");
-            if (g >= 0) {
-                const float p = 0.88F + static_cast<float>(GetRandomValue(0, 24)) / 100.0F;
-                resources.audio().playOneShot(g, p, 1.0F);
-            }
-        }
+    const bool hadHot = playerHasHealOverTime(registry_, player_);
+    const bool hadManaRot = playerHasManaRegenOverTime(registry_, player_);
+    const ItemOnUseOutcome out =
+        applyItemOnUseEffectsOutcome(registry_, player_, it, resources);
+    if (out.cordialBlockedLowHp) {
         return;
     }
-    if (it.name == "Vial of Cordial Manic") {
-        if (!tryApplyCordialManic(resources)) {
-            return;
-        }
-        it.stackCount -= 1;
-        if (it.stackCount <= 0) {
-            inventory_.consumableSlots[static_cast<size_t>(slotIndex)] = -1;
-            removeInventoryItemAndRewrite(idx);
-        }
-        {
-            const SoundHandle g = resources.getSound("assets/sounds/gulp.wav");
-            if (g >= 0) {
-                const float p = 0.88F + static_cast<float>(GetRandomValue(0, 24)) / 100.0F;
-                resources.audio().playOneShot(g, p, 1.0F);
-            }
-        }
+    if (!out.applied) {
         return;
     }
-    if (it.name == "Vial of Raw Spirit") {
-        const bool wasActive =
-            registry_.valid(player_) && registry_.all_of<ecs::ManaRegenOverTime>(player_);
-        it.stackCount -= 1;
-        if (it.stackCount <= 0) {
-            inventory_.consumableSlots[static_cast<size_t>(slotIndex)] = -1;
-            removeInventoryItemAndRewrite(idx);
+    if (out.hudKind == 1) {
+        if (hadHot) {
+            hotRefreshFlashTimer_ = 0.35F;
         }
-        applyVialRawSpiritMana(wasActive);
-        {
-            const SoundHandle g = resources.getSound("assets/sounds/gulp.wav");
-            if (g >= 0) {
-                const float p = 0.88F + static_cast<float>(GetRandomValue(0, 24)) / 100.0F;
-                resources.audio().playOneShot(g, p, 1.0F);
-            }
+        pushStatusHud(StatusHudKind::HealOverTime,
+                      out.hudIcon.empty() ? "assets/textures/items/vial_pure_blood_icon.png" : out.hudIcon,
+                      {220, 80, 80, 255}, StatusSign::Positive, false);
+    } else if (out.hudKind == 2) {
+        pushStatusHud(StatusHudKind::ManicEffect,
+                      out.hudIcon.empty() ? "assets/textures/items/vial_cordial_manic_icon.png" : out.hudIcon,
+                      {255, 210, 120, 255}, StatusSign::Positive, false);
+    } else if (out.hudKind == 3) {
+        if (hadManaRot) {
+            spiritRefreshFlashTimer_ = 0.35F;
         }
-        return;
+        pushStatusHud(StatusHudKind::ManaRegenOverTime,
+                      out.hudIcon.empty() ? "assets/textures/items/vial_raw_spirit_icon.png" : out.hudIcon,
+                      {120, 170, 255, 255}, StatusSign::Positive, false);
     }
+    it.stackCount -= 1;
+    if (it.stackCount <= 0) {
+        inventory_.consumableSlots[static_cast<size_t>(slotIndex)] = -1;
+        (void)dreadcast::removePoolItem(mutInvCtx(), idx);
+    }
+    rebuildEquipmentSnapshot();
 }
 
 void GameplayScene::tryUseConsumableBagSlot(int bagSlot, ResourceManager &resources) {
@@ -989,215 +1051,41 @@ void GameplayScene::tryUseConsumableBagSlot(int bagSlot, ResourceManager &resour
     if (!it.isConsumable) {
         return;
     }
-    if (it.name == "Vial of Pure Blood") {
-        const bool wasHot =
-            registry_.valid(player_) && registry_.all_of<ecs::HealOverTime>(player_);
-        it.stackCount -= 1;
-        if (it.stackCount <= 0) {
-            inventory_.bagSlots[static_cast<size_t>(bagSlot)] = -1;
-            removeInventoryItemAndRewrite(idx);
+    const bool hadHot = playerHasHealOverTime(registry_, player_);
+    const bool hadManaRot = playerHasManaRegenOverTime(registry_, player_);
+    const ItemOnUseOutcome out =
+        applyItemOnUseEffectsOutcome(registry_, player_, it, resources);
+    if (out.cordialBlockedLowHp) {
+        return;
+    }
+    if (!out.applied) {
+        return;
+    }
+    if (out.hudKind == 1) {
+        if (hadHot) {
+            hotRefreshFlashTimer_ = 0.35F;
         }
-        applyVialHealOverTime(wasHot, resources);
-        {
-            const SoundHandle g = resources.getSound("assets/sounds/gulp.wav");
-            if (g >= 0) {
-                const float p = 0.88F + static_cast<float>(GetRandomValue(0, 24)) / 100.0F;
-                resources.audio().playOneShot(g, p, 1.0F);
-            }
+        pushStatusHud(StatusHudKind::HealOverTime,
+                      out.hudIcon.empty() ? "assets/textures/items/vial_pure_blood_icon.png" : out.hudIcon,
+                      {220, 80, 80, 255}, StatusSign::Positive, false);
+    } else if (out.hudKind == 2) {
+        pushStatusHud(StatusHudKind::ManicEffect,
+                      out.hudIcon.empty() ? "assets/textures/items/vial_cordial_manic_icon.png" : out.hudIcon,
+                      {255, 210, 120, 255}, StatusSign::Positive, false);
+    } else if (out.hudKind == 3) {
+        if (hadManaRot) {
+            spiritRefreshFlashTimer_ = 0.35F;
         }
-        return;
+        pushStatusHud(StatusHudKind::ManaRegenOverTime,
+                      out.hudIcon.empty() ? "assets/textures/items/vial_raw_spirit_icon.png" : out.hudIcon,
+                      {120, 170, 255, 255}, StatusSign::Positive, false);
     }
-    if (it.name == "Vial of Cordial Manic") {
-        if (!tryApplyCordialManic(resources)) {
-            return;
-        }
-        it.stackCount -= 1;
-        if (it.stackCount <= 0) {
-            inventory_.bagSlots[static_cast<size_t>(bagSlot)] = -1;
-            removeInventoryItemAndRewrite(idx);
-        }
-        {
-            const SoundHandle g = resources.getSound("assets/sounds/gulp.wav");
-            if (g >= 0) {
-                const float p = 0.88F + static_cast<float>(GetRandomValue(0, 24)) / 100.0F;
-                resources.audio().playOneShot(g, p, 1.0F);
-            }
-        }
-        return;
+    it.stackCount -= 1;
+    if (it.stackCount <= 0) {
+        inventory_.bagSlots[static_cast<size_t>(bagSlot)] = -1;
+        (void)dreadcast::removePoolItem(mutInvCtx(), idx);
     }
-    if (it.name == "Vial of Raw Spirit") {
-        const bool wasActive =
-            registry_.valid(player_) && registry_.all_of<ecs::ManaRegenOverTime>(player_);
-        it.stackCount -= 1;
-        if (it.stackCount <= 0) {
-            inventory_.bagSlots[static_cast<size_t>(bagSlot)] = -1;
-            removeInventoryItemAndRewrite(idx);
-        }
-        applyVialRawSpiritMana(wasActive);
-        {
-            const SoundHandle g = resources.getSound("assets/sounds/gulp.wav");
-            if (g >= 0) {
-                const float p = 0.88F + static_cast<float>(GetRandomValue(0, 24)) / 100.0F;
-                resources.audio().playOneShot(g, p, 1.0F);
-            }
-        }
-        return;
-    }
-}
-
-void GameplayScene::applyVialHealOverTime(bool wasAlreadyActive, ResourceManager &resources) {
-    if (!registry_.valid(player_)) {
-        return;
-    }
-    if (wasAlreadyActive) {
-        hotRefreshFlashTimer_ = 0.35F;
-    }
-    registry_.emplace_or_replace<ecs::HealOverTime>(
-        player_, ecs::HealOverTime{config::HOT_TOTAL_HEAL, config::HOT_DURATION, 0.0F, 0.0F});
-    pushStatusHud(StatusHudKind::HealOverTime, "assets/textures/items/vial_pure_blood_icon.png",
-                  {220, 80, 80, 255}, StatusSign::Positive, false);
-    const SoundHandle pb = resources.getSound("assets/sounds/pureblood.wav");
-    if (pb >= 0) {
-        const float pitch = 0.92F + static_cast<float>(GetRandomValue(0, 16)) / 100.0F;
-        resources.audio().playExclusiveLoop(pb, pitch, 1.0F);
-    }
-}
-
-void GameplayScene::applyVialRawSpiritMana(bool wasAlreadyActive) {
-    if (!registry_.valid(player_)) {
-        return;
-    }
-    if (wasAlreadyActive) {
-        spiritRefreshFlashTimer_ = 0.35F;
-    }
-    registry_.emplace_or_replace<ecs::ManaRegenOverTime>(
-        player_, ecs::ManaRegenOverTime{config::RAW_SPIRIT_MANA_TOTAL, config::RAW_SPIRIT_DURATION,
-                                        0.0F, 0.0F});
-    pushStatusHud(StatusHudKind::ManaRegenOverTime, "assets/textures/items/vial_raw_spirit_icon.png",
-                  {120, 170, 255, 255}, StatusSign::Positive, false);
-}
-
-bool GameplayScene::tryApplyCordialManic(ResourceManager &resources) {
-    if (!registry_.valid(player_) || !registry_.all_of<ecs::Health>(player_)) {
-        return false;
-    }
-    auto &hp = registry_.get<ecs::Health>(player_);
-    if (hp.max > 0.001F &&
-        hp.current + 1.0e-4F < config::MANIC_MIN_HP_FRACTION * hp.max) {
-        return false;
-    }
-    const float drainTotal = hp.max * config::MANIC_HP_DRAIN_PERCENT;
-    registry_.emplace_or_replace<ecs::ManicEffect>(
-        player_, ecs::ManicEffect{config::MANIC_DURATION, 0.0F, drainTotal, 0.0F});
-    pushStatusHud(StatusHudKind::ManicEffect, "assets/textures/items/vial_cordial_manic_icon.png",
-                  {255, 210, 120, 255}, StatusSign::Positive, false);
-    const SoundHandle hb = resources.getSound("assets/sounds/fastheartbeat.wav");
-    if (hb >= 0) {
-        const float pitch = 9.0F / config::MANIC_DURATION;
-        resources.audio().playExclusive(hb, pitch, 1.0F);
-    }
-    return true;
-}
-
-void GameplayScene::tickManicEffect(float fixedDt, ResourceManager &resources) {
-    if (!registry_.valid(player_) || !registry_.all_of<ecs::ManicEffect, ecs::Health>(player_)) {
-        return;
-    }
-    auto &me = registry_.get<ecs::ManicEffect>(player_);
-    auto &hp = registry_.get<ecs::Health>(player_);
-    me.elapsed += fixedDt;
-    const float rate = me.duration > 0.001F ? me.hpDrainTotal / me.duration : 0.0F;
-    float add = rate * fixedDt;
-    const float remaining = me.hpDrainTotal - me.hpDrained;
-    if (add > remaining) {
-        add = remaining;
-    }
-    if (add > 0.0F) {
-        me.hpDrained += add;
-        hp.current = std::max(0.0F, hp.current - add);
-    }
-    if (me.elapsed >= me.duration - 1.0e-4F ||
-        me.hpDrained >= me.hpDrainTotal - 1.0e-3F) {
-        const SoundHandle hb = resources.getSound("assets/sounds/fastheartbeat.wav");
-        if (hb >= 0) {
-            resources.audio().stopExclusive(hb);
-        }
-        registry_.remove<ecs::ManicEffect>(player_);
-    }
-}
-
-void GameplayScene::tickRunicShellCooldown(float fixedDt) {
-    if (!registry_.valid(player_) || !registry_.all_of<ecs::RunicShellCooldown>(player_)) {
-        return;
-    }
-    auto &cd = registry_.get<ecs::RunicShellCooldown>(player_);
-    cd.remaining -= fixedDt;
-    if (cd.remaining <= 0.0F) {
-        registry_.remove<ecs::RunicShellCooldown>(player_);
-        runicShellFinishFlash_ = 0.0001F;
-    }
-}
-
-void GameplayScene::checkRunicShellTrigger() {
-    if (!registry_.valid(player_) || !registry_.all_of<ecs::Health, ecs::Transform>(player_)) {
-        return;
-    }
-    const int armorIdx = inventory_.equipped[static_cast<size_t>(EquipSlot::Armor)];
-    if (armorIdx < 0 || armorIdx >= static_cast<int>(inventory_.items.size())) {
-        return;
-    }
-    if (inventory_.items[static_cast<size_t>(armorIdx)].name != "Runic Shell") {
-        return;
-    }
-    if (registry_.all_of<ecs::RunicShellCooldown>(player_)) {
-        return;
-    }
-    const auto &hp = registry_.get<ecs::Health>(player_);
-    if (hp.max < 0.001F) {
-        return;
-    }
-    const float thresh = config::RUNIC_SHELL_HP_THRESHOLD * hp.max;
-    // Only trigger when HP crosses from above the threshold to at-or-below this tick (damage),
-    // not when already low (cooldown expiry, equip while hurt, etc.).
-    float hpAtTickStart = hp.current;
-    const auto hpIt = hpBeforeFixedStep_.find(player_);
-    if (hpIt != hpBeforeFixedStep_.end()) {
-        hpAtTickStart = hpIt->second;
-    }
-    if (!(hpAtTickStart > thresh + 1.0e-4F && hp.current <= thresh + 1.0e-4F)) {
-        return;
-    }
-
-    const auto &pt = registry_.get<ecs::Transform>(player_);
-    const float radiusSq = config::RUNIC_SHELL_RADIUS * config::RUNIC_SHELL_RADIUS;
-    const auto enemies = registry_.view<ecs::Enemy, ecs::Transform, ecs::Health>();
-    for (const auto e : enemies) {
-        const auto &et = registry_.get<ecs::Transform>(e);
-        const float dx = et.position.x - pt.position.x;
-        const float dy = et.position.y - pt.position.y;
-        if (dx * dx + dy * dy > radiusSq) {
-            continue;
-        }
-        auto &eh = registry_.get<ecs::Health>(e);
-        eh.current -= config::RUNIC_SHELL_DAMAGE;
-
-        const float dist = std::sqrt(dx * dx + dy * dy);
-        if (dist > 0.001F) {
-            auto &vel = registry_.get_or_emplace<ecs::Velocity>(e);
-            vel.value.x = (dx / dist) * config::RUNIC_SHELL_KNOCKBACK;
-            vel.value.y = (dy / dist) * config::RUNIC_SHELL_KNOCKBACK;
-            registry_.emplace_or_replace<ecs::KnockbackState>(
-                e, ecs::KnockbackState{config::KNOCKBACK_DURATION * 1.5F, 0.0F});
-        }
-    }
-
-    auto &hpMut = registry_.get<ecs::Health>(player_);
-    if (!registry_.all_of<ecs::ManicEffect>(player_)) {
-        hpMut.current = std::min(hpMut.max, hpMut.current + config::RUNIC_SHELL_HEAL);
-    }
-    registry_.emplace_or_replace<ecs::RunicShellCooldown>(
-        player_, ecs::RunicShellCooldown{config::RUNIC_SHELL_COOLDOWN, config::RUNIC_SHELL_COOLDOWN});
-    runicShellFlashTimer_ = 0.6F;
+    rebuildEquipmentSnapshot();
 }
 
 void GameplayScene::spawnItemPickupAtPlayer(int itemIndex) {
@@ -1208,65 +1096,46 @@ void GameplayScene::spawnItemPickupAtPlayer(int itemIndex) {
     spawnItemPickupAtWorld(t.position, itemIndex);
 }
 
-void GameplayScene::removeInventoryItemAndRewrite(int idx) {
-    if (idx < 0 || idx >= static_cast<int>(inventory_.items.size())) {
-        return;
-    }
-    const int oldLast = static_cast<int>(inventory_.items.size()) - 1;
-    inventory_.removeItemAtIndex(idx);
-    ecs::collision::rewrite_ground_pickup_indices_after_remove(registry_, idx, oldLast);
-
-    auto rewriteSlot = [&](int &slot) {
-        if (slot == idx) {
-            slot = -1;
-        } else if (slot == oldLast) {
-            slot = idx;
-        }
-    };
-    for (int &fs : forgeSlots_) {
-        rewriteSlot(fs);
-    }
-    rewriteSlot(disassembleInputIndex_);
-    for (int i = 0; i < disassembleOutputCount_; ++i) {
-        rewriteSlot(disassembleOutputPool_[static_cast<size_t>(i)]);
-    }
+void GameplayScene::spawnItemPickupAtWorld(const Vector2 &worldPos, int itemIndex) {
+    ecs::collision::spawn_item_pickup_at_world(registry_, worldPos, itemIndex);
 }
 
-void GameplayScene::spawnItemPickupAtWorld(const Vector2 &worldPos, int itemIndex) {
-    Vector2 dropPos = worldPos;
-    constexpr float minSep = 20.0F; // keep multiple drops pickable
-    const float minSepSq = minSep * minSep;
+InvCtx &GameplayScene::mutInvCtx() {
+    invCtxScratch_ = makeInvCtx();
+    return invCtxScratch_;
+}
 
-    // Nudge the drop position outward if it would overlap an existing ground pickup.
-    for (int attempt = 0; attempt < 24; ++attempt) {
-        bool ok = true;
-        const auto pickups = registry_.view<ecs::ItemPickup, ecs::Transform>();
-        for (const auto p : pickups) {
-            const auto &pt = pickups.get<ecs::Transform>(p);
-            const float dx = pt.position.x - dropPos.x;
-            const float dy = pt.position.y - dropPos.y;
-            if (dx * dx + dy * dy < minSepSq) {
-                ok = false;
-                break;
-            }
-        }
-        if (ok) {
-            break;
-        }
-        const float ang = attempt * 2.3999632F; // golden angle (radians)
-        const float r = minSep * (0.55F + 0.25F * static_cast<float>(attempt));
-        dropPos = {worldPos.x + std::cosf(ang) * r, worldPos.y + std::sinf(ang) * r};
-    }
+InvCtx GameplayScene::makeInvCtx() {
+    InvCtx c{};
+    c.inventory = &inventory_;
+    c.registry = &registry_;
+    c.player = player_;
+    c.inventoryFullFlashTimer = &inventoryFullFlashTimer_;
+    c.holders = &indexHolders_;
+    c.forgeSlots = &forgeSlots_;
+    c.disassembleInputIndex = &disassembleInputIndex_;
+    c.disassembleOutputPool = &disassembleOutputPool_;
+    c.disassembleOutputCount = &disassembleOutputCount_;
+    return c;
+}
 
-    const auto e = registry_.create();
-    registry_.emplace<ecs::Transform>(e, ecs::Transform{dropPos, 0.0F});
-    registry_.emplace<ecs::Velocity>(e, ecs::Velocity{});
-    registry_.emplace<ecs::Sprite>(e, ecs::Sprite{{180, 120, 255, 255}, 28.0F, 28.0F});
-    registry_.emplace<ecs::ItemPickup>(e, ecs::ItemPickup{itemIndex});
+MovePolicy GameplayScene::inventoryPlacePolicy() const {
+    const bool bagPri =
+        lastResources_ != nullptr && lastResources_->settings().bagPriorityShiftIntoInventory;
+    return bagPri ? (MovePolicy::BagPriorityShift | MovePolicy::TryMerge | MovePolicy::AllowSwap)
+                  : (MovePolicy::TryMerge | MovePolicy::AllowSwap);
+}
+
+ReturnPolicy GameplayScene::inventoryReturnPolicy() const {
+    const bool bagPri =
+        lastResources_ != nullptr && lastResources_->settings().bagPriorityShiftIntoInventory;
+    return bagPri ? ReturnPolicy::BagPriorityShift : ReturnPolicy::None;
 }
 
 void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceManager &resources,
                            float frameDt) {
+    lastResources_ = &resources;
+
     if (input.isKeyPressed(KEY_F3)) {
         fogDebugOverlay_ = !fogDebugOverlay_;
     }
@@ -1282,6 +1151,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
     skillPointFlashTimer_ = std::max(0.0F, skillPointFlashTimer_ - frameDt);
 
     if (gameOver_) {
+        stopProximityLavaAmbient(resources);
         const Vector2 mouse = input.mousePosition();
         const bool click = input.isMouseButtonPressed(MOUSE_BUTTON_LEFT);
         const int w = config::WINDOW_WIDTH;
@@ -1398,13 +1268,13 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
                                 const int idx = forgeSlots_[static_cast<size_t>(i)];
                                 if (idx >= 0) {
                                     forgeSlots_[static_cast<size_t>(i)] = -1;
-                                    tryReturnPoolItemToBagOrDrop(idx);
+                                    (void)returnPoolItem(mutInvCtx(), idx, inventoryReturnPolicy());
                                 }
                             }
                         }
                     } else {
                         if (CheckCollisionPointRec(mouse, anvilLayout.disInputRect) && disassembleInputIndex_ >= 0) {
-                            tryReturnPoolItemToBagOrDrop(disassembleInputIndex_);
+                            (void)returnPoolItem(mutInvCtx(), disassembleInputIndex_, inventoryReturnPolicy());
                             disassembleInputIndex_ = -1;
                         } else {
                             for (int i = 0; i < anvilLayout.disOutputCount; ++i) {
@@ -1415,7 +1285,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
                                 const int idx = disassembleOutputPool_[static_cast<size_t>(i)];
                                 if (idx >= 0) {
                                     disassembleOutputPool_[static_cast<size_t>(i)] = -1;
-                                    tryReturnPoolItemToBagOrDrop(idx);
+                                    (void)returnPoolItem(mutInvCtx(), idx, inventoryReturnPolicy());
                                 }
                                 break;
                             }
@@ -1424,16 +1294,17 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
                 }
                 tickAnvilUi(input, resources, anvilLayout);
             }
+            InvCtx invCtx = makeInvCtx();
             const ui::InventoryAction invAction = inventoryUi_.update(
-                input, inventory_, resources.settings().separateDropsWhenFull,
+                input, invCtx, resources.settings().separateDropsWhenFull,
                 anvilOpen_ ? &anvilLayout : nullptr);
             if (invAction.type == ui::InventoryAction::AnvilForgePlace ||
                 invAction.type == ui::InventoryAction::AnvilDisassembleInputPlace) {
                 handleInventoryAnvilAction(invAction);
             } else if (invAction.type == ui::InventoryAction::Drop) {
-                spawnItemPickupAtPlayer(invAction.itemIndex);
+                (void)dropToWorldAtPlayer(invCtx, invAction.itemIndex);
             } else if (invAction.type == ui::InventoryAction::SeparateDropWorld) {
-                spawnItemPickupAtPlayer(invAction.itemIndex);
+                (void)dropToWorldAtPlayer(invCtx, invAction.itemIndex);
             } else if (invAction.type == ui::InventoryAction::Use) {
                 if (invAction.useConsumableSlot >= 0) {
                     tryUseConsumableSlot(invAction.useConsumableSlot, resources);
@@ -1472,6 +1343,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         }
     }
 
+    rebuildEquipmentSnapshot();
     applyPlayerMaxHpFromEquipment();
     applyPlayerMaxManaFromEquipment();
     applyPlayerMoveSpeedFromEquipment();
@@ -1507,14 +1379,15 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
     }
 
     if (paused_) {
+        stopProximityLavaAmbient(resources);
         const Vector2 mouse = input.mousePosition();
         const bool click = input.isMouseButtonPressed(MOUSE_BUTTON_LEFT);
         const int w = config::WINDOW_WIDTH;
         const int h = config::WINDOW_HEIGHT;
         resumeButton_.rect = {(w - 260.0F) * 0.5F, h * 0.5F - 127.0F, 260.0F, 48.0F};
         resumeButton_.label = "Resume";
-        archivePauseButton_.rect = {(w - 260.0F) * 0.5F, h * 0.5F - 62.0F, 260.0F, 48.0F};
-        archivePauseButton_.label = "Archive";
+        codexPauseButton_.rect = {(w - 260.0F) * 0.5F, h * 0.5F - 62.0F, 260.0F, 48.0F};
+        codexPauseButton_.label = "Codex";
         settingsPauseButton_.rect = {(w - 260.0F) * 0.5F, h * 0.5F + 3.0F, 260.0F, 48.0F};
         settingsPauseButton_.label = "Settings";
         mainMenuButton_.rect = {(w - 260.0F) * 0.5F, h * 0.5F + 68.0F, 260.0F, 48.0F};
@@ -1524,8 +1397,8 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
             aimScreenPos_ = mouse;
             aimScreenInit_ = true;
         }
-        if (archivePauseButton_.wasClicked(mouse, click)) {
-            scenes.push(std::make_unique<ArchiveScene>());
+        if (codexPauseButton_.wasClicked(mouse, click)) {
+            scenes.push(std::make_unique<CodexScene>());
         }
         if (settingsPauseButton_.wasClicked(mouse, click)) {
             scenes.push(std::make_unique<SettingsScene>());
@@ -1539,7 +1412,6 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
     }
 
     aimMouseSensitivity_ = resources.settings().mouseSensitivity;
-    bagPriorityShiftIntoInventory_ = resources.settings().bagPriorityShiftIntoInventory;
     if (!aimScreenInit_) {
         aimScreenPos_ = input.mousePosition();
         aimScreenInit_ = true;
@@ -1594,8 +1466,9 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         if (ecs::combat_player_ranged(registry_, input, camera_.camera(), player_, noManaFlashTimer_,
                                       aimScreenPos_, &resources)) {
             const bool leadFeverActive = registry_.all_of<ecs::LeadFeverEffect>(player_);
-            const char *shotSound =
-                leadFeverActive ? "assets/sounds/1scatterattack.wav" : "assets/sounds/gun_shot.wav";
+            const char *shotSound = leadFeverActive
+                                         ? "assets/sounds/abilities/lead_fever_scatter_shot.wav"
+                                         : "assets/sounds/combat/ranged_gun_shot.wav";
             const SoundHandle gun = resources.getSound(shotSound);
             if (gun >= 0) {
                 const float p = 0.85F + static_cast<float>(GetRandomValue(0, 30)) / 100.0F;
@@ -1610,12 +1483,14 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
 
     const int steps = fixedTimer_.consumeSteps(frameDt);
     for (int i = 0; i < steps; ++i) {
+        rebuildEquipmentSnapshot();
         hpBeforeFixedStep_.clear();
         for (const auto e : registry_.view<ecs::Health>()) {
             hpBeforeFixedStep_[e] = registry_.get<ecs::Health>(e).current;
         }
 
         tickStunnedEnemies(config::FIXED_DT);
+        tickPlayerDebuffs(config::FIXED_DT);
         tickAbilityCooldowns(config::FIXED_DT);
         tickLeadFeverEffect(config::FIXED_DT);
         tickSnareDash(config::FIXED_DT);
@@ -1630,22 +1505,50 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
             melee.swingIndex = 0;
             melee.hitAppliedThisSwing = false;
         }
-        ecs::enemy_ai_system(registry_, config::FIXED_DT, player_, &inventory_);
+        ecs::enemy_ai_system(registry_, config::FIXED_DT, player_, &inventory_, &equipSnapshot_);
+        ecs::node_system(registry_, config::FIXED_DT, player_);
 
         for (const auto e : registry_.view<ecs::Enemy, ecs::EnemyAI, ecs::Agitation>()) {
-            if (registry_.get<ecs::EnemyAI>(e).type != ecs::EnemyType::Hellhound) {
+            const auto agroType = registry_.get<ecs::EnemyAI>(e).type;
+            const char *agroSfx = nullptr;
+            if (agroType == ecs::EnemyType::Hellhound) {
+                agroSfx = "assets/sounds/enemies/hellhound/agro.wav";
+            } else if (agroType == ecs::EnemyType::Warden) {
+                agroSfx = "assets/sounds/enemies/warden/agro.wav";
+            }
+            if (agroSfx == nullptr) {
                 continue;
             }
             const bool now = registry_.get<ecs::Agitation>(e).agitated;
-            bool &prev = hellhoundPrevAgitated_[e];
+            bool &prev = enemyPrevAgitated_[e];
             if (now && !prev) {
-                const SoundHandle ag = resources.getSound("assets/sounds/hellhound_agro.wav");
+                const SoundHandle ag = resources.getSound(agroSfx);
                 if (ag >= 0) {
                     const float p = 0.85F + static_cast<float>(GetRandomValue(0, 30)) / 100.0F;
                     resources.audio().playOneShot(ag, p, 1.0F);
                 }
             }
             prev = now;
+        }
+
+        // Warden slam / push one-shot SFX (flags set by the AI when the effect fires).
+        for (const auto e : registry_.view<ecs::WardenState>()) {
+            auto &ws = registry_.get<ecs::WardenState>(e);
+            if (ws.attackSfxPending) {
+                ws.attackSfxPending = false;
+                const SoundHandle h = resources.getSound("assets/sounds/enemies/warden/attack.wav");
+                if (h >= 0) {
+                    const float p = 0.9F + static_cast<float>(GetRandomValue(0, 20)) / 100.0F;
+                    resources.audio().playOneShot(h, p, 1.0F);
+                }
+            }
+            if (ws.abilitySfxPending) {
+                ws.abilitySfxPending = false;
+                const SoundHandle h = resources.getSound("assets/sounds/enemies/warden/ability.wav");
+                if (h >= 0) {
+                    resources.audio().playOneShot(h, 1.0F, 1.0F);
+                }
+            }
         }
 
         ecs::movement_system(registry_, config::FIXED_DT);
@@ -1655,10 +1558,10 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         ecs::wall_destroy_projectiles(registry_);
         ecs::projectile_system(registry_, config::FIXED_DT);
         const float snareFlashBefore = snareImpactFlash_;
-        ecs::collision::projectile_hits(registry_, player_, &inventory_, &snareImpactWorld_,
-                                        &snareImpactFlash_);
+        ecs::collision::projectile_hits(registry_, player_, &inventory_, &equipSnapshot_,
+                                        &snareImpactWorld_, &snareImpactFlash_);
         if (snareFlashBefore <= 0.001F && snareImpactFlash_ > 0.001F) {
-            const SoundHandle s = resources.getSound("assets/sounds/2hit.wav");
+            const SoundHandle s = resources.getSound("assets/sounds/abilities/deadlight_snare_impact.wav");
             if (s >= 0) {
                 resources.audio().playOneShot(s, 1.0F, 1.0F);
             }
@@ -1675,31 +1578,44 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
             }
             deathSfxPlayed_.insert(e);
             const auto type = registry_.get<ecs::EnemyAI>(e).type;
+            if (type == ecs::EnemyType::Dreg) {
+                continue; // Dregs die in swarms; suppress per-kill death SFX spam.
+            }
             const float p = 0.85F + static_cast<float>(GetRandomValue(0, 30)) / 100.0F;
+            const char *deathSfx = "assets/sounds/enemies/imp/death.wav";
             if (type == ecs::EnemyType::Hellhound) {
-                const SoundHandle h = resources.getSound("assets/sounds/hellhound_death.wav");
-                if (h >= 0) {
-                    resources.audio().playOneShot(h, p, 1.0F);
-                }
-            } else {
-                const SoundHandle h = resources.getSound("assets/sounds/imp_death.wav");
-                if (h >= 0) {
-                    resources.audio().playOneShot(h, p, 1.0F);
-                }
+                deathSfx = "assets/sounds/enemies/hellhound/death.wav";
+            } else if (type == ecs::EnemyType::Warden) {
+                deathSfx = "assets/sounds/enemies/warden/death.wav";
+            }
+            const SoundHandle h = resources.getSound(deathSfx);
+            if (h >= 0) {
+                resources.audio().playOneShot(h, p, 1.0F);
             }
         }
 
         ecs::death_system(registry_, player_, &enemiesSlain_);
-        tickManicEffect(config::FIXED_DT, resources);
-        tickHealOverTime(config::FIXED_DT, resources);
-        tickManaRegenOverTime(config::FIXED_DT);
-        tickRunicShellCooldown(config::FIXED_DT);
-        checkRunicShellTrigger();
+        const bool hadRunicCd = playerHasRunicShellCooldown(registry_, player_);
+        tickActiveItemEffects(registry_, player_, config::FIXED_DT, resources);
+        const bool hasRunicCd = playerHasRunicShellCooldown(registry_, player_);
+        if (hadRunicCd && !hasRunicCd) {
+            runicShellFinishFlash_ = 0.0001F;
+        }
+        if (registry_.valid(player_) && registry_.all_of<ecs::Health>(player_)) {
+            auto &hpRef = registry_.get<ecs::Health>(player_);
+            const float hpStart = hpBeforeFixedStep_.count(player_) != 0U
+                                      ? hpBeforeFixedStep_[player_]
+                                      : hpRef.current;
+            if (tryProcHpThresholdEffects(registry_, player_, inventory_, hpStart, hpRef.current,
+                                          hpRef.max, resources)) {
+                runicShellFlashTimer_ = 0.6F;
+            }
+        }
 
         // Passive regen based on the selected class (+ equipment); blocked during ManicEffect.
         // Do not apply while HP is depleted — otherwise lethal damage (e.g. lava) is undone same tick.
         if (registry_.valid(player_) && registry_.all_of<ecs::Health, ecs::Mana>(player_) &&
-            !registry_.all_of<ecs::ManicEffect>(player_)) {
+            !playerHasManicEffect(registry_, player_)) {
             const int ci = std::clamp(selectedClass_, 0, std::max(0, characterCount() - 1));
             const auto &cls = characterAt(ci);
             auto &hp2 = registry_.get<ecs::Health>(player_);
@@ -1707,11 +1623,11 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
             if (hp2.current > 0.001F) {
                 hp2.current = std::min(
                     hp2.max, hp2.current + cls.hpRegen * config::FIXED_DT +
-                                 inventory_.totalEquippedHpRegenBonus() * config::FIXED_DT);
+                                 equipSnapshot_.hpRegenBonus * config::FIXED_DT);
                 mp.current = std::min(mp.max, mp.current + cls.manaRegen * config::FIXED_DT);
             }
         } else if (registry_.valid(player_) && registry_.all_of<ecs::Health, ecs::Mana>(player_) &&
-                   registry_.all_of<ecs::ManicEffect>(player_)) {
+                   playerHasManicEffect(registry_, player_)) {
             auto &hpM = registry_.get<ecs::Health>(player_);
             if (hpM.current > 0.001F) {
                 auto &mp = registry_.get<ecs::Mana>(player_);
@@ -1763,17 +1679,17 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
             damageFlashTimer_ = 0.5F;
             const int cix = std::clamp(selectedClass_, 0, std::max(0, characterCount() - 1));
             if (cur <= 0.0F) {
-                const SoundHandle hurtH = resources.getSound("assets/sounds/undead_hunter_hurt.wav");
+                const SoundHandle hurtH = resources.getSound("assets/sounds/characters/undead_hunter/hurt.wav");
                 if (hurtH >= 0) {
                     resources.audio().stopAll(hurtH);
                 }
-                const SoundHandle deathH = resources.getSound("assets/sounds/undead_hunter_death.wav");
+                const SoundHandle deathH = resources.getSound("assets/sounds/characters/undead_hunter/death.wav");
                 if (deathH >= 0) {
                     resources.audio().playOneShot(deathH, 1.0F, 1.0F);
                 }
                 hurtGruntCooldown_ = 1.0e9F;
             } else if (hurtGruntCooldown_ <= 0.001F && characterAt(cix).id == "undead_hunter") {
-                const SoundHandle grunt = resources.getSound("assets/sounds/undead_hunter_hurt.wav");
+                const SoundHandle grunt = resources.getSound("assets/sounds/characters/undead_hunter/hurt.wav");
                 if (grunt >= 0) {
                     resources.audio().playExclusive(grunt, 1.0F, 1.0F);
                 }
@@ -1792,7 +1708,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         }
         if (input.isKeyPressed(KEY_ONE)) {
             if (tryUseAbility(0)) {
-                const SoundHandle s = resources.getSound("assets/sounds/1start.wav");
+                const SoundHandle s = resources.getSound("assets/sounds/abilities/lead_fever_activate.wav");
                 if (s >= 0) {
                     resources.audio().playOneShot(s, 1.0F, 1.0F);
                 }
@@ -1800,7 +1716,7 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
         }
         if (input.isKeyPressed(KEY_TWO)) {
             if (tryUseAbility(1)) {
-                const SoundHandle s = resources.getSound("assets/sounds/2throw.wav");
+                const SoundHandle s = resources.getSound("assets/sounds/abilities/deadlight_snare_throw.wav");
                 if (s >= 0) {
                     resources.audio().playOneShot(s, 1.0F, 1.0F);
                 }
@@ -1829,46 +1745,22 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
             if (input.isKeyPressed(KEY_F) && hoveredInteract_ != entt::null &&
                 registry_.all_of<ecs::Interactable>(hoveredInteract_)) {
                 auto &inter = registry_.get<ecs::Interactable>(hoveredInteract_);
-                if (!inter.opened && inter.name == "Old Casket") {
-                    inter.opened = true;
-
-                    const auto &ct = registry_.get<ecs::Transform>(hoveredInteract_);
-                    const auto &casketSpr = registry_.get<ecs::Sprite>(hoveredInteract_);
-
-                    Vector2 dir = {ppos.x - ct.position.x, ppos.y - ct.position.y};
-                    const float len = std::sqrt(dir.x * dir.x + dir.y * dir.y);
-                    if (len > 0.001F) {
-                        dir.x /= len;
-                        dir.y /= len;
-                    } else {
-                        dir = {1.0F, 0.0F};
-                    }
-                    const Vector2 perp = {-dir.y, dir.x};
-
-                    const float half = std::max(casketSpr.width, casketSpr.height) * 0.5F;
-                    const float baseDist = half + 12.0F;
-                    const float spread = 14.0F;
-
-                    int dropIdx = 0;
-                    for (const std::string &kind : loadedMap_.casket.itemSlots) {
-                        if (kind.empty() || kind == "-") {
-                            continue;
-                        }
-                        ItemData it = makeItemFromMapKind(kind);
-                        if (it.name.empty()) {
-                            continue;
-                        }
-                        const int idx = inventory_.addItem(std::move(it));
-                        const float ang = static_cast<float>(dropIdx) * 0.85F;
-                        const Vector2 drop = {
-                            ct.position.x + dir.x * baseDist + perp.x * spread * std::cosf(ang) +
-                                static_cast<float>(dropIdx) * 6.0F * dir.x,
-                            ct.position.y + dir.y * baseDist + perp.y * spread * std::cosf(ang) +
-                                static_cast<float>(dropIdx) * 6.0F * dir.y};
-                        spawnItemPickupAtWorld(drop, idx);
-                        ++dropIdx;
-                    }
-                } else if (inter.name == "Anvil") {
+                InvCtx &ictx = mutInvCtx();
+                WorldInteractEnv wenv{};
+                wenv.registry = &registry_;
+                wenv.invCtx = &ictx;
+                wenv.playerPos = ppos;
+                if (registry_.all_of<ecs::Transform, ecs::Sprite>(hoveredInteract_)) {
+                    wenv.casketTf = &registry_.get<ecs::Transform>(hoveredInteract_);
+                    wenv.casketSpr = &registry_.get<ecs::Sprite>(hoveredInteract_);
+                }
+                if (const auto *loot = registry_.try_get<ecs::CasketLoot>(hoveredInteract_)) {
+                    wenv.casketItemSlotBegin = loot->itemSlots.data();
+                    wenv.casketItemSlotCount = loot->itemSlots.size();
+                }
+                const WorldInteractDispatch d =
+                    dispatchInteractablePrimaryUse(inter.interactionKind, inter.opened, wenv);
+                if (d == WorldInteractDispatch::RequestOpenAnvil) {
                     anvilOpen_ = true;
                     activeAnvil_ = hoveredInteract_;
                     inventoryUi_.setOpen(true);
@@ -1887,19 +1779,18 @@ void GameplayScene::update(SceneManager &scenes, InputManager &input, ResourceMa
                         pickupSlot = item.slot;
                     }
                 }
-                const bool pickedUp =
-                    ecs::collision::try_pickup_item_entity(registry_, hoveredPickup_, inventory_,
-                                                           inventoryFullFlashTimer_);
+                const bool pickedUp = ecs::collision::try_pickup_item_entity(
+                    registry_, hoveredPickup_, inventory_, inventoryFullFlashTimer_, &indexHolders_);
                 if (pickedUp) {
                     const char *path = nullptr;
                     if (pickupConsumable) {
-                        path = "assets/sounds/vialpickup.wav";
+                        path = "assets/sounds/pickups/vial.wav";
                     } else if (pickupSlot == EquipSlot::Ring) {
-                        path = "assets/sounds/ringpickup.wav";
+                        path = "assets/sounds/pickups/ring.wav";
                     } else if (pickupSlot == EquipSlot::Amulet) {
-                        path = "assets/sounds/amuletpickup.wav";
+                        path = "assets/sounds/pickups/amulet.wav";
                     } else if (pickupSlot == EquipSlot::Armor) {
-                        path = "assets/sounds/armorpickup.wav";
+                        path = "assets/sounds/pickups/armor.wav";
                     }
                     if (path != nullptr) {
                         const SoundHandle s = resources.getSound(path);
@@ -1968,13 +1859,10 @@ void GameplayScene::draw(ResourceManager &resources) {
         const auto &hp = registry_.get<ecs::Health>(player_);
         hpRatioDraw = hp.max > 0.001F ? hp.current / hp.max : 0.0F;
     }
-    float rscdRatio = 0.0F;
-    float rscdSeconds = 0.0F;
-    if (registry_.valid(player_) && registry_.all_of<ecs::RunicShellCooldown>(player_)) {
-        const auto &cd = registry_.get<ecs::RunicShellCooldown>(player_);
-        rscdRatio = cd.total > 0.001F ? cd.remaining / cd.total : 0.0F;
-        rscdSeconds = cd.remaining;
-    }
+    const float rscdRatio =
+        registry_.valid(player_) ? runicShellCooldownRatio(registry_, player_) : 0.0F;
+    const float rscdSeconds =
+        registry_.valid(player_) ? runicShellCooldownSecondsRemaining(registry_, player_) : 0.0F;
     inventoryUi_.drawWithoutDragGhost(resources.uiFont(), resources, w, h, inventory_, hpRatioDraw,
                                       rscdRatio, rscdSeconds, runicShellFinishFlash_);
     if (anvilOpen_) {
@@ -2304,13 +2192,13 @@ void GameplayScene::syncStatusHudOrder() {
                        [&](const ActiveStatusHud &h) {
                            switch (h.kind) {
                            case StatusHudKind::HealOverTime:
-                               return !registry_.all_of<ecs::HealOverTime>(player_);
+                               return fxFindHot(registry_, player_) == nullptr;
                            case StatusHudKind::ManicEffect:
-                               return !registry_.all_of<ecs::ManicEffect>(player_);
+                               return fxFindManic(registry_, player_) == nullptr;
                            case StatusHudKind::LeadFever:
                                return !registry_.all_of<ecs::LeadFeverEffect>(player_);
                            case StatusHudKind::ManaRegenOverTime:
-                               return !registry_.all_of<ecs::ManaRegenOverTime>(player_);
+                               return fxFindManaRot(registry_, player_) == nullptr;
                            case StatusHudKind::LavaBurn:
                                return !inLavaPrev_;
                            }
@@ -2346,7 +2234,7 @@ void GameplayScene::tickAbilityCooldowns(float fixedDt) {
         abilityCdRem_[i] = std::max(0.0F, abilityCdRem_[i] - fixedDt);
         if (prev > 0.001F && abilityCdRem_[i] <= 0.001F) {
             abilityFinishFlash_[i] = 0.0001F;
-            const float refund = inventory_.totalEquippedAbilityCooldownManaRefund();
+            const float refund = equipSnapshot_.abilityCooldownManaRefund;
             if (refund > 0.001F && registry_.valid(player_) && registry_.all_of<ecs::Mana>(player_)) {
                 auto &mana = registry_.get<ecs::Mana>(player_);
                 mana.current = std::clamp(mana.current + refund, 0.0F, mana.max);
@@ -2403,7 +2291,7 @@ void GameplayScene::tickSlugAim(float fixedDt, ResourceManager &resources) {
         const Vector2 d = aim.aimDirection;
         registry_.remove<ecs::SlugAimState>(player_);
         fireCalamitySlug(undeadHunterAbilities().abilities[2], d);
-        const SoundHandle slugSnd = resources.getSound("assets/sounds/calamity_slug_fire.wav");
+        const SoundHandle slugSnd = resources.getSound("assets/sounds/abilities/calamity_slug_fire.wav");
         if (slugSnd >= 0) {
             resources.audio().playOneShot(slugSnd, 1.0F, 1.0F);
         }
@@ -2422,6 +2310,33 @@ void GameplayScene::tickStunnedEnemies(float fixedDt) {
     for (const auto e : toClear) {
         if (registry_.valid(e)) {
             registry_.remove<ecs::StunnedState>(e);
+        }
+    }
+}
+
+void GameplayScene::tickPlayerDebuffs(float fixedDt) {
+    if (!registry_.valid(player_)) {
+        return;
+    }
+    if (registry_.all_of<ecs::KnockbackState>(player_)) {
+        auto &kb = registry_.get<ecs::KnockbackState>(player_);
+        kb.elapsed += fixedDt;
+        if (auto *vel = registry_.try_get<ecs::Velocity>(player_)) {
+            vel->value.x *= config::KNOCKBACK_FRICTION;
+            vel->value.y *= config::KNOCKBACK_FRICTION;
+        }
+        if (kb.elapsed >= kb.duration) {
+            registry_.remove<ecs::KnockbackState>(player_);
+            if (auto *vel = registry_.try_get<ecs::Velocity>(player_)) {
+                vel->value = {0.0F, 0.0F};
+            }
+        }
+    }
+    if (registry_.all_of<ecs::PlayerSlow>(player_)) {
+        auto &slow = registry_.get<ecs::PlayerSlow>(player_);
+        slow.elapsed += fixedDt;
+        if (slow.elapsed >= slow.duration) {
+            registry_.remove<ecs::PlayerSlow>(player_);
         }
     }
 }
@@ -2512,7 +2427,7 @@ bool GameplayScene::tryUseAbility(int abilityIndex) {
         return false;
     }
     auto &mana = registry_.get<ecs::Mana>(player_);
-    const float manaMult = inventory_.totalEquippedAbilityManaCostMultiplier();
+    const float manaMult = equipSnapshot_.abilityManaCostMultiplier;
     const float effectiveManaCost =
         std::max(0.0F, std::floor(def.manaCost * manaMult + 1.0e-4F));
     if (mana.current + 1.0e-4F < effectiveManaCost) {
@@ -2701,9 +2616,9 @@ void GameplayScene::drawHud(ResourceManager &resources) {
 
     // Passive regen indicator (class + equipment); hidden during ManicEffect.
     {
-        const float eqRg = inventory_.totalEquippedHpRegenBonus();
+        const float eqRg = equipSnapshot_.hpRegenBonus;
         const float totalRg = cls.hpRegen + eqRg;
-        if (totalRg > 0.001F && !registry_.all_of<ecs::ManicEffect>(player_)) {
+        if (totalRg > 0.001F && !playerHasManicEffect(registry_, player_)) {
             char regenBuf[32];
             std::snprintf(regenBuf, sizeof(regenBuf), "+%.1f", static_cast<double>(totalRg));
             const float regenSz = 13.0F;
@@ -2753,13 +2668,10 @@ void GameplayScene::drawHud(ResourceManager &resources) {
     const float equipSlotH = equipSpanFull * kEquipSlotHeightScale;
     const float equipGap = 6.0F;
     const float equipSlotW = (barW - equipGap * 2.0F) / 3.0F;
-    float rscdRatioHud = 0.0F;
-    float rscdSecHud = 0.0F;
-    if (registry_.valid(player_) && registry_.all_of<ecs::RunicShellCooldown>(player_)) {
-        const auto &cd = registry_.get<ecs::RunicShellCooldown>(player_);
-        rscdRatioHud = cd.total > 0.001F ? cd.remaining / cd.total : 0.0F;
-        rscdSecHud = cd.remaining;
-    }
+    const float rscdRatioHud =
+        registry_.valid(player_) ? runicShellCooldownRatio(registry_, player_) : 0.0F;
+    const float rscdSecHud =
+        registry_.valid(player_) ? runicShellCooldownSecondsRemaining(registry_, player_) : 0.0F;
     static const char *kHudEquipSlotIcons[] = {
         "assets/textures/ui/armor_slot.png",
         "assets/textures/ui/amulet_slot.png",
@@ -2768,35 +2680,16 @@ void GameplayScene::drawHud(ResourceManager &resources) {
     for (int ei = 0; ei < static_cast<int>(EquipSlot::COUNT); ++ei) {
         const float ex = barX + static_cast<float>(ei) * (equipSlotW + equipGap);
         const Rectangle eqR{ex, equipY, equipSlotW, equipSlotH};
-        DrawRectangleRec(eqR, ui::theme::SLOT_FILL);
-        DrawRectangleLinesEx(eqR, 1.5F, ui::theme::SLOT_BORDER);
         const int eidx = inventory_.equipped[static_cast<size_t>(ei)];
         const ItemData *pit =
             (eidx >= 0 && eidx < static_cast<int>(inventory_.items.size()))
                 ? &inventory_.items[static_cast<size_t>(eidx)]
                 : nullptr;
+        ui::SlotWidget::drawSurface(eqR, pit, false);
+        DrawRectangleLinesEx(eqR, 1.5F, ui::theme::SLOT_BORDER);
         if (pit != nullptr) {
-            if (!pit->iconPath.empty()) {
-                const Texture2D tex = resources.getTexture(pit->iconPath);
-                if (tex.id != 0) {
-                    const Rectangle src{0.0F, 0.0F, static_cast<float>(tex.width),
-                                        static_cast<float>(tex.height)};
-                    const float ip = 2.0F;
-                    const float maxW = eqR.width - ip * 2.0F;
-                    const float maxH = eqR.height - ip * 2.0F;
-                    float dw = maxH * 7.0F / 5.0F;
-                    float dh = maxH;
-                    if (dw > maxW) {
-                        dw = maxW;
-                        dh = dw * 5.0F / 7.0F;
-                    }
-                    const float ix = eqR.x + (eqR.width - dw) * 0.5F;
-                    const float iy = eqR.y + (eqR.height - dh) * 0.5F;
-                    const Rectangle dst{ix, iy, dw, dh};
-                    DrawTexturePro(tex, src, dst, {0.0F, 0.0F}, 0.0F, WHITE);
-                }
-            }
-            if (ei == 0 && pit->name == "Runic Shell" &&
+            ui::SlotWidget::drawIcon(*pit, resources, eqR, WHITE);
+            if (ei == 0 && pit->catalogId == "runic_shell" &&
                 (rscdRatioHud > 0.001F || runicShellFinishFlash_ > 0.001F)) {
                 ui::drawCooldownOverlay(
                     eqR,
@@ -2885,15 +2778,20 @@ void GameplayScene::drawHud(ResourceManager &resources) {
         Color ringCol{255, 220, 180, 255};
         Color fillFallback{60, 50, 55, 255};
 
-        if (hud.kind == StatusHudKind::HealOverTime && registry_.all_of<ecs::HealOverTime>(player_)) {
-            const auto &hot = registry_.get<ecs::HealOverTime>(player_);
-            tRem = hot.duration > 0.001F ? std::max(0.0F, 1.0F - hot.elapsed / hot.duration) : 0.0F;
+        if (hud.kind == StatusHudKind::HealOverTime) {
+            if (const ecs::ActiveItemEffectHot *hot = fxFindHot(registry_, player_)) {
+                tRem = hot->duration > 0.001F
+                           ? std::max(0.0F, 1.0F - hot->elapsed / hot->duration)
+                           : 0.0F;
+            }
             ringCol = {255, 200, 120, 255};
             fillFallback = {120, 20, 30, 255};
-        } else if (hud.kind == StatusHudKind::ManicEffect &&
-                   registry_.all_of<ecs::ManicEffect>(player_)) {
-            const auto &me = registry_.get<ecs::ManicEffect>(player_);
-            tRem = me.duration > 0.001F ? std::max(0.0F, 1.0F - me.elapsed / me.duration) : 0.0F;
+        } else if (hud.kind == StatusHudKind::ManicEffect) {
+            if (const ecs::ActiveItemEffectManic *me = fxFindManic(registry_, player_)) {
+                tRem = me->duration > 0.001F
+                           ? std::max(0.0F, 1.0F - me->elapsed / me->duration)
+                           : 0.0F;
+            }
             ringCol = {255, 245, 180, 255};
             fillFallback = {160, 110, 40, 255};
         } else if (hud.kind == StatusHudKind::LeadFever &&
@@ -2902,10 +2800,12 @@ void GameplayScene::drawHud(ResourceManager &resources) {
             tRem = lf.duration > 0.001F ? std::max(0.0F, 1.0F - lf.elapsed / lf.duration) : 0.0F;
             ringCol = {180, 255, 200, 255};
             fillFallback = {30, 80, 50, 255};
-        } else if (hud.kind == StatusHudKind::ManaRegenOverTime &&
-                   registry_.all_of<ecs::ManaRegenOverTime>(player_)) {
-            const auto &mr = registry_.get<ecs::ManaRegenOverTime>(player_);
-            tRem = mr.duration > 0.001F ? std::max(0.0F, 1.0F - mr.elapsed / mr.duration) : 0.0F;
+        } else if (hud.kind == StatusHudKind::ManaRegenOverTime) {
+            if (const ecs::ActiveItemEffectManaRot *mr = fxFindManaRot(registry_, player_)) {
+                tRem = mr->duration > 0.001F
+                           ? std::max(0.0F, 1.0F - mr->elapsed / mr->duration)
+                           : 0.0F;
+            }
             ringCol = {140, 190, 255, 255};
             fillFallback = {25, 45, 90, 255};
         } else if (hud.kind == StatusHudKind::LavaBurn) {
@@ -3023,8 +2923,8 @@ void GameplayScene::drawHud(ResourceManager &resources) {
                         iy = consY + (consH - dh) * 0.5F;
                         const Rectangle dst{ix, iy, dw, dh};
                         DrawTexturePro(tex, src, dst, {0.0F, 0.0F}, 0.0F, WHITE);
-                        if (it.name == "Vial of Cordial Manic" &&
-                            hpRatio < config::MANIC_MIN_HP_FRACTION - 1.0e-4F) {
+                        if (it.catalogId == "vial_cordial_manic" &&
+                            hpRatio < cordialManicMinHpFractionFromItem(it) - 1.0e-4F) {
                             const float m = 4.0F;
                             DrawLineEx({ix + m, iy + m}, {ix + dw - m, iy + dh - m}, 2.5F,
                                        Fade(RED, 210));
@@ -3086,7 +2986,7 @@ void GameplayScene::drawHud(ResourceManager &resources) {
 
             if (resources.settings().showAbilityManaCost) {
                 char mcBuf[16];
-                const float manaMult = inventory_.totalEquippedAbilityManaCostMultiplier();
+                const float manaMult = equipSnapshot_.abilityManaCostMultiplier;
                 const float dispCost =
                     std::max(0.0F, std::floor(ad.manaCost * manaMult + 1.0e-4F));
                 std::snprintf(mcBuf, sizeof(mcBuf), "%.0f", static_cast<double>(dispCost));
@@ -3324,7 +3224,7 @@ void GameplayScene::tickChamberState(float fixedDt, ResourceManager &resources) 
         if (ch.idleTimer >= ch.idleReloadThreshold - 1.0e-4F) {
             ch.shotsRemaining = ch.maxShots;
             ch.idleTimer = 0.0F;
-            const SoundHandle h = resources.getSound("assets/sounds/reload.wav");
+            const SoundHandle h = resources.getSound("assets/sounds/combat/chamber_reload.wav");
             if (h >= 0) {
                 const float p = 1.15F + static_cast<float>(GetRandomValue(0, 16)) / 100.0F;
                 resources.audio().playOneShot(h, p, 1.0F);
@@ -3394,8 +3294,9 @@ void GameplayScene::drawMinimapOverlay(bool fullScreen, ResourceManager &resourc
         maxY = std::max(maxY, y);
     };
     for (const WallData &w : loadedMap_.walls) {
-        expand(w.cx - w.halfW, w.cy - w.halfH);
-        expand(w.cx + w.halfW, w.cy + w.halfH);
+        for (const Vector2 &corner : wallCorners(w)) {
+            expand(corner.x, corner.y);
+        }
     }
     for (const LavaData &lv : loadedMap_.lavas) {
         expand(lv.cx - lv.halfW, lv.cy - lv.halfH);
@@ -3416,9 +3317,9 @@ void GameplayScene::drawMinimapOverlay(bool fullScreen, ResourceManager &resourc
     }
     expand(loadedMap_.playerSpawn.x - 20.0F, loadedMap_.playerSpawn.y - 20.0F);
     expand(loadedMap_.playerSpawn.x + 20.0F, loadedMap_.playerSpawn.y + 20.0F);
-    if (loadedMap_.hasCasket) {
-        expand(loadedMap_.casket.cx - 48.0F, loadedMap_.casket.cy - 48.0F);
-        expand(loadedMap_.casket.cx + 48.0F, loadedMap_.casket.cy + 48.0F);
+    for (const CasketData &ck : loadedMap_.caskets) {
+        expand(ck.cx - 48.0F, ck.cy - 48.0F);
+        expand(ck.cx + 48.0F, ck.cy + 48.0F);
     }
     for (const AnvilData &an : loadedMap_.anvils) {
         expand(an.cx - 28.0F, an.cy - 28.0F);
@@ -3589,6 +3490,17 @@ void GameplayScene::drawMinimapOverlay(bool fullScreen, ResourceManager &resourc
                      static_cast<int>(innerH));
 
     for (const WallData &w : loadedMap_.walls) {
+        if (w.angle != 0.0F) {
+            const std::array<Vector2, 4> corners = wallCorners(w);
+            const Vector2 m0 = toMini(corners[0]);
+            const Vector2 m1 = toMini(corners[1]);
+            const Vector2 m2 = toMini(corners[2]);
+            const Vector2 m3 = toMini(corners[3]);
+            const Color wallCol{70, 62, 55, 220};
+            DrawTriangle(m0, m1, m2, wallCol);
+            DrawTriangle(m0, m2, m3, wallCol);
+            continue;
+        }
         const Vector2 a = toMini({w.cx - w.halfW, w.cy - w.halfH});
         const Vector2 b = toMini({w.cx + w.halfW, w.cy + w.halfH});
         const float rw = std::max(2.0F, std::fabs(b.x - a.x));
@@ -3636,8 +3548,8 @@ void GameplayScene::drawMinimapOverlay(bool fullScreen, ResourceManager &resourc
         DrawCircleV(m, er, {220, 70, 70, 255});
     }
 
-    if (loadedMap_.hasCasket) {
-        const Vector2 m = toMini({loadedMap_.casket.cx, loadedMap_.casket.cy});
+    for (const CasketData &ck : loadedMap_.caskets) {
+        const Vector2 m = toMini({ck.cx, ck.cy});
         const float cr = std::clamp(5.0F * std::sqrt(scale), 3.0F, 7.0F);
         DrawCircleV(m, cr, {160, 120, 80, 255});
     }
@@ -3669,117 +3581,29 @@ void GameplayScene::resetAnvilWorkbench() {
     anvilBenchForgeSlot_ = -1;
     anvilBenchDisOutSlot_ = -1;
     if (anvilBenchDragPoolIdx_ >= 0) {
-        tryReturnPoolItemToBagOrDrop(anvilBenchDragPoolIdx_);
+        (void)returnPoolItem(mutInvCtx(), anvilBenchDragPoolIdx_, inventoryReturnPolicy());
         anvilBenchDragPoolIdx_ = -1;
     }
     clearDisassembleOutputPool();
     for (int i = 0; i < static_cast<int>(forgeSlots_.size()); ++i) {
         const int idx = forgeSlots_[static_cast<size_t>(i)];
-        if (idx < 0) {
-            continue;
-        }
-        const int bag = inventory_.firstEmptyBagSlot();
-        if (bag >= 0) {
-            inventory_.bagSlots[static_cast<size_t>(bag)] = idx;
-        } else {
-            spawnItemPickupAtPlayer(idx);
+        if (idx >= 0) {
+            (void)returnPoolItem(mutInvCtx(), idx, inventoryReturnPolicy());
         }
         forgeSlots_[static_cast<size_t>(i)] = -1;
     }
     if (disassembleInputIndex_ >= 0 &&
         disassembleInputIndex_ < static_cast<int>(inventory_.items.size())) {
-        const int idx = disassembleInputIndex_;
-        const int bag = inventory_.firstEmptyBagSlot();
-        if (bag >= 0) {
-            inventory_.bagSlots[static_cast<size_t>(bag)] = idx;
-        } else {
-            spawnItemPickupAtPlayer(idx);
-        }
+        (void)returnPoolItem(mutInvCtx(), disassembleInputIndex_, inventoryReturnPolicy());
     }
     disassembleInputIndex_ = -1;
-}
-
-bool GameplayScene::tryReturnPoolItemToBagOrDrop(int poolIdx) {
-    if (poolIdx < 0 || poolIdx >= static_cast<int>(inventory_.items.size())) {
-        return false;
-    }
-    const bool bagPriority = bagPriorityShiftIntoInventory_;
-    auto &it = inventory_.items[static_cast<size_t>(poolIdx)];
-
-    // First, try to consolidate stackable items into compatible existing stacks.
-    if (it.isStackable && it.stackCount > 0) {
-        auto pourIntoPool = [&](int dstPoolIdx) {
-            if (dstPoolIdx < 0 || dstPoolIdx >= static_cast<int>(inventory_.items.size()) ||
-                dstPoolIdx == poolIdx) {
-                return;
-            }
-            auto &src = inventory_.items[static_cast<size_t>(poolIdx)];
-            auto &dst = inventory_.items[static_cast<size_t>(dstPoolIdx)];
-            if (!src.canStackWith(dst)) {
-                return;
-            }
-            const int space = dst.maxStack - dst.stackCount;
-            if (space <= 0 || src.stackCount <= 0) {
-                return;
-            }
-            const int move = std::min(space, src.stackCount);
-            dst.stackCount += move;
-            src.stackCount -= move;
-        };
-
-        auto tryPourArray = [&](const auto &slots) {
-            for (int slotPoolIdx : slots) {
-                if (inventory_.items[static_cast<size_t>(poolIdx)].stackCount <= 0) {
-                    break;
-                }
-                pourIntoPool(slotPoolIdx);
-            }
-        };
-
-        if (bagPriority) {
-            tryPourArray(inventory_.bagSlots);
-            tryPourArray(inventory_.consumableSlots);
-        } else {
-            tryPourArray(inventory_.consumableSlots);
-            tryPourArray(inventory_.bagSlots);
-        }
-
-        if (inventory_.items[static_cast<size_t>(poolIdx)].stackCount <= 0) {
-            removeInventoryItemAndRewrite(poolIdx);
-            return true;
-        }
-    }
-
-    if (!bagPriority) {
-        if (it.isConsumable) {
-            const int c = inventory_.firstEmptyConsumableSlot();
-            if (c >= 0) {
-                inventory_.consumableSlots[static_cast<size_t>(c)] = poolIdx;
-                return true;
-            }
-        } else {
-            const int eq = static_cast<int>(it.slot);
-            if (eq >= 0 && eq < static_cast<int>(inventory_.equipped.size()) &&
-                inventory_.equipped[static_cast<size_t>(eq)] < 0) {
-                inventory_.equipped[static_cast<size_t>(eq)] = poolIdx;
-                return true;
-            }
-        }
-    }
-    const int bag = inventory_.firstEmptyBagSlot();
-    if (bag >= 0) {
-        inventory_.bagSlots[static_cast<size_t>(bag)] = poolIdx;
-        return true;
-    }
-    spawnItemPickupAtPlayer(poolIdx);
-    return true;
 }
 
 void GameplayScene::clearDisassembleOutputPool() {
     for (int i = 0; i < disassembleOutputCount_; ++i) {
         const int idx = disassembleOutputPool_[static_cast<size_t>(i)];
         if (idx >= 0) {
-            tryReturnPoolItemToBagOrDrop(idx);
+            (void)returnPoolItem(mutInvCtx(), idx, inventoryReturnPolicy());
         }
         disassembleOutputPool_[static_cast<size_t>(i)] = -1;
     }
@@ -3795,7 +3619,7 @@ void GameplayScene::applyAnvilForgeSlotPlace(int slot, int poolIdx) {
     }
     const int prev = forgeSlots_[static_cast<size_t>(slot)];
     if (prev >= 0 && prev != poolIdx) {
-        tryReturnPoolItemToBagOrDrop(prev);
+        (void)returnPoolItem(mutInvCtx(), prev, inventoryReturnPolicy());
     }
     forgeSlots_[static_cast<size_t>(slot)] = poolIdx;
 }
@@ -3806,7 +3630,7 @@ void GameplayScene::handleInventoryAnvilAction(const ui::InventoryAction &action
     } else if (action.type == ui::InventoryAction::AnvilDisassembleInputPlace) {
         if (disassembleInputIndex_ >= 0 &&
             disassembleInputIndex_ < static_cast<int>(inventory_.items.size())) {
-            tryReturnPoolItemToBagOrDrop(disassembleInputIndex_);
+            (void)returnPoolItem(mutInvCtx(), disassembleInputIndex_, inventoryReturnPolicy());
         }
         disassembleInputIndex_ = action.itemIndex;
         clearDisassembleOutputPool();
@@ -3814,37 +3638,22 @@ void GameplayScene::handleInventoryAnvilAction(const ui::InventoryAction &action
 }
 
 void GameplayScene::commitDisassembleRecipe() {
-    const auto &drecipes = disassembleRecipes();
-    if (drecipes.empty() || disassembleInputIndex_ < 0 ||
+    if (disassembleInputIndex_ < 0 ||
         disassembleInputIndex_ >= static_cast<int>(inventory_.items.size())) {
         return;
     }
-    if (inventory_.items[static_cast<size_t>(disassembleInputIndex_)].catalogId != drecipes[0].sourceId) {
+    const auto match = tryMatchDisassembleInput(disassembleInputIndex_, inventory_,
+                                                disassembleRecipes(), {});
+    if (!match.has_value()) {
         return;
     }
-    clearDisassembleOutputPool();
-    const int stack =
-        inventory_.items[static_cast<size_t>(disassembleInputIndex_)].stackCount;
-    const int inPool = disassembleInputIndex_;
-    disassembleInputIndex_ = -1;
-    removeInventoryItemAndRewrite(inPool);
-    disassembleOutputCount_ = 0;
-    for (const CraftIngredient &outg : drecipes[0].outputs) {
-        for (int k = 0; k < outg.count * stack; ++k) {
-            ItemData piece = makeItemFromMapKind(outg.itemId);
-            if (piece.name.empty()) {
-                continue;
-            }
-            piece.stackCount = 1;
-            const int ni = inventory_.addItem(std::move(piece));
-            if (disassembleOutputCount_ < static_cast<int>(disassembleOutputPool_.size())) {
-                disassembleOutputPool_[static_cast<size_t>(disassembleOutputCount_)] = ni;
-                ++disassembleOutputCount_;
-            } else {
-                spawnItemPickupAtPlayer(ni);
-            }
-        }
+    CraftingContext craftCtx{};
+    if (registry_.valid(player_) && registry_.all_of<ecs::PlayerLevel>(player_)) {
+        craftCtx.playerLevel = &registry_.get<ecs::PlayerLevel>(player_).level;
     }
+    TransformPlan plan{};
+    plan.match = *match;
+    (void)executeTransform(mutInvCtx(), plan, inventoryPlacePolicy(), craftCtx);
 }
 
 ui::AnvilUiLayout GameplayScene::buildAnvilUiLayout() const {
@@ -3872,19 +3681,22 @@ ui::AnvilUiLayout GameplayScene::buildAnvilUiLayout() const {
     const float contentY = tabY + tabH + 16.0F;
     if (L.forgeTab) {
         const auto &recipes = forgeRecipes();
-        if (!recipes.empty()) {
-            const size_t nIn = recipes[0].inputs.size();
-            L.forgeInputCount = static_cast<int>(std::min<size_t>(nIn, 3));
-            const float slotW = ui::ITEM_SLOT_W;
-            const float slotH = ui::ITEM_SLOT_H;
-            const float gap = 10.0F;
-            const float rowW =
-                static_cast<float>(L.forgeInputCount) * slotW + static_cast<float>(L.forgeInputCount - 1) * gap;
-            float x = panelX + (panelW - rowW) * 0.5F;
-            for (int i = 0; i < L.forgeInputCount; ++i) {
-                L.forgeInputRects[static_cast<size_t>(i)] = {x, contentY, slotW, slotH};
-                x += slotW + gap;
-            }
+        size_t maxIn = 0U;
+        for (const Recipe &fr : recipes) {
+            maxIn = std::max(maxIn, fr.inputs.size());
+        }
+        L.forgeInputCount =
+            static_cast<int>(std::clamp(maxIn, static_cast<size_t>(1), L.forgeInputRects.size()));
+        const float slotW = ui::ITEM_SLOT_W;
+        const float slotH = ui::ITEM_SLOT_H;
+        const float gap = 10.0F;
+        const float rowW =
+            static_cast<float>(L.forgeInputCount) * slotW +
+            static_cast<float>(std::max(0, L.forgeInputCount - 1)) * gap;
+        float x = panelX + (panelW - rowW) * 0.5F;
+        for (int i = 0; i < L.forgeInputCount; ++i) {
+            L.forgeInputRects[static_cast<size_t>(i)] = {x, contentY, slotW, slotH};
+            x += slotW + gap;
         }
         L.forgeCraftRect = {panelX + panelW * 0.5F - 36.0F, contentY + ui::ITEM_SLOT_H + 14.0F, 72.0F, 72.0F};
         L.forgeOutputRect = {panelX + panelW * 0.5F - ui::ITEM_SLOT_W * 0.5F, L.forgeCraftRect.y + 86.0F,
@@ -3896,8 +3708,15 @@ ui::AnvilUiLayout GameplayScene::buildAnvilUiLayout() const {
         const float outY = L.disBreakRect.y + L.disBreakRect.height + 16.0F;
         const float outSlotW = ui::ITEM_SLOT_W;
         const float outGap = 10.0F;
-        L.disOutputCount = 3;
-        float ox = panelX + (panelW - (outSlotW * 3.0F + outGap * 2.0F)) * 0.5F;
+        size_t maxOut = 0U;
+        for (const Recipe &dr : disassembleRecipes()) {
+            maxOut = std::max(maxOut, dr.outputs.size());
+        }
+        L.disOutputCount =
+            static_cast<int>(std::clamp(maxOut, static_cast<size_t>(1), L.disOutputRects.size()));
+        const float outRowW = static_cast<float>(L.disOutputCount) * outSlotW +
+                              static_cast<float>(std::max(0, L.disOutputCount - 1)) * outGap;
+        float ox = panelX + (panelW - outRowW) * 0.5F;
         for (int i = 0; i < L.disOutputCount; ++i) {
             L.disOutputRects[static_cast<size_t>(i)] = {ox, outY, outSlotW, ui::ITEM_SLOT_H};
             ox += outSlotW + outGap;
@@ -3906,57 +3725,16 @@ ui::AnvilUiLayout GameplayScene::buildAnvilUiLayout() const {
     return L;
 }
 
-namespace {
-
-[[nodiscard]] bool forgeSlotsMatchRecipe(const std::array<int, 6> &forgeSlots,
-                                         const ForgeRecipe &recipe, const InventoryState &inv) {
-    const size_t n = recipe.inputs.size();
-    if (n == 0U || n > forgeSlots.size()) {
-        return false;
-    }
-
-    std::array<bool, 6> usedSlot{};
-    size_t filledSlotCount = 0U;
-    for (size_t i = 0; i < forgeSlots.size(); ++i) {
-        if (forgeSlots[i] >= 0) {
-            ++filledSlotCount;
+[[nodiscard]] static std::vector<int> forgeSlotsToBenchPoolIndices(const std::array<int, 6> &slots) {
+    std::vector<int> v;
+    v.reserve(slots.size());
+    for (const int s : slots) {
+        if (s >= 0) {
+            v.push_back(s);
         }
     }
-    if (filledSlotCount != n) {
-        return false;
-    }
-
-    // Order-agnostic recipe matching: each ingredient must match exactly one distinct
-    // occupied forge slot (same catalogId and required stack count), regardless of slot index.
-    for (size_t ing = 0; ing < n; ++ing) {
-        bool matched = false;
-        for (size_t slot = 0; slot < forgeSlots.size(); ++slot) {
-            if (usedSlot[slot]) {
-                continue;
-            }
-            const int idx = forgeSlots[slot];
-            if (idx < 0 || idx >= static_cast<int>(inv.items.size())) {
-                continue;
-            }
-            const auto &it = inv.items[static_cast<size_t>(idx)];
-            if (it.catalogId != recipe.inputs[ing].itemId) {
-                continue;
-            }
-            if (it.stackCount != recipe.inputs[ing].count) {
-                continue;
-            }
-            usedSlot[slot] = true;
-            matched = true;
-            break;
-        }
-        if (!matched) {
-            return false;
-        }
-    }
-    return true;
+    return v;
 }
-
-} // namespace
 
 void GameplayScene::tickAnvilUi(InputManager &input, ResourceManager &resources,
                                 const ui::AnvilUiLayout &lay) {
@@ -3991,18 +3769,18 @@ void GameplayScene::tickAnvilUi(InputManager &input, ResourceManager &resources,
     auto returnAllWorkbenchItems = [&]() {
         for (int &slot : forgeSlots_) {
             if (slot >= 0) {
-                tryReturnPoolItemToBagOrDrop(slot);
+                (void)returnPoolItem(mutInvCtx(), slot, inventoryReturnPolicy());
                 slot = -1;
             }
         }
         if (disassembleInputIndex_ >= 0) {
-            tryReturnPoolItemToBagOrDrop(disassembleInputIndex_);
+            (void)returnPoolItem(mutInvCtx(), disassembleInputIndex_, inventoryReturnPolicy());
             disassembleInputIndex_ = -1;
         }
         for (int i = 0; i < disassembleOutputCount_; ++i) {
             int &slot = disassembleOutputPool_[static_cast<size_t>(i)];
             if (slot >= 0) {
-                tryReturnPoolItemToBagOrDrop(slot);
+                (void)returnPoolItem(mutInvCtx(), slot, inventoryReturnPolicy());
                 slot = -1;
             }
         }
@@ -4010,35 +3788,19 @@ void GameplayScene::tickAnvilUi(InputManager &input, ResourceManager &resources,
     };
 
     auto tryForgeCraft = [&]() {
-        const auto &recipes = forgeRecipes();
-        const bool canCraft = !recipes.empty() && forgeSlotsMatchRecipe(forgeSlots_, recipes[0], inventory_);
-        if (!canCraft) {
+        const std::vector<int> bench = forgeSlotsToBenchPoolIndices(forgeSlots_);
+        const auto match =
+            tryMatchForgeBench(bench, inventory_, forgeRecipes(), {});
+        if (!match.has_value()) {
             return;
         }
-        ItemData out = makeItemFromMapKind(recipes[0].outputId);
-        if (out.name.empty()) {
-            return;
+        CraftingContext craftCtx{};
+        if (registry_.valid(player_) && registry_.all_of<ecs::PlayerLevel>(player_)) {
+            craftCtx.playerLevel = &registry_.get<ecs::PlayerLevel>(player_).level;
         }
-        const size_t nIn = recipes[0].inputs.size();
-        std::vector<int> removeIdx;
-        removeIdx.reserve(nIn);
-        for (size_t k = 0; k < nIn; ++k) {
-            removeIdx.push_back(forgeSlots_[static_cast<size_t>(k)]);
-        }
-        forgeSlots_.fill(-1);
-        std::sort(removeIdx.begin(), removeIdx.end());
-        for (auto it = removeIdx.rbegin(); it != removeIdx.rend(); ++it) {
-            if (*it >= 0 && *it < static_cast<int>(inventory_.items.size())) {
-                removeInventoryItemAndRewrite(*it);
-            }
-        }
-        const int newIdx = inventory_.addItem(std::move(out));
-        const int bag = inventory_.firstEmptyBagSlot();
-        if (bag >= 0) {
-            inventory_.bagSlots[static_cast<size_t>(bag)] = newIdx;
-        } else {
-            spawnItemPickupAtPlayer(newIdx);
-        }
+        TransformPlan plan{};
+        plan.match = *match;
+        (void)executeTransform(mutInvCtx(), plan, inventoryPlacePolicy(), craftCtx);
     };
 
     if (click && lay.active) {
@@ -4069,7 +3831,7 @@ void GameplayScene::tickAnvilUi(InputManager &input, ResourceManager &resources,
                 continue;
             }
             forgeSlots_[static_cast<size_t>(i)] = -1;
-            tryReturnPoolItemToBagOrDrop(idx);
+            (void)returnPoolItem(mutInvCtx(), idx, inventoryReturnPolicy());
             break;
         }
     }
@@ -4135,8 +3897,9 @@ void GameplayScene::tickAnvilUi(InputManager &input, ResourceManager &resources,
                 startedBenchDrag = true;
                 break;
             }
-            const auto &recipes = forgeRecipes();
-            const bool canCraft = !recipes.empty() && forgeSlotsMatchRecipe(forgeSlots_, recipes[0], inventory_);
+            const std::vector<int> benchIdx = forgeSlotsToBenchPoolIndices(forgeSlots_);
+            const bool canCraft =
+                tryMatchForgeBench(benchIdx, inventory_, forgeRecipes(), {}).has_value();
             const bool craftPressed = CheckCollisionPointRec(mouse, lay.forgeCraftRect);
             if (!startedBenchDrag && canCraft && craftPressed) {
                 tryForgeCraft();
@@ -4147,7 +3910,7 @@ void GameplayScene::tickAnvilUi(InputManager &input, ResourceManager &resources,
                 disassembleInputIndex_ < static_cast<int>(inventory_.items.size())) {
                 const int idx = disassembleInputIndex_;
                 disassembleInputIndex_ = -1;
-                tryReturnPoolItemToBagOrDrop(idx);
+                (void)returnPoolItem(mutInvCtx(), idx, inventoryReturnPolicy());
             }
             if (CheckCollisionPointRec(mouse, lay.disBreakRect)) {
                 commitDisassembleRecipe();
@@ -4221,8 +3984,9 @@ void GameplayScene::drawAnvilUi(ResourceManager &resources, const ui::AnvilUiLay
                RAYWHITE);
 
     if (lay.forgeTab) {
-        const auto &recipes = forgeRecipes();
-        const bool canCraft = !recipes.empty() && forgeSlotsMatchRecipe(forgeSlots_, recipes[0], inventory_);
+        const std::vector<int> benchIdx = forgeSlotsToBenchPoolIndices(forgeSlots_);
+        const auto forgeMatch = tryMatchForgeBench(benchIdx, inventory_, forgeRecipes(), {});
+        const bool canCraft = forgeMatch.has_value();
         for (int i = 0; i < lay.forgeInputCount; ++i) {
             const Rectangle r = lay.forgeInputRects[static_cast<size_t>(i)];
             const int idx = forgeSlots_[static_cast<size_t>(i)];
@@ -4230,14 +3994,14 @@ void GameplayScene::drawAnvilUi(ResourceManager &resources, const ui::AnvilUiLay
                 (idx >= 0 && idx < static_cast<int>(inventory_.items.size()))
                     ? &inventory_.items[static_cast<size_t>(idx)]
                     : nullptr;
-            ui::InventoryUI::drawItemSlotSurface(r, pit, false);
+            ui::SlotWidget::drawSurface(r, pit, false);
             DrawRectangleLinesEx(r, 1.5F, ui::theme::SLOT_BORDER);
             if (idx >= 0 && idx < static_cast<int>(inventory_.items.size())) {
                 const bool ghost =
                     anvilBenchDragKind_ == AnvilBenchDragKind::ForgeSlot && anvilBenchForgeSlot_ == i;
                 const Color iconTint = ghost ? Fade(WHITE, 0.35F) : WHITE;
-                ui::InventoryUI::drawItemIcon(inventory_.items[static_cast<size_t>(idx)], resources, r,
-                                                iconTint);
+                ui::SlotWidget::drawIcon(inventory_.items[static_cast<size_t>(idx)], resources, r,
+                                          iconTint);
                 drawStackCount(inventory_.items[static_cast<size_t>(idx)], r, iconTint);
             }
         }
@@ -4258,11 +4022,12 @@ void GameplayScene::drawAnvilUi(ResourceManager &resources, const ui::AnvilUiLay
         DrawTextEx(font, "[Space]", {lay.forgeCraftRect.x + 8.0F, lay.forgeCraftRect.y + lay.forgeCraftRect.height + 2.0F},
                    14.0F, 1.0F, ui::theme::MUTED_TEXT);
 
-        ui::InventoryUI::drawItemSlotSurface(lay.forgeOutputRect, nullptr, false);
+        ui::SlotWidget::drawSurface(lay.forgeOutputRect, nullptr, false);
         DrawRectangleLinesEx(lay.forgeOutputRect, 2.0F, ui::theme::BTN_BORDER);
-        if (canCraft) {
-            const ItemData pv = makeItemFromMapKind(recipes[0].outputId);
-            ui::InventoryUI::drawItemIcon(pv, resources, lay.forgeOutputRect, WHITE);
+        if (canCraft && forgeMatch.has_value() && !forgeMatch->recipe->outputs.empty()) {
+            const ItemData pv =
+                makeItemFromMapKind(forgeMatch->recipe->outputs[0].itemId);
+            ui::SlotWidget::drawIcon(pv, resources, lay.forgeOutputRect, WHITE);
         } else {
             DrawTextEx(font, "Match recipe in inputs", {panelX + 16.0F, lay.forgeOutputRect.y + lay.forgeOutputRect.height + 6.0F},
                        14.0F, 1.0F, ui::theme::MUTED_TEXT);
@@ -4273,7 +4038,7 @@ void GameplayScene::drawAnvilUi(ResourceManager &resources, const ui::AnvilUiLay
             const auto &it = inventory_.items[static_cast<size_t>(disassembleInputIndex_)];
             const auto &drecipes = disassembleRecipes();
             for (const auto &dr : drecipes) {
-                if (it.catalogId == dr.sourceId) {
+                if (!dr.inputs.empty() && it.catalogId == dr.inputs[0].itemId) {
                     canBreak = true;
                     break;
                 }
@@ -4283,11 +4048,11 @@ void GameplayScene::drawAnvilUi(ResourceManager &resources, const ui::AnvilUiLay
             (disassembleInputIndex_ >= 0 && disassembleInputIndex_ < static_cast<int>(inventory_.items.size()))
                 ? &inventory_.items[static_cast<size_t>(disassembleInputIndex_)]
                 : nullptr;
-        ui::InventoryUI::drawItemSlotSurface(lay.disInputRect, pit, false);
+        ui::SlotWidget::drawSurface(lay.disInputRect, pit, false);
         DrawRectangleLinesEx(lay.disInputRect, 1.5F, ui::theme::SLOT_BORDER);
         if (disassembleInputIndex_ >= 0 &&
             disassembleInputIndex_ < static_cast<int>(inventory_.items.size())) {
-            ui::InventoryUI::drawItemIcon(
+            ui::SlotWidget::drawIcon(
                 inventory_.items[static_cast<size_t>(disassembleInputIndex_)], resources,
                 lay.disInputRect, WHITE);
             drawStackCount(inventory_.items[static_cast<size_t>(disassembleInputIndex_)],
@@ -4314,14 +4079,14 @@ void GameplayScene::drawAnvilUi(ResourceManager &resources, const ui::AnvilUiLay
                 (pidx >= 0 && pidx < static_cast<int>(inventory_.items.size()))
                     ? &inventory_.items[static_cast<size_t>(pidx)]
                     : nullptr;
-            ui::InventoryUI::drawItemSlotSurface(r, pout, false);
+            ui::SlotWidget::drawSurface(r, pout, false);
             DrawRectangleLinesEx(r, 1.5F, ui::theme::SLOT_BORDER);
             if (pidx >= 0 && pidx < static_cast<int>(inventory_.items.size())) {
                 const bool ghost = anvilBenchDragKind_ == AnvilBenchDragKind::DisOut &&
                                    anvilBenchDisOutSlot_ == i;
                 const Color iconTint = ghost ? Fade(WHITE, 0.35F) : WHITE;
-                ui::InventoryUI::drawItemIcon(inventory_.items[static_cast<size_t>(pidx)], resources, r,
-                                                iconTint);
+                ui::SlotWidget::drawIcon(inventory_.items[static_cast<size_t>(pidx)], resources, r,
+                                         iconTint);
                 drawStackCount(inventory_.items[static_cast<size_t>(pidx)], r, iconTint);
             }
         }
@@ -4331,7 +4096,7 @@ void GameplayScene::drawAnvilUi(ResourceManager &resources, const ui::AnvilUiLay
         anvilBenchDragPoolIdx_ < static_cast<int>(inventory_.items.size())) {
         const Vector2 m = GetMousePosition();
         const Rectangle ghost{m.x - 36.0F, m.y - 36.0F, 72.0F, 72.0F};
-        ui::InventoryUI::drawItemIcon(inventory_.items[static_cast<size_t>(anvilBenchDragPoolIdx_)],
+        ui::SlotWidget::drawIcon(inventory_.items[static_cast<size_t>(anvilBenchDragPoolIdx_)],
                                       resources, ghost, Fade(WHITE, 0.9F));
     }
 }
@@ -4350,7 +4115,7 @@ void GameplayScene::drawPauseOverlay(ResourceManager &resources) {
     const Vector2 mouse = GetMousePosition();
     resumeButton_.draw(font, 24.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER, RAYWHITE,
                        ui::theme::BTN_BORDER);
-    archivePauseButton_.draw(font, 24.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER,
+    codexPauseButton_.draw(font, 24.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER,
                              RAYWHITE, ui::theme::BTN_BORDER);
     settingsPauseButton_.draw(font, 24.0F, mouse, ui::theme::BTN_FILL, ui::theme::BTN_HOVER,
                               RAYWHITE, ui::theme::BTN_BORDER);

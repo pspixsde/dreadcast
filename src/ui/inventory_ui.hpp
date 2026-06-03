@@ -1,11 +1,11 @@
 #pragma once
 
 #include <array>
-#include <functional>
 
 #include <raylib.h>
 
 #include "core/input.hpp"
+#include "game/item_transaction.hpp"
 #include "game/items.hpp"
 
 namespace dreadcast {
@@ -65,12 +65,6 @@ struct InventoryAction {
 /// Tab-toggle inventory: equipment, consumables, carried grid; drag-and-drop and context menu.
 class InventoryUI {
   public:
-    /// Invoked instead of `InventoryState::removeItemAtIndex` so the host can also rewrite
-    /// out-of-band index references (ground pickups, anvil workbench slots) after the
-    /// swap-with-last that `removeItemAtIndex` performs.
-    using RemoveItemCallback = std::function<void(int)>;
-    void setRemoveItemCallback(RemoveItemCallback cb) { removeItemCb_ = std::move(cb); }
-
     void toggle() {
         open_ = !open_;
         if (open_) {
@@ -106,7 +100,10 @@ class InventoryUI {
         }
     }
 
-    InventoryAction update(InputManager &input, InventoryState &inv, bool separateDropsWhenFull,
+    /// After `InventoryState::removeItemAtIndex` swap-with-last, keep UI drag/context indices valid.
+    void notifyPoolIndexRewritten(int removedIdx, int oldLastIdx);
+
+    InventoryAction update(InputManager &input, InvCtx &invCtx, bool separateDropsWhenFull,
                            const AnvilUiLayout *anvilLayout = nullptr);
 
     /// `playerHpRatio` = current/max for Cordial Manic unusable overlay (red X when &lt; 40%).
@@ -157,14 +154,12 @@ class InventoryUI {
 
     static constexpr const char *kSlotLabels[] = {"Armor", "Amulet", "Ring"};
 
-    void tryEquipFromBag(InventoryState &inv, int bagIndex);
-    void tryEquipConsumableFromBag(InventoryState &inv, int bagIndex);
-    void tryUnequipConsumableToBag(InventoryState &inv, int consumableSlotIndex);
-    void tryUnequip(InventoryState &inv, EquipSlot slot);
-    void moveEquippedToBagSlot(InventoryState &inv, EquipSlot slot, int bagIdx);
-    void swapBagSlots(InventoryState &inv, int a, int b);
-    /// Routes through `removeItemCb_` if set so the host can rewrite ground / workbench indices.
-    void removeItemFromPool(InventoryState &inv, int itemIdx);
+    void tryEquipFromBag(InvCtx &ctx, int bagIndex);
+    void tryEquipConsumableFromBag(InvCtx &ctx, int bagIndex);
+    void tryUnequipConsumableToBag(InvCtx &ctx, int consumableSlotIndex);
+    void tryUnequip(InvCtx &ctx, EquipSlot slot);
+    void moveEquippedToBagSlot(InvCtx &ctx, EquipSlot slot, int bagIdx);
+    void swapBagSlots(InvCtx &ctx, int a, int b);
 
     bool dragging_{false};
     int dragItemIndex_{-1};
@@ -190,7 +185,6 @@ class InventoryUI {
 
     float panelLayoutShiftX_{0.0F};
 
-    RemoveItemCallback removeItemCb_{};
 };
 
 } // namespace dreadcast::ui

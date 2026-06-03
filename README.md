@@ -12,7 +12,7 @@ Isometric 2D action RPG built with **Raylib**, **EnTT** (ECS), **nlohmann/json**
 - **Skill tree:** **K** opens/closes the panel (or click the left-edge bag shortcut stack). Spend a point by **holding E** on an eligible (non-core, adjacent) node. **Esc** also closes the tree.
 - **Full map overlay:** **M** toggles; **Esc** closes while the map is open (inventory must be closed). You can also open it from the left-edge shortcut column.
 - **Fog of war:** Wall-aware visibility around the player; soft screen-space edge on the darkness overlay (falls back to a ring if GPU mask/shader init fails). **F3** in gameplay toggles an optional fog debug panel (RT previews + stats).
-- **Enemy AI:** Proximity agitation, calm-down, line of sight, knockback and stun states; imp and hellhound types.
+- **Enemy AI:** Proximity agitation, calm-down, line of sight, knockback and stun states. Types: **Imp** (ranged kiter), **Hellhound** (melee chaser), **Warden** (mid-range bruiser with a telegraphed line slam + shockwave), and **Dreg** (fast melee swarmer) released by stationary **Node** spawners. Tuning is data-driven in **`assets/data/enemies.json`**.
 - **RPG items:** Equippable armor (e.g. Iron Armor, Barbed Tunic, Runic Shell), stackable vials (Pure Blood HOT, Cordial Manic), rarity tiers, passive regen from class + gear.
 - **Crafting station:** **Anvils** on the map (**F** when in range with **Tab** inventory) open a forge / disassemble workbench (panel shifts when active). Forge recipes match by required ingredients/counts regardless of input-slot order.
 - **Inventory:** Tabbed bag, equip slots, consumable bar (**C** / **V**), drag-and-drop, Shift+click equip/unequip, tooltips; **Alt** extends tooltip detail on world drops.
@@ -24,7 +24,7 @@ Typical layout on the shipped map:
 
 - Safe start → imp arena → **anvil** workshop spot → **Old Casket** alcove.
 
-**Old Casket** loot comes from the **`CASKET`** line in the map file (on **`default.map`**, several vials). Iron armor, tunics, rings, and other gear are separate **`ITEM`** placements unless you author the map otherwise. Additional kinds and spawns are supported via the editor and **`ITEM`** / **`CASKET`** lines in **`.map`** files.
+**Caskets** come in three tiers — **Old**, **Sealed**, and **Wrought** — chosen per `CASKET` line (`CASKET cx cy <tier>`). Contents are **rolled fresh each session**: the tier sets how many items drop (1–3) and the rarity odds, with Sealed guaranteeing at least one Blighted-or-better item and Wrought at least one Cursed/Lucid-or-better. **Special**-rarity items never appear in caskets. Iron armor, tunics, rings, and other fixed gear are separate **`ITEM`** placements.
 
 ## Controls
 
@@ -58,7 +58,7 @@ Tabs: **Gameplay**, **Controls**, **Video**, **Audio**, **Credits**. Changes tha
 
 ## Editor mode
 
-From the project root, run the game with **`--editor`** to open the map editor: walls, lava, solids, player spawn, enemies, items, anvils, casket placement, multi-map **Prev / Next**, save/load, selection copy-paste, and camera pan.
+From the project root, run the game with **`--editor`** to open the map editor: walls, lava, solids, player spawn, enemies (imp/hellhound/warden/dreg), Dreg-spawning nodes, items, anvils, casket placement (with a **tier** picker), multi-map **Prev / Next**, save/load, selection copy-paste, and camera pan.
 
 ## Build & run
 
@@ -80,7 +80,7 @@ The build copies **`assets/`** next to the executable so fonts, maps, data JSON,
 
 Shipped under **`assets/`** (copied on build), including:
 
-- **`assets/data/*.json`** — characters, abilities, items
+- **`assets/data/*.json`** — characters, abilities, items, enemies, recipes
 - **`assets/fonts/Cinzel.ttf`** — UI font
 - **`assets/maps/*.map`** — level data
 - **`assets/textures/`** — items, enemies, UI slot art

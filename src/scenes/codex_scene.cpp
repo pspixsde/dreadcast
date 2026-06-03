@@ -1,4 +1,4 @@
-#include "scenes/archive_scene.hpp"
+#include "scenes/codex_scene.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -16,6 +16,7 @@
 #include "game/items.hpp"
 #include "scenes/scene_manager.hpp"
 #include "ui/inventory_ui.hpp"
+#include "ui/slot_widget.hpp"
 #include "ui/skill_tree_ui.hpp"
 #include "ui/theme.hpp"
 
@@ -23,7 +24,7 @@ namespace dreadcast {
 
 namespace {
 
-struct EnemyArchiveEntry {
+struct EnemyCodexEntry {
     const char *name{};
     const char *summary{};
     const char *statsLine{};
@@ -31,19 +32,53 @@ struct EnemyArchiveEntry {
     const char *lore{};
 };
 
-[[nodiscard]] const std::array<EnemyArchiveEntry, 2> &enemyArchiveEntries() {
-    static const std::array<EnemyArchiveEntry, 2> k{{
+[[nodiscard]] const std::array<EnemyCodexEntry, 5> &enemyCodexEntries() {
+    static const std::array<EnemyCodexEntry, 5> k{{
         {"Imp",
-         "Kiting ranged nuisance of the Pit.",
-         "HP 50  |  Curse bolt ~15 dmg  |  Shoot cd 2.0s  |  Preferred range 220",
-         "Cowardly imp that keeps distance, strafes, and peppers you with curse bolts when "
-         "agitated.",
+         "Ranged kiter that pelts you with curse bolts.",
+         "HP 50  |  Ranged  |  Curse bolt 15 dmg  |  Proj 400 u/s  |  Shoot cd 2.0s  |  "
+         "Move ~100-145 u/s  |  XP 25",
+         "Cowardly dweller of the Pit. Holds its preferred range (~220 units), strafes, and fires "
+         "curse bolts on a 2.0s cadence when agitated; panics and kites away if you close inside "
+         "~80 units. No melee and no special abilities.",
          "Dwellers associated with the Pit's cruelty and mockery; specifics TBD."},
         {"Hellhound",
          "Fast melee bruiser that closes the gap.",
-         "HP 60  |  Melee 15 dmg  |  Chase 210 u/s  |  Melee range 44",
-         "Once agitated, chases the player down and tears at them in melee.",
+         "HP 60  |  Melee  |  15 dmg  |  Range 44  |  Attack cd 1.0s  |  Move 210 u/s  |  XP 30",
+         "Once agitated, sprints straight at the player and bites in melee every 1.0s. No ranged "
+         "attack and no special abilities.",
          "To expand: origin, how they relate to cursed beasts or the Pit."},
+        {"Warden",
+         "Mid-range sentinel: telegraphed line slam + close-range shockwave.",
+         "HP 120  |  Melee line slam 35 dmg  |  Reach 245  |  Attack cd 2.6s  |  Move 210 u/s  |  "
+         "XP 50",
+         "Holds mid-range (~170 units), neither closing to melee nor fleeing. Its basic attack is a "
+         "heavy slam along a thick line in front of it: the strike zone is highlighted for ~0.85s "
+         "before the blow lands for 35 damage, and its attack speed is slow (2.6s between slams). "
+         "Special ability (10s cooldown): if you stay within ~95 units for 2 seconds it unleashes a "
+         "shockwave that knocks you away and slows your movement by 20% for 3s. Moves as fast as a "
+         "Hellhound.",
+         "Heavy sentinels said to guard the cursed reaches; specifics TBD."},
+        {"Dreg",
+         "Frail, fast melee swarmer that mobs and surrounds you.",
+         "HP 10  |  Melee  |  6 dmg  |  Range 30  |  Attack cd 0.6s  |  Move 235 u/s  |  XP 0",
+         "Individually fragile but dangerous in numbers. Dregs sprint straight at the player, press "
+         "in as close as possible, and naturally surround you when many converge. They drop no XP. "
+         "Dregs poured out of a Node carry a brief 50% movement-speed burst (2s) and lock onto you "
+         "permanently — but once they leave the Node they are fully independent and ignore its "
+         "trigger and active areas.",
+         "Castoffs of the Pit, swept up and spat out by the things that breed them."},
+        {"Node",
+         "Stationary Dreg spawner: bursts a swarm, then keeps pumping out more.",
+         "HP 150  |  Stationary  |  Burst 8 Dregs  |  Sustains 3 Dregs / 3s  |  XP 65",
+         "A dormant Node does nothing until you enter its trigger area, at which point it erupts "
+         "with a burst of 8 Dregs (each with a temporary speed buff) and its active area doubles in "
+         "size. While you remain inside that enlarged area it keeps releasing 3 more Dregs every 3 "
+         "seconds. To shut it down, either destroy it (150 HP) or leave the active area for 6 "
+         "seconds — it then goes dormant and regenerates all of its lost health, ready to erupt "
+         "again when approached. Destroying a Node grants 65 XP.",
+         "A festering wellspring of the Pit's castoffs; the source of the swarm, not the swarm "
+         "itself."},
     }};
     return k;
 }
@@ -110,7 +145,7 @@ void drawWrappedText(const Font &font, const char *text, Rectangle area, float f
 
 } // namespace
 
-int ArchiveScene::entryCountForTab() const {
+int CodexScene::entryCountForTab() const {
     switch (activeTab_) {
     case Tab::Items:
         return static_cast<int>(allCatalogItems().size());
@@ -119,12 +154,12 @@ int ArchiveScene::entryCountForTab() const {
     case Tab::Skills:
         return ui::kSkillTreeNodeCount;
     case Tab::Enemies:
-        return static_cast<int>(enemyArchiveEntries().size());
+        return static_cast<int>(enemyCodexEntries().size());
     }
     return 0;
 }
 
-void ArchiveScene::clampSelection() {
+void CodexScene::clampSelection() {
     const int n = entryCountForTab();
     if (n <= 0) {
         selectedRow_ = 0;
@@ -133,7 +168,7 @@ void ArchiveScene::clampSelection() {
     selectedRow_ = std::clamp(selectedRow_, 0, n - 1);
 }
 
-void ArchiveScene::cycleTab(int delta) {
+void CodexScene::cycleTab(int delta) {
     const int t = static_cast<int>(activeTab_) + delta;
     const int nt = 4;
     activeTab_ = static_cast<Tab>((t % nt + nt) % nt);
@@ -141,23 +176,23 @@ void ArchiveScene::cycleTab(int delta) {
     listScrollY_ = 0.0F;
 }
 
-Rectangle ArchiveScene::listPanelRect() const {
+Rectangle CodexScene::listPanelRect() const {
     return {24.0F, 96.0F, 360.0F, static_cast<float>(config::WINDOW_HEIGHT) - 120.0F};
 }
 
-Rectangle ArchiveScene::detailPanelRect() const {
+Rectangle CodexScene::detailPanelRect() const {
     const Rectangle lp = listPanelRect();
     return {lp.x + lp.width + 20.0F, lp.y,
             static_cast<float>(config::WINDOW_WIDTH) - (lp.x + lp.width + 44.0F), lp.height};
 }
 
-Rectangle ArchiveScene::pickerContentRect() const {
+Rectangle CodexScene::pickerContentRect() const {
     const Rectangle lp = listPanelRect();
     return {lp.x + 4.0F, lp.y + 8.0F, lp.width - 8.0F, lp.height - 16.0F};
 }
 
-void ArchiveScene::update(SceneManager &scenes, InputManager &input, ResourceManager & /*resources*/,
-                          float /*frameDt*/) {
+void CodexScene::update(SceneManager &scenes, InputManager &input, ResourceManager & /*resources*/,
+                        float /*frameDt*/) {
     const Vector2 mouse = input.mousePosition();
     const bool click = input.isMouseButtonPressed(MOUSE_BUTTON_LEFT);
 
@@ -227,7 +262,7 @@ void ArchiveScene::update(SceneManager &scenes, InputManager &input, ResourceMan
     }
 }
 
-void ArchiveScene::drawListPanel(const Font &font, Vector2 mouse) {
+void CodexScene::drawListPanel(const Font &font, Vector2 mouse) {
     const Rectangle lp = listPanelRect();
     DrawRectangleRec(lp, Fade(ui::theme::PANEL_FILL, 250));
     DrawRectangleLinesEx(lp, 2.0F, ui::theme::PANEL_BORDER);
@@ -269,7 +304,7 @@ void ArchiveScene::drawListPanel(const Font &font, Vector2 mouse) {
                 break;
             }
             case Tab::Enemies: {
-                label = enemyArchiveEntries()[static_cast<size_t>(i)].name;
+                label = enemyCodexEntries()[static_cast<size_t>(i)].name;
                 break;
             }
             }
@@ -294,7 +329,7 @@ void ArchiveScene::drawListPanel(const Font &font, Vector2 mouse) {
     EndScissorMode();
 }
 
-void ArchiveScene::drawDetailPanel(const Font &font, ResourceManager &resources) {
+void CodexScene::drawDetailPanel(const Font &font, ResourceManager &resources) {
     const Rectangle dp = detailPanelRect();
     DrawRectangleRec(dp, Fade(ui::theme::PANEL_FILL, 250));
     DrawRectangleLinesEx(dp, 2.0F, ui::theme::PANEL_BORDER);
@@ -327,7 +362,8 @@ void ArchiveScene::drawDetailPanel(const Font &font, ResourceManager &resources)
         const ItemData &it = allCatalogItems()[static_cast<size_t>(selectedRow_)];
         const Rectangle iconR{dp.x + 16.0F, y, 72.0F, 72.0F};
         DrawRectangleLinesEx(iconR, 1.5F, rarityColor(it.rarity));
-        ui::InventoryUI::drawItemIcon(it, resources, iconR, WHITE);
+        ui::SlotWidget::drawSurface(iconR, &it, false);
+        ui::SlotWidget::drawIcon(it, resources, iconR, WHITE);
         y += 84.0F;
         const char *title = it.name.empty() ? it.catalogId.c_str() : it.name.c_str();
         DrawTextEx(font, title, {dp.x + 16.0F, y}, 22.0F, 1.0F, RAYWHITE);
@@ -376,16 +412,17 @@ void ArchiveScene::drawDetailPanel(const Font &font, ResourceManager &resources)
         break;
     }
     case Tab::Enemies: {
-        const EnemyArchiveEntry &en = enemyArchiveEntries()[static_cast<size_t>(selectedRow_)];
+        const EnemyCodexEntry &en = enemyCodexEntries()[static_cast<size_t>(selectedRow_)];
         DrawTextEx(font, en.name, {dp.x + 16.0F, y}, 24.0F, 1.0F, RAYWHITE);
         y += 34.0F;
         DrawTextEx(font, en.summary, {dp.x + 16.0F, y}, 16.0F, 1.0F, ui::theme::LABEL_TEXT);
         y += 26.0F;
-        DrawTextEx(font, en.statsLine, {dp.x + 16.0F, y}, 14.0F, 1.0F, Fade(SKYBLUE, 0.9F));
-        y += 24.0F;
-        drawWrappedText(font, en.description, {dp.x + 16.0F, y, bodyW, 160.0F}, 15.0F,
+        drawWrappedText(font, en.statsLine, {dp.x + 16.0F, y, bodyW, 60.0F}, 14.0F,
+                        Fade(SKYBLUE, 0.9F));
+        y += 56.0F;
+        drawWrappedText(font, en.description, {dp.x + 16.0F, y, bodyW, 220.0F}, 15.0F,
                         Fade(RAYWHITE, 0.92F));
-        y += 170.0F;
+        y += 230.0F;
         if (en.lore != nullptr && en.lore[0] != '\0') {
             DrawTextEx(font, "Lore", {dp.x + 16.0F, y}, 18.0F, 1.0F, Color{200, 170, 120, 255});
             y += 26.0F;
@@ -397,7 +434,7 @@ void ArchiveScene::drawDetailPanel(const Font &font, ResourceManager &resources)
     }
 }
 
-void ArchiveScene::draw(ResourceManager &resources) {
+void CodexScene::draw(ResourceManager &resources) {
     const int w = config::WINDOW_WIDTH;
     const int h = config::WINDOW_HEIGHT;
     DrawRectangle(0, 0, w, h, ui::theme::MENU_BG);
@@ -405,7 +442,7 @@ void ArchiveScene::draw(ResourceManager &resources) {
     const Font &font = resources.uiFont();
     const Vector2 mouse = GetMousePosition();
 
-    DrawTextEx(font, "Archive", {24.0F, 32.0F}, 36.0F, 1.0F, RAYWHITE);
+    DrawTextEx(font, "Codex", {24.0F, 32.0F}, 36.0F, 1.0F, RAYWHITE);
 
     for (int ti = 0; ti < 4; ++ti) {
         ui::Button &tb = tabButtons_[static_cast<size_t>(ti)];

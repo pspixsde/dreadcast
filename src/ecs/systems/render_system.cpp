@@ -1,6 +1,7 @@
 #include "ecs/systems/render_system.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <vector>
@@ -14,6 +15,7 @@
 #include "core/resource_manager.hpp"
 #include "core/types.hpp"
 #include "ecs/components.hpp"
+#include "game/map_data.hpp"
 
 namespace dreadcast::ecs {
 
@@ -228,6 +230,34 @@ void drawEnemyOverlays(entt::registry &registry, const Font &font, Vector2 fogOr
     }
 }
 
+/// Draws a Node's trigger/active area as an iso-projected ring on the ground.
+void drawNodeAuras(entt::registry &registry, Vector2 fogOrigin, float fogRadius) {
+    const auto view = registry.view<NodeSpawner, Transform>();
+    for (const auto e : view) {
+        const auto &t = view.get<Transform>(e);
+        if (!visible_to_player(registry, fogOrigin, t.position, fogRadius)) {
+            continue;
+        }
+        const auto &node = view.get<NodeSpawner>(e);
+        const bool damageExpanded = !node.active && node.damageTriggerTimer > 0.0F;
+        const float radius = node.active ? node.activeRadius
+                             : (damageExpanded ? node.damageTriggerRadius : node.triggerRadius);
+        const Color ring = node.active ? Color{220, 80, 70, 200}
+                           : (damageExpanded ? Color{230, 150, 70, 170} : Color{150, 200, 120, 110});
+        constexpr int kSegments = 48;
+        Vector2 prev{};
+        for (int i = 0; i <= kSegments; ++i) {
+            const float a = (static_cast<float>(i) / static_cast<float>(kSegments)) * 2.0F * PI;
+            const Vector2 wp{t.position.x + std::cosf(a) * radius, t.position.y + std::sinf(a) * radius};
+            const Vector2 ip = dreadcast::worldToIso(wp);
+            if (i > 0) {
+                DrawLineEx(prev, ip, node.active ? 2.0F : 1.0F, ring);
+            }
+            prev = ip;
+        }
+    }
+}
+
 void drawMeleeArc(entt::registry &registry) {
     const auto view = registry.view<Player, MeleeAttacker, Transform>();
     for (const auto entity : view) {
@@ -310,14 +340,12 @@ void drawSolidPolygonEntity(const SolidPolygon &poly) {
 }
 
 void drawWallEntity(const Transform &transform, const Wall &wall) {
-    const float x0 = transform.position.x - wall.halfW;
-    const float x1 = transform.position.x + wall.halfW;
-    const float y0 = transform.position.y - wall.halfH;
-    const float y1 = transform.position.y + wall.halfH;
-    const Vector2 p1 = dreadcast::worldToIso(Vector2{x0, y0});
-    const Vector2 p2 = dreadcast::worldToIso(Vector2{x1, y0});
-    const Vector2 p3 = dreadcast::worldToIso(Vector2{x1, y1});
-    const Vector2 p4 = dreadcast::worldToIso(Vector2{x0, y1});
+    const std::array<Vector2, 4> corners = dreadcast::orientedBoxCorners(
+        transform.position.x, transform.position.y, wall.halfW, wall.halfH, wall.angle);
+    const Vector2 p1 = dreadcast::worldToIso(corners[0]);
+    const Vector2 p2 = dreadcast::worldToIso(corners[1]);
+    const Vector2 p3 = dreadcast::worldToIso(corners[2]);
+    const Vector2 p4 = dreadcast::worldToIso(corners[3]);
     const Color fill = {55, 48, 42, 255};
     const Color outline = {110, 90, 75, 255};
     DrawTriangle(p1, p2, p3, fill);
@@ -419,6 +447,8 @@ void render_system(entt::registry &registry, const Font &font, ResourceManager &
     for (const auto pe : registry.view<SolidPolygon, Transform>()) {
         drawSolidPolygonEntity(registry.get<SolidPolygon>(pe));
     }
+
+    drawNodeAuras(registry, fogOrigin, fogRadius);
 
     const auto view = registry.view<Transform, Sprite>();
     for (const auto entity : view) {

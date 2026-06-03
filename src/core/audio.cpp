@@ -1,65 +1,26 @@
 #include "core/audio.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <memory>
 #include <unordered_map>
 
 #define MINIAUDIO_IMPLEMENTATION
-// Ensure OGG/Vorbis decoding when loading .ogg ambience assets.
-#define MA_ENABLE_VORBIS
-#define MA_ENABLE_STB_VORBIS
 #include <miniaudio.h>
 
 namespace dreadcast {
 
 namespace {
 
-[[nodiscard]] bool endsWithIgnoreCase(const std::string &s, const char *suffix) {
-    const size_t sl = s.size();
-    const size_t tl = std::strlen(suffix);
-    if (sl < tl) {
-        return false;
-    }
-    const size_t off = sl - tl;
-    for (size_t i = 0; i < tl; ++i) {
-        const unsigned char a = static_cast<unsigned char>(s[off + i]);
-        const unsigned char b = static_cast<unsigned char>(suffix[i]);
-        if (std::tolower(a) != std::tolower(b)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-[[nodiscard]] ma_uint32 soundFlagsForPath(const std::string &path) {
-    // Stream compressed ambience/music-like assets (not fully decoded upfront).
-    if (endsWithIgnoreCase(path, ".ogg")) {
-        return MA_SOUND_FLAG_STREAM;
-    }
-    return 0;
-}
-
 [[nodiscard]] ma_result initSoundFromFileWithFallback(ma_engine *engine, const std::string &path,
-                                                      ma_uint32 preferredFlags,
                                                       ma_sound *outSound) {
     if (engine == nullptr || outSound == nullptr) {
         return MA_INVALID_ARGS;
     }
-    const ma_uint32 attempts[] = {
-        preferredFlags,
-        0,
-        MA_SOUND_FLAG_DECODE,
-    };
+    const ma_uint32 attempts[] = {0, MA_SOUND_FLAG_DECODE};
     ma_result last = MA_ERROR;
-    ma_uint32 prev = 0xFFFFFFFFu;
     for (ma_uint32 flags : attempts) {
-        if (flags == prev) {
-            continue;
-        }
-        prev = flags;
         last = ma_sound_init_from_file(engine, path.c_str(), flags, nullptr, nullptr, outSound);
         if (last == MA_SUCCESS) {
             return MA_SUCCESS;
@@ -190,9 +151,7 @@ struct AudioSystem::Impl {
             if (!t.sound) {
                 t.sound = std::make_unique<ma_sound>();
             }
-            const ma_uint32 flags = soundFlagsForPath(t.path);
-            const ma_result rc =
-                initSoundFromFileWithFallback(&engine, t.path, flags, t.sound.get());
+            const ma_result rc = initSoundFromFileWithFallback(&engine, t.path, t.sound.get());
             if (rc != MA_SUCCESS) {
                 t.loaded = false;
                 std::fprintf(stderr, "Dreadcast: could not reload sound \"%s\" (ma_result=%d)\n",
@@ -351,9 +310,8 @@ SoundHandle AudioSystem::loadSound(const std::string &resolvedPath) {
         auto &slot = impl_->templates.back();
         slot.path = resolvedPath;
         slot.sound = std::make_unique<ma_sound>();
-        const ma_uint32 flags = soundFlagsForPath(resolvedPath);
         const ma_result rc =
-            initSoundFromFileWithFallback(&impl_->engine, resolvedPath, flags, slot.sound.get());
+            initSoundFromFileWithFallback(&impl_->engine, resolvedPath, slot.sound.get());
         if (rc != MA_SUCCESS) {
             impl_->templates.pop_back();
             std::fprintf(stderr, "Dreadcast: could not load sound \"%s\" (ma_result=%d)\n",
@@ -400,15 +358,10 @@ void AudioSystem::playExclusive(SoundHandle handle, float pitch, float volumeMul
     if (it == impl_->exclusiveByHandle.end() || !it->second) {
         auto p = std::make_unique<ma_sound>();
         const std::string &path = impl_->templates[static_cast<size_t>(handle)].path;
-        const ma_uint32 flags = soundFlagsForPath(path);
-        const ma_result rc =
-            (flags == 0)
-                ? ma_sound_init_copy(&impl_->engine,
-                                     impl_->templates[static_cast<size_t>(handle)].sound.get(), 0,
-                                     nullptr, p.get())
-                : initSoundFromFileWithFallback(&impl_->engine, path, flags, p.get());
-        if (rc != MA_SUCCESS) {
-            std::fprintf(stderr, "Dreadcast: could not create looping sound instance for \"%s\"\n",
+        if (ma_sound_init_copy(&impl_->engine,
+                               impl_->templates[static_cast<size_t>(handle)].sound.get(), 0,
+                               nullptr, p.get()) != MA_SUCCESS) {
+            std::fprintf(stderr, "Dreadcast: could not create exclusive sound instance for \"%s\"\n",
                          path.c_str());
             return;
         }

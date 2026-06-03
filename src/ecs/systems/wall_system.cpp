@@ -1,6 +1,7 @@
 #include "ecs/systems/wall_system.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <vector>
@@ -10,6 +11,7 @@
 
 #include "config.hpp"
 #include "ecs/components.hpp"
+#include "game/map_data.hpp"
 
 namespace dreadcast::ecs {
 
@@ -23,7 +25,11 @@ Rectangle entityRect(const Vector2 &pos, const Sprite &s) {
     return {pos.x - s.width * 0.5F, pos.y - s.height * 0.5F, s.width, s.height};
 }
 
-void separateEntities(Vector2 &aPos, const Sprite &aSpr, Vector2 &bPos, const Sprite &bSpr) {
+void separateEntities(Vector2 &aPos, const Sprite &aSpr, bool aMovable, Vector2 &bPos,
+                      const Sprite &bSpr, bool bMovable) {
+    if (!aMovable && !bMovable) {
+        return;
+    }
     const Rectangle ar = entityRect(aPos, aSpr);
     const Rectangle br = entityRect(bPos, bSpr);
     if (!CheckCollisionRecs(ar, br)) {
@@ -36,19 +42,22 @@ void separateEntities(Vector2 &aPos, const Sprite &aSpr, Vector2 &bPos, const Sp
     const float overlapBottom = (br.y + br.height) - ar.y;
 
     const float minOverlap = std::min({overlapLeft, overlapRight, overlapTop, overlapBottom});
-    const float push = minOverlap * 0.5F;
+    // An immovable unit (e.g. a Node) absorbs none of the displacement; the other side moves the
+    // full overlap. When both are movable each takes half.
+    const float pushA = aMovable ? (bMovable ? minOverlap * 0.5F : minOverlap) : 0.0F;
+    const float pushB = bMovable ? (aMovable ? minOverlap * 0.5F : minOverlap) : 0.0F;
     if (minOverlap == overlapLeft) {
-        aPos.x -= push;
-        bPos.x += push;
+        aPos.x -= pushA;
+        bPos.x += pushB;
     } else if (minOverlap == overlapRight) {
-        aPos.x += push;
-        bPos.x -= push;
+        aPos.x += pushA;
+        bPos.x -= pushB;
     } else if (minOverlap == overlapTop) {
-        aPos.y -= push;
-        bPos.y += push;
+        aPos.y -= pushA;
+        bPos.y += pushB;
     } else {
-        aPos.y += push;
-        bPos.y -= push;
+        aPos.y += pushA;
+        bPos.y -= pushB;
     }
 }
 
@@ -189,11 +198,21 @@ void wall_resolve_collisions(entt::registry &registry) {
         if (registry.all_of<Interactable>(m)) {
             continue;
         }
+        if (registry.all_of<Immovable>(m)) {
+            continue; // Nodes are static; never nudged by wall resolution.
+        }
         auto &t = registry.get<Transform>(m);
         const auto &spr = registry.get<Sprite>(m);
         for (const auto w : walls) {
             const auto &wt = registry.get<Transform>(w);
             const auto &wall = registry.get<Wall>(w);
+            if (wall.angle != 0.0F) {
+                const std::array<Vector2, 4> corners = orientedBoxCorners(
+                    wt.position.x, wt.position.y, wall.halfW, wall.halfH, wall.angle);
+                const std::vector<Vector2> poly(corners.begin(), corners.end());
+                separateFromSolidPolygon(t.position, spr, poly);
+                continue;
+            }
             const Rectangle wr = wallRect(wt, wall);
             separateFromWall(t.position, spr, wr);
         }
@@ -237,7 +256,9 @@ void unit_resolve_collisions(entt::registry &registry) {
             auto &tb = registry.get<Transform>(b);
             const auto &sa = registry.get<Sprite>(a);
             const auto &sb = registry.get<Sprite>(b);
-            separateEntities(ta.position, sa, tb.position, sb);
+            const bool aMovable = !registry.all_of<Immovable>(a);
+            const bool bMovable = !registry.all_of<Immovable>(b);
+            separateEntities(ta.position, sa, aMovable, tb.position, sb, bMovable);
         }
     }
 }
@@ -263,6 +284,16 @@ void wall_destroy_projectiles(entt::registry &registry) {
         for (const auto w : walls) {
             const auto &wt = registry.get<Transform>(w);
             const auto &wall = registry.get<Wall>(w);
+            if (wall.angle != 0.0F) {
+                const std::array<Vector2, 4> corners = orientedBoxCorners(
+                    wt.position.x, wt.position.y, wall.halfW, wall.halfH, wall.angle);
+                const std::vector<Vector2> poly(corners.begin(), corners.end());
+                if (circleHitsPolygon(center, r, poly)) {
+                    hit = true;
+                    break;
+                }
+                continue;
+            }
             const Rectangle wr = wallRect(wt, wall);
             if (circleRectOverlap(center, r, wr)) {
                 hit = true;

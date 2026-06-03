@@ -2,32 +2,113 @@
 
 All notable changes to **Dreadcast** will be documented in this file.
 
+## v0.12.7 — 2026-06-03
+
+### Changed
+
+- **Caskets reworked into rolled loot tiers:** Caskets are no longer pre-filled in the editor. `CasketData` now stores a **`CasketTier`** (`Old` / `Sealed` / `Wrought`) serialized as **`CASKET cx cy <tier>`** (legacy item-id lines parse to `Old`). Contents are **rolled once per session** at spawn via new **`rollCasketLoot`** (`game/game_data.hpp`):
+  - **Old** — items 65/25/10% (1/2/3); rarity 45/30/18/6/1%.
+  - **Sealed** — items 35/45/20%; rarity 30/30/25/12/3%; guarantees **≥1 Blighted+**.
+  - **Wrought** — items 10/40/50%; rarity 15/25/30/20/10%; guarantees **≥1 Cursed/Lucid+**.
+  - Bridged rarity names (**Tarnished/Clouded**, **Cursed/Lucid**, **Abyssal/Absolute**) share one pool; **`Special`**-rarity items are never rolled.
+- **Editor:** The casket loot panel is replaced by a **tier cycle** (click to switch Old → Sealed → Wrought); casket sprite/quad is **tinted by tier** in both the editor and gameplay, and the interaction prompt shows the tier name.
+
+### Added
+
+- **New enemy — Dreg:** Fragile, fast melee swarmer (**10 HP**, **6 dmg**, **0 XP**, Imp-range aggro, `dreg_swarmer` behavior) that chases the player down and surrounds when many. Authored in `assets/data/enemies.json`; placeable directly via the editor **Units** tab.
+- **New spawner — Node:** Stationary **150 HP** `Enemy`-tagged, `Immovable` Dreg spawner (**65 XP** on death). Dormant until the player enters its trigger area, then **bursts 8 Dregs** (each with a temporary **+50% move-speed buff** for 2s and **permanent aggro**) and **doubles** its active area. While the player stays inside it releases **3 Dregs every 3s**; leaving the active area for **6s** returns it to dormant and **regenerates it to full health**. New `NodeSpawner`/`EnemySpeedBuff`/`Immovable` components, `node_system`, shared `ecs::spawnEnemyFromArchetype` factory, and an editor **Node** tool (Elements tab) serialized as a **`NODE cx cy`** map line. Dregs become fully independent of the Node once spawned.
+- **Codex:** **Enemies** tab now includes **Dreg** and **Node** stat sheets.
+- **Data-driven enemies (`assets/data/enemies.json`):** Enemy tuning moved from `config.hpp` into a versioned `EnemyArchetype` catalog with a **`behavior`** field (`ranged_kiter` / `melee_chaser` / `mid_bruiser`); spawner fills `ecs::EnemyAI` / `ecs::WardenTuning` and `enemy_ai_system` + editor read the catalog.
+- **Editor — wall rotation:** Walls carry an **`angle`** (radians); drag the **blue rotate knob** or **Q/E** (**Ctrl** free, else 15° snap). Honored in rendering, collision, fog occlusion, and camera/minimap; serialized as an optional 5th **`WALL`** field (backward-compatible).
+- **Editor — marquee selection:** Drag from empty space to **box-select** objects; **Shift** adds/removes. Multi-selections **drag as a group** and **delete together** (`Del`). New `multiSelected_` set + helpers in `EditorScene`.
+- **Multiple caskets per map:** `MapData` stores **`std::vector<CasketData> caskets`**; each **`CASKET`** line spawns one (format unchanged). Editor edits per-casket loot slots; gameplay attaches **`ecs::CasketLoot`** per entity for the hovered casket.
+- **New enemy — Warden:** Mid-range bruiser (**120 HP**, **XP 50**) with a telegraphed **line slam** (35 dmg) and a close-range **shockwave** (knockback + 20% slow, 10s cd). New `WardenState` + `PlayerSlow` components, AI branch, VFX, and SFX; placeable in the editor.
+- **Codex (renamed from Archive):** The **Archive** screen is now the **Codex** (`CodexScene`); its **Enemies** tab lists per-type stat sheets for **Imp**, **Hellhound**, and **Warden**.
+
+## v0.12.6 — 2026-04-29
+
+### Added
+
+- **`game/world_interaction`:** F-key **`dispatchInteractablePrimaryUse`** + **`spawnCasketLootPickupRing`** (loot uses **`allocatePickupPoolItem`** + ground pickups).
+- **`crafting`:** **`TransformPlan`**, **`recipeConditionsMet`**, **`executeTransform`** (`playerLevelAtLeast` recipe conditions + logged **`sideEffects`** stubs).
+- **`ecs/combat_resolution`:** **`HealPacket`** + **`applyHeal`**; lava ticks use **`resolveDamage`** with **`Environmental`** and player **`CombatResolutionOpts`** (equipment reflect + **`OnTakeDamage`** dispatch).
+
+### Changed
+
+- **Interactables:** Map spawns use **`InteractableKind::Anvil` / `OldCasket`**; gameplay no longer string-matches prompt names for F interactions.
+- **Items / recipes:** Top-level **`schemaVersion`** (`1`) on **`items.json`** / **`recipes.json`** with loader warnings when missing or mismatched; item **`effects[]`** objects warn on unknown keys and unrecognized **`trigger`** / **`action.kind`** strings.
+- **Inventory:** Context-menu **Separate** uses **`splitStackableOneUnitToNewPool`**.
+
+### Documentation
+
+- **`docs/content_schema.md`:** Short authoring contracts for items, recipes, interactables, and combat resolution APIs.
+
+## v0.12.5 — 2026-04-30
+
+### Added
+
+- **`game/item_transaction`:** Single **`InvCtx`** + **`Endpoint`** API for bag/equip/consumable/anvil/world moves, stack merge/swap, **`removePoolItem`** (swap-with-last + ground + bench rewrites), **`returnPoolItem`**, **`dropToWorld` / `dropToWorldAtPlayer`**, **`pickupFromWorld`**; optional **`IndexHolderRegistry`** for extra pool-index rewrites (anvil bench drag + inventory UI).
+- **`game/crafting`:** **`tryMatchForgeBench`** / **`tryMatchDisassembleInput`** with **cross-cell ingredient aggregation**; **`applyRecipeMatch`** routes outputs through **`returnPoolItem`** (stack pour / bag priority) and clears forge/disassemble pools consistently.
+- **Debug `runItemTransactionSelfTest()`** (no-op in release): runs once after **`loadGameData()`** — bag merge + barbed_tunic forge path + invariant pass.
+- **Data-driven crafting recipes:** `assets/data/recipes.json` unified **`recipes[]`** array (with loader fallback for legacy **`forgeRecipes` / `disassembleRecipes`** keys); loaded at startup with fallback to built-in seed recipes if the file is missing or empty.
+- **`ui::SlotWidget`:** Shared slot surface + icon drawing (delegates to inventory draw helpers) used by **anvil**, **archive item detail**, and the **HUD equipment strip** for consistent rarity tint and icon fit.
+- **Runtime validation:** After catalog load, warnings for malformed item **effects** (e.g. unset trigger, empty `statModifier` stat); recipe rows validated against known **item ids** for inputs/outputs and forge outputs.
+- **Editor — Items:** Item picker and place-item tool now list **all catalog ids** from `allCatalogItems()` (sorted), with labels from item names; selection syncs when picking placed item spawns.
+
+### Changed
+
+- **Inventory / itemization (System #7 groundwork):** Declarative **`effects[]`** on items with synthesis from legacy numeric fields when JSON omits effects; **`PlayerEquipmentSnapshot`** drives equipped stats for combat/HUD where wired; **`ActiveItemEffects`** ECS component replaces separate HoT / mana-over-time / manic / runic-cooldown components; **`tickActiveItemEffects`** and related helpers centralize ticking and UI queries.
+- **Consumables & procs by `catalogId`:** UI and HUD (Cordial blocked overlay, Runic cooldown overlay, armor strip) prefer **`catalogId`** over display **name**; Cordial minimum HP gate uses **`cordialManicMinHpFractionFromItem`** from authored effects (default **0.40**).
+- **Movement — Cordial Manic:** Speed multiplier comes from the active manic effect (**`playerManicSpeedMultiplierOrOne`**) instead of a hardcoded config-only branch.
+- **Anvil — Forge:** First **matching** recipe wins (supports multiple recipes in JSON); craft removes the **correct pool indices** for occupied forge slots (not assumed slot order); forge UI layout uses **max input count** across recipes; output preview shows the **matched** recipe’s output; **`outputCount`** honored when greater than 1.
+- **Anvil — Disassemble:** Commit uses **`findDisassembleRecipeBySourceId`** for the slotted item’s **`catalogId`** (no longer assumes a single `drecipes[0]`); disassemble panel layout uses **max output slot count** across recipes.
+- **Workbench return / merge:** Pool returns and overflow use **`item_transaction::returnPoolItem`** with **`ReturnPolicy::BagPriorityShift`** when the **bag priority shift** gameplay setting is enabled (same pour order as world pickup).
+- **Inventory drops:** **`InventoryAction::Drop` / `SeparateDropWorld`** spawn ground pickups via **`dropToWorldAtPlayer`** (transaction layer) instead of ad-hoc spawn helpers.
+- **Equipment stats:** **`InventoryState::totalEquipped*`** getters removed; damage reflect and other combat modifiers use **`PlayerEquipmentSnapshot`** only (**`buildEquipmentSnapshot`**).
+- **Anvil slot acceptance:** **`slotAcceptsItem`** for forge/disassemble input cells is **recipe-driven** via **`catalogIdIsForgeBenchInput` / `catalogIdIsDisassembleBenchInput`**; output sink rejects drags.
+- **Item catalog load:** Removed embedded **`seedItemCatalogFallback`**; the game requires a valid **`assets/data/items.json`** (empty catalog after load → **`loadGameData` fails**).
+
+### Fixed
+
+- **`tickActiveItemEffects`:** Manic branch no longer **returns** early from the whole tick (runic shell cooldown decrement still runs after manic handling).
+
+### Internal
+
+- **`game/item_transaction`:** Absorbed former **`inventory_tx`** merge/pour helpers; debug **inventory invariants** after commits.
+- **Removed `game/inventory_tx.*`** (superseded by **`item_transaction`**).
+- **`game/equipment_snapshot`**, **`game/item_effects`**, **`game/item_effects_types`**, **`game/slot_types`** as supporting modules for the above.
+- **`game_data`:** **`loadRecipesFromJson`**, **`findDisassembleRecipeBySourceId`**, **`rebuildEditorItemCatalogIds`** (editor); minor **`nodiscard`** / cast cleanups in pickup and merge call sites.
+
 ## v0.12.4 — 2026-04-28
 
 ### Added
 
 - **Pulse Link** (`pulse_link`) ring: multiplicative **ability mana cost** reduction while equipped, flat **mana on each ability cooldown finish**, HUD + floating text support, editor item row, and catalog data.
 - **Audio:** `AudioSystem` **exclusive-loop** helpers (`playExclusiveLoop`, `setExclusiveVolume`, `stopExclusive`, `isExclusivePlaying`) for ambience / sustained effects.
-- **SFX / ambience:** `reload.wav` on chamber reload; `gulp.wav` on vial use; **Pure Blood** looping `pureblood.wav` with volume fade over HoT; **Cordial Manic** `fastheartbeat.wav` (exclusive, pitched to duration); **lava** proximity loop `lava.wav` with near/far radii; `lavahiss.wav` per lava damage tick; `amuletpickup.wav` for amulet ground pickups.
+- **SFX / ambience:** `assets/sounds/combat/chamber_reload.wav` on chamber reload; `assets/sounds/items/vial_consume.wav` on vial use; **Pure Blood** looping `assets/sounds/items/vial_pure_blood_loop.wav` with volume fade over HoT; **Cordial Manic** `assets/sounds/items/vial_cordial_manic_heartbeat.wav` (exclusive, pitched to duration, **1s fade-in from silence**); **lava** proximity loop `assets/sounds/ambient/lava_loop.wav` with near/far radii; `assets/sounds/ambient/lava_damage_hiss.wav` per lava damage tick; `assets/sounds/pickups/amulet.wav` for amulet ground pickups.
 - **Skill tree:** Major/minor layout, larger nodes, four side skills with routed gameplay effects (`applySkillTreeEffects` each frame) and skill icons under `assets/textures/skills/`.
 - **Archive (codex)** scene with **Items / Abilities / Skills / Enemies** tabs, list + detail panels, and **lore** blocks where defined; reachable from **main menu** and **pause**.
 - **Editor:** **Old Casket** label + **56×40** world hit-test and isometric quad preview; **300×600** toolbar with **Select**, vertical **Elements / Items / Units** tabs, **adjacent scrollable picker**, and **bottom preview** slot.
+- **Lore (`LORE.md`):** **Nine Arenas** draft under **The Dread Pit** — **Arena I (Grey Threshold)** as start area with **Vareth** intro hook; **Arena II (Obsession and Madness)** with wind hazard and visual tone notes.
 
 ### Changed
 
 - **Wall / solid collision:** Concave polygon separation uses **nearest-edge** push-out instead of centroid-based escape.
 - **Editor toolbar UX:** Picker opens beside the toolbar; mouse wheel scrolls the picker when hovered (map zoom otherwise).
-- **Lava ambience asset:** Runtime proximity loop now uses `assets/sounds/lava.wav` (replacing `.ogg` source in prior notes).
+- **Lava ambience asset:** Runtime proximity loop uses `assets/sounds/ambient/lava_loop.wav` (replacing `.ogg` source in prior notes).
 - **Debug overlay:** Lava audio diagnostics are folded into the existing **F3 fog debug** panel (single toggle for both).
+- **`assets/sounds/` layout:** Sounds grouped under **`ambient/`**, **`abilities/`**, **`combat/`**, **`characters/undead_hunter/`**, **`enemies/`** (hellhound, imp), **`pickups/`**, and **`items/`**, with descriptive filenames; `gameplay_scene.cpp` and `combat_system.cpp` paths updated accordingly.
 
 ### Fixed
 
 - **Pickup SFX:** Amulets now play a dedicated pickup sound instead of falling through silent.
+- **Lava proximity ambience:** Exclusive lava loop no longer keeps playing when **paused**, on **game over**, after **Main Menu** / scene exit, or when gameplay `update` does not run (`stopProximityLavaAmbient`, `lastResources_`, `onExit` / destructor in `GameplayScene`).
 
 ### Internal
 
 - **`allCatalogItems()`** catalog vector for read-only UI (Archive).
 - **`skill_tree_archive_entries()`** for Archive skill tab.
+- **`config.hpp`:** `MANIC_HEARTBEAT_VOLUME_RAMP_DURATION` for Cordial Manic heartbeat fade-in.
 
 ## v0.12.3 — 2026-04-27
 

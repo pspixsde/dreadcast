@@ -1,13 +1,18 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <string>
 #include <vector>
 
 #include "game/character.hpp"
+#include "game/enemy_archetype.hpp"
 #include "game/items.hpp"
 
 namespace dreadcast {
+
+/// Defined in `game/map_data.hpp`; opaque-declared here so loot rolling can take it by value.
+enum class CasketTier : std::uint8_t;
 
 /// One ability row for HUD text/icons and runtime mechanics (Undead Hunter bar).
 struct AbilityDef {
@@ -37,23 +42,34 @@ struct CharacterAbilities {
     std::array<AbilityDef, 3> abilities{};
 };
 
-/// One ingredient line for forging / disassembly.
+/// One ingredient line for forging / disassembly / outputs.
 struct CraftIngredient {
     std::string itemId{};
     int count{1};
 };
 
-/// Forge: exact multiset of inputs → output.
-struct ForgeRecipe {
-    std::vector<CraftIngredient> inputs{};
-    std::string outputId{};
-    int outputCount{1};
+enum class RecipeKind : std::uint8_t { Forge, Disassemble };
+
+struct CraftCondition {
+    std::string kind{};
+    std::string param{};
+    float value{0.0F};
 };
 
-/// Disassemble: one gear id → outputs (amounts multiplied by stack of input when claiming).
-struct DisassembleRecipe {
-    std::string sourceId{};
+struct CraftSideEffect {
+    std::string kind{};
+    std::string param{};
+    float value{0.0F};
+};
+
+/// Unified transformation definition (`kind` selects matcher/applier behavior).
+struct Recipe {
+    std::string id{};
+    RecipeKind kind{RecipeKind::Forge};
+    std::vector<CraftIngredient> inputs{};
+    std::vector<CraftCondition> conditions{};
     std::vector<CraftIngredient> outputs{};
+    std::vector<CraftSideEffect> sideEffects{};
 };
 
 /// Loads `assets/data/items.json` and `assets/data/abilities.json` (also tries next to executable).
@@ -64,6 +80,12 @@ struct DisassembleRecipe {
 
 /// Map `ITEM` / editor kind string → item instance. Empty item if unknown id.
 [[nodiscard]] ItemData makeItemFromMapKind(const std::string &kind);
+
+/// Rolls one casket's loot for the given tier: returns up to three catalog ids (trailing entries
+/// empty when the casket rolls fewer than three items). Honors the tier's item-count odds, per-slot
+/// rarity odds, and minimum-rarity guarantee. Bridged rarity names (Tarnished/Clouded,
+/// Cursed/Lucid, Abyssal/Absolute) share one pool. **Special**-rarity items are never included.
+[[nodiscard]] std::array<std::string, 3> rollCasketLoot(CasketTier tier);
 
 /// All items from the loaded catalog (order not guaranteed). Refreshed by `loadGameData()`.
 [[nodiscard]] const std::vector<ItemData> &allCatalogItems();
@@ -76,8 +98,26 @@ struct DisassembleRecipe {
 
 [[nodiscard]] const CharacterClass &characterAt(int index);
 
-[[nodiscard]] const std::vector<ForgeRecipe> &forgeRecipes();
+[[nodiscard]] const std::vector<Recipe> &allRecipes();
 
-[[nodiscard]] const std::vector<DisassembleRecipe> &disassembleRecipes();
+[[nodiscard]] const std::vector<Recipe> &forgeRecipes();
+
+[[nodiscard]] const std::vector<Recipe> &disassembleRecipes();
+
+[[nodiscard]] const Recipe *findRecipeById(const std::string &id);
+
+/// First disassemble recipe whose primary input `itemId` matches `sourceCatalogId`.
+[[nodiscard]] const Recipe *findDisassembleRecipeBySourceId(const std::string &sourceCatalogId);
+
+[[nodiscard]] bool catalogIdIsForgeBenchInput(const std::string &catalogId);
+
+[[nodiscard]] bool catalogIdIsDisassembleBenchInput(const std::string &catalogId);
+
+/// Loaded enemy archetypes (`assets/data/enemies.json`). Required for `loadGameData()` success.
+[[nodiscard]] const EnemyArchetype *enemyArchetypeById(const std::string &id);
+
+[[nodiscard]] const std::vector<EnemyArchetype> &allEnemyArchetypes();
+
+[[nodiscard]] const EnemyAiGlobals &enemyAiGlobals();
 
 } // namespace dreadcast

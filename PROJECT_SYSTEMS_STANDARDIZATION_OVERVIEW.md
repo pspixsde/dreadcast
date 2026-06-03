@@ -121,6 +121,8 @@ Standardization/centralization options:
 - Standardize enemy archetypes via data-driven behavior profiles and capability tags.
 - Consolidate navigation/avoidance primitives into shared movement decision modules.
 
+**Implemented:** Enemy balance lives in `assets/data/enemies.json` (`ranged_kiter` / `melee_chaser` / `mid_bruiser` behaviors); map placement still uses `ENEMY x y <id>`.
+
 ## 10) World Simulation and Interactables
 
 - Map-driven world composition (walls, lava/hazards, solids, spawns, enemies, items, anvils, caskets).
@@ -229,7 +231,7 @@ Standardization/centralization options:
 
 ## A) Data-First Domain Model
 
-- Treat data catalogs as authoritative for items, abilities, enemy profiles, interactables, recipes, and UI/audio manifests.
+- Treat data catalogs as authoritative for items, abilities, enemy profiles (`enemies.json`), interactables, recipes, and UI/audio manifests.
 - Minimize in-code duplicated fallback payloads.
 - Adopt schema/version rules for forward evolution and validation.
 

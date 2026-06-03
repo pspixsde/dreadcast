@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "globals": {
+    "steerRate": 12,
+    "seekArriveRadius": 22,
+    "stuckThreshold": 0.25,
+    "stuckMinDisp": 1.5
+  },
+  "enemies": [
+    {
+      "id": "imp",
+      "displayName": "Imp",
+      "behavior": "ranged_kiter",
+      "tint": [220, 90, 60, 255],
+      "spriteSize": 40,
+      "hp": 50,
+      "xp": 25,
+      "agitationRange": 350,
+      "calmDownDelay": 5,
+      "ranged": {
+        "minShootRange": 60,
+        "shootCooldown": 2,
+        "preferredRange": 220,
+        "kiteSpeed": 145,
+        "advanceSpeed": 100,
+        "panicRange": 80,
+        "strafeBias": 0.4,
+        "projectileDamage": 15,
+        "projectileSpeed": 400,
+        "projectileRange": 400
+      }
+    },
+    {
+      "id": "hellhound",
+      "displayName": "Hellhound",
+      "behavior": "melee_chaser",
+      "tint": [160, 70, 40, 255],
+      "spriteSize": 48,
+      "hp": 60,
+      "xp": 30,
+      "agitationRange": 420,
+      "calmDownDelay": 5,
+      "melee": {
+        "chaseSpeed": 210,
+        "meleeDamage": 15,
+        "meleeRange": 44,
+        "meleeCooldown": 1
+      }
+    },
+    {
+      "id": "warden",
+      "displayName": "Warden",
+      "behavior": "mid_bruiser",
+      "tint": [120, 95, 150, 255],
+      "spriteSize": 58,
+      "hp": 120,
+      "xp": 50,
+      "agitationRange": 430,
+      "calmDownDelay": 5,
+      "bruiser": {
+        "chaseSpeed": 210,
+        "preferredRange": 170,
+        "attackDamage": 35,
+        "attackCooldown": 1.2,
+        "attackTelegraph": 0.5,
+        "attackRange": 235,
+        "attackLineLength": 245,
+        "attackLineHalfWidth": 40,
+        "closeRange": 95,
+        "abilityChargeTime": 2,
+        "abilityCooldown": 10,
+        "abilityKnockback": 680,
+        "abilityKnockbackDuration": 0.3,
+        "slowMultiplier": 0.8,
+        "slowDuration": 4
+      }
+    },
+    {
+      "id": "dreg",
+      "displayName": "Dreg",
+      "behavior": "dreg_swarmer",
+      "tint": [150, 205, 120, 255],
+      "spriteSize": 26,
+      "hp": 10,
+      "xp": 0,
+      "agitationRange": 350,
+      "calmDownDelay": 5,
+      "melee": {
+        "chaseSpeed": 235,
+        "meleeDamage": 6,
+        "meleeRange": 50,
+        "meleeCooldown": 0.6
+      }
+    }
+  ]
+}

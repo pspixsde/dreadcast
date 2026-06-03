@@ -24,18 +24,22 @@ class EditorScene final : public Scene {
 
   private:
     enum class Tool { Select, PlaceWall, PlaceLava, PlaceEnemy, PlaceCasket, SetPlayerSpawn,
-                      PlaceItem, PlaceSolid, PlaceAnvil };
+                      PlaceItem, PlaceSolid, PlaceAnvil, PlaceNode };
     enum class EditorTab { Elements, Items, Units };
     enum class SelectedType { None, Wall, Lava, Enemy, Casket, PlayerSpawn, Item, SolidShape,
-                              Anvil };
+                              Anvil, Node };
 
-    enum class ResizeHandle { None, Left, Right, Top, Bottom };
+    enum class ResizeHandle { None, Left, Right, Top, Bottom, Rotate };
 
     enum class ClipboardKind { None, Wall, Lava, Enemy, Casket, Item };
 
     struct Selection {
         SelectedType type{SelectedType::None};
         int index{-1};
+
+        [[nodiscard]] bool operator==(const Selection &o) const {
+            return type == o.type && index == o.index;
+        }
     };
 
     [[nodiscard]] Vector2 worldMouseFromScreen(const Vector2 &screenMouse) const;
@@ -61,7 +65,17 @@ class EditorScene final : public Scene {
     void applySelectionMove(const Vector2 &worldMouse);
     void deleteSelection();
     void duplicateSelection();
+    /// Active selection as a flat list (the single `selected_`, or all of `multiSelected_`).
+    [[nodiscard]] std::vector<Selection> activeSelectionList() const;
+    [[nodiscard]] bool isItemSelected(SelectedType type, int index) const;
+    /// Store `items` back into `selected_`/`multiSelected_`, normalizing 0/1/many cases.
+    void setSelectionList(std::vector<Selection> items);
+    void toggleSelectionItem(const Selection &s);
+    [[nodiscard]] Vector2 selectionEntryCenter(const Selection &s) const;
+    void translateSelectionEntry(const Selection &s, float dx, float dy);
+    void finalizeMarquee(bool additive);
     void refreshMapFileList();
+    void rebuildEditorItemCatalogIds();
     void ensureValidMapIndex();
     bool saveMap();
     bool loadMap();
@@ -74,9 +88,9 @@ class EditorScene final : public Scene {
     void popUndoSnapshot();
     void pasteFromClipboard(const Vector2 &worldMouse);
     void copySelectionToClipboard();
-    void drawCasketLootPanel(const Font &font, Vector2 mouse);
-    void handleCasketLootPanelClick(const Vector2 &mouse, bool click, bool &uiConsumedClick);
-    [[nodiscard]] Rectangle casketLootPanelRect() const;
+    void drawCasketTierPanel(const Font &font, Vector2 mouse);
+    void handleCasketTierPanelClick(const Vector2 &mouse, bool click, bool &uiConsumedClick);
+    [[nodiscard]] Rectangle casketTierPanelRect() const;
 
     GameCamera camera_{};
     FixedStepTimer fixedTimer_{1.0F / 60.0F};
@@ -84,9 +98,20 @@ class EditorScene final : public Scene {
 
     Tool activeTool_{Tool::Select};
     Selection selected_{};
+    /// Multi-selection set (used when 2+ items are selected; `selected_` is None then).
+    std::vector<Selection> multiSelected_{};
     bool draggingSelection_{false};
     bool draggingSelectionDidChange_{false};
     Vector2 dragOffset_{};
+
+    /// Rubber-band (marquee) selection, in screen space.
+    bool marqueeActive_{false};
+    bool marqueeAdditive_{false};
+    Vector2 marqueeStartScreen_{0.0F, 0.0F};
+    /// Group drag of a multi-selection (incremental world-space translation).
+    bool draggingGroup_{false};
+    bool draggingGroupDidChange_{false};
+    Vector2 groupDragLastWorld_{0.0F, 0.0F};
 
     ResizeHandle resizingWall_{ResizeHandle::None};
     bool resizingWallDidChange_{false};
@@ -103,9 +128,11 @@ class EditorScene final : public Scene {
     ui::Button mapPrevButton_{};
     ui::Button mapNextButton_{};
     ui::Button mapNewButton_{};
-    int selectedEnemyType_{0};
-    /// Index into item kind table (see `handlePlacement` / `ItemSpawnData::kind`).
+    std::string selectedEnemyArchetypeId_{"imp"};
+    /// Index into `editorItemCatalogIds_` (see `handlePlacement` / `ItemSpawnData::kind`).
     int selectedItemKind_{0};
+    /// Sorted `catalogId` list from `allCatalogItems()` (refreshed in `onEnter`).
+    std::vector<std::string> editorItemCatalogIds_{};
     std::optional<EditorTab> pickerOpen_{};
     float pickerScrollY_{0.0F};
 

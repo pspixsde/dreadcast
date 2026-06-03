@@ -6,6 +6,8 @@
 namespace dreadcast {
 
 struct InventoryState;
+struct PlayerEquipmentSnapshot;
+class IndexHolderRegistry;
 
 namespace ecs {
 
@@ -13,8 +15,9 @@ namespace collision {
 
 /// Optional `snareImpactWorld` / `snareImpactFlashTimer` set when Deadlight Snare resolves (VFX).
 void projectile_hits(entt::registry &registry, entt::entity playerEntity,
-                     dreadcast::InventoryState *inventory, Vector2 *snareImpactWorld = nullptr,
-                     float *snareImpactFlashTimer = nullptr);
+                     dreadcast::InventoryState *inventory,
+                     const dreadcast::PlayerEquipmentSnapshot *equipSnapshot,
+                     Vector2 *snareImpactWorld = nullptr, float *snareImpactFlashTimer = nullptr);
 
 void player_pickup_mana_shards(entt::registry &registry, entt::entity player);
 
@@ -35,7 +38,11 @@ entt::entity find_interactable_hover_in_range(entt::registry &registry, Vector2 
 
 /// Adds loot to the first empty bag slot; destroys the pickup entity on success.
 bool try_pickup_item_entity(entt::registry &registry, entt::entity pickupEntity,
-                            InventoryState &inventory, float &inventoryFullFlashTimer);
+                            InventoryState &inventory, float &inventoryFullFlashTimer,
+                            IndexHolderRegistry *indexHolders = nullptr);
+
+/// Spawns a ground `ItemPickup` at `worldPos` for an existing `inventory.items` pool index.
+void spawn_item_pickup_at_world(entt::registry &registry, Vector2 worldPos, int itemIndex);
 
 /// After `InventoryState::removeItemAtIndex(removedIdx)` (swap-with-last), re-point ground
 /// `ItemPickup::itemIndex` values that still referenced `oldLastIdx` to `removedIdx`.
